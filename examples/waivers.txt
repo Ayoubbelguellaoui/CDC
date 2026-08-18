@@ -1,0 +1,3 @@
+# Example waiver file
+# Format: RULE_ID SOURCE DEST SRC_DOMAIN DST_DOMAIN "JUSTIFICATION" @OWNER
+CDC001 waived_example.src_ff waived_example.dst_ff clk_a clk_b "Reviewed by designer, async FIFO added in next revision" @reviewer

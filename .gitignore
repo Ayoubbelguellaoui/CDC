@@ -1,0 +1,36 @@
+# Build
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Object files
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+
+# Executables
+opencdc
+opencdc_unit_tests
+opencdc_regression_tests
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test artifacts
+Testing/
+*.log
+
+# Dependencies (fetched by CMake)
+_deps/

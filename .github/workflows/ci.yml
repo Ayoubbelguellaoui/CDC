@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [g++, clang++]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Unit Tests
+        run: ctest --test-dir build --output-on-failure -R ".*Test"
+
+      - name: Regression Tests
+        run: ctest --test-dir build --output-on-failure -R "FrontendTest"
+
+      - name: CLI Smoke Test
+        run: |
+          ./build/src/opencdc check tests/fixtures/sv/cdc_crossing.sv --top simple_cdc_crossing --format json
+          ./build/src/opencdc check tests/fixtures/sv/sync_2ff.sv --top sync_2ff --format text
+          ./build/src/opencdc check tests/fixtures/sv/gated_clock.sv --top gated_clock --verbose
+          echo "CLI smoke test passed"
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          sudo apt-get install -y clang-format
+          find src/ -name '*.cpp' -o -name '*.h' | xargs clang-format --dry-run --Werror

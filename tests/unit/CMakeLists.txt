@@ -40,6 +40,7 @@ add_executable(opencdc_unit_tests
 target_include_directories(opencdc_unit_tests
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/src/ir
         ${CMAKE_SOURCE_DIR}/src/clock
         ${CMAKE_SOURCE_DIR}/src/cdc

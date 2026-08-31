@@ -23,7 +23,10 @@ set(OPENCDC_CORE_SOURCES
 
 add_library(opencdc_core STATIC ${OPENCDC_CORE_SOURCES})
 set_target_properties(opencdc_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(opencdc_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(opencdc_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_BINARY_DIR}/generated
+)
 target_link_libraries(opencdc_core PUBLIC slang::slang nlohmann_json::nlohmann_json)
 
 add_executable(opencdc entry.cpp)

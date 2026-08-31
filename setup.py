@@ -10,6 +10,16 @@ from setuptools.command.build_ext import build_ext
 import subprocess
 import sys
 import os
+import re
+
+def cmake_version():
+    """Read the version from the root CMakeLists.txt — single source of truth."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, 'CMakeLists.txt'), 'r', encoding='utf-8') as f:
+        m = re.search(r'project\s*\(\s*opencdc\s+VERSION\s+(\S+)', f.read())
+    if not m:
+        raise RuntimeError('cannot find project(opencdc VERSION ...) in CMakeLists.txt')
+    return m.group(1)
 
 class CMakeExtension(Extension):
     def __init__(self, name, sourcedir=''):
@@ -51,7 +61,7 @@ class CMakeBuild(build_ext):
 
 setup(
     name='opencdc',
-    version='0.4.0',
+    version=cmake_version(),
     author='OpenCDC Contributors',
     author_email='opencdc@example.com',
     description='Open-source static analysis tool for Clock Domain Crossing issues',

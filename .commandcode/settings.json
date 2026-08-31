@@ -1,7 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Shell(git:*)"
+      "Shell(git:*)",
+      "Shell(config,:*)",
+      "Shell(before:*)",
+      "Shell(sh rm src/opencdc/version.h)",
+      "Shell(mkdir:*)",
+      "Shell(mv:*)",
+      "Shell(rmdir:*)",
+      "Shell(sh -c rm src/opencdc/version.h && mkdir -p docs/dev && mv BUG_REPORT.md BUG_FIXES.md ENHANCEMENT_SUMMARY.md docs/dev/ && rmdir tools)",
+      "Shell(cmake:*)",
+      "Shell(cmake --build build -j$(nproc))",
+      "Shell(ctest:*)"
     ],
     "deny": [],
     "defaultMode": "default"

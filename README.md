@@ -12,13 +12,17 @@ Open-source static analysis tool for detecting Clock Domain Crossing (CDC) issue
 - 2FF/3FF synchronizer recognition
 - Multi-bit synchronizer misuse detection
 - Reconvergence hazard detection
+- Semantic pattern recognition (gray-code, async FIFO pointers, handshakes)
+- Reset domain analysis (CDC009)
+- Daisy-chain multi-domain tracking (CDC008)
 - 10 configurable rules (CDC001-CDC010)
-- False-path support (CLI and config)
-- Reset crossing suppression (config)
-- YAML-like config file support
-- Waiver workflow with auditable trail and expiry dates
-- Machine-readable JSON and text output
-- CI-friendly exit codes
+- False-path support (CLI, config, and SDC/YAML clock constraints)
+- Waiver workflow with substring/wildcard/regex matching, auditable trail and expiry dates
+- Baseline trend analysis (save/compare findings across runs)
+- JSON, text, and interactive HTML reports
+- LSP server for IDE integration (`opencdc lsp`)
+- Python bindings (`BUILD_PYTHON_BINDINGS=ON`)
+- Machine-readable output and CI-friendly exit codes
 
 ## Building
 

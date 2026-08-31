@@ -1,0 +1,16 @@
+#ifndef OPENCDC_VERSION_H
+#define OPENCDC_VERSION_H
+
+namespace opencdc {
+
+// Generated from cmake/version.h.in by CMake configure_file().
+// Single source of truth: the project() VERSION in the root CMakeLists.txt.
+inline constexpr const char* OPENCDC_VERSION = "@PROJECT_VERSION@";
+
+inline const char* version_string() {
+    return OPENCDC_VERSION;
+}
+
+} // namespace opencdc
+
+#endif // OPENCDC_VERSION_H

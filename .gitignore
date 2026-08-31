@@ -5,7 +5,7 @@ cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
-Makefile
+/Makefile
 compile_commands.json
 
 # Object files
@@ -16,10 +16,10 @@ compile_commands.json
 *.so
 *.dylib
 
-# Executables
-opencdc
-opencdc_unit_tests
-opencdc_regression_tests
+# Executables (anchored: must not match the src/opencdc/ header directory)
+/opencdc
+/opencdc_unit_tests
+/opencdc_regression_tests
 
 # IDE
 .vscode/
@@ -31,7 +31,6 @@ opencdc_regression_tests
 
 # Test artifacts
 Testing/
-*.log
 
 # Dependencies (fetched by CMake)
 _deps/

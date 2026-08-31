@@ -25,6 +25,7 @@ add_executable(opencdc_regression_tests
 target_include_directories(opencdc_regression_tests
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated
         ${CMAKE_SOURCE_DIR}/src/ir
         ${CMAKE_SOURCE_DIR}/src/frontend
         ${CMAKE_SOURCE_DIR}/src/clock

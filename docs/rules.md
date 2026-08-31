@@ -1,104 +1,194 @@
-# Rules
+# Rules Reference
 
-OpenCDC checks are organized as rules with stable IDs, severities, and descriptions.
+## CDC001 — Unsynchronized Crossing
 
-## Rule Reference
+| Property | Value |
+|----------|-------|
+| Severity | error (warning when synchronizer detected) |
+| Description | Register drives register across clock domains without synchronization |
 
-### CDC001 — Unsynchronized Crossing
+**Detection**: An edge in the IR graph connects two registers in different clock domains, and no 2FF/3FF synchronizer chain is detected on the destination side.
 
-| Field | Value |
-|---|---|
-| **ID** | CDC001 |
-| **Name** | unsynchronized_crossing |
-| **Severity** | error |
-| **Description** | Register drives register across clock domains without synchronization |
+**Sync-chain behavior**: When a 2FF or 3FF synchronizer chain is detected at the destination, CDC001 is downgraded to `warning`. In this case, derived rules (CDC002, CDC004, CDC005, CDC007) are also suppressed since the crossing is properly synchronized.
 
-**When it fires:**
-A register in clock domain A has a direct data path (through combinational logic or direct connection) to a register in clock domain B, and no 2FF or 3FF synchronizer chain is detected on the destination side.
+**Why it matters**: Data sampled by a register in a different clock domain can be metastable or inconsistent, leading to functional failures.
 
-**How to fix:**
-- Add a 2FF or 3FF synchronizer chain on the destination side
-- Use a handshake protocol
-- Use a gray-code FIFO for multi-bit transfers
-- Waive if the crossing is known safe
-
-**Example:**
-```systemverilog
-// CDC001: src_ff (clk_a) drives dst_ff (clk_b) directly
-always_ff @(posedge clk_a) src_ff <= data_in;
-always_ff @(posedge clk_b) dst_ff <= src_ff;  // No synchronizer!
+**Config**:
+```yaml
+rules:
+  CDC001:
+    enabled: true
+    severity: error
 ```
 
 ---
 
-### CDC002 — Multi-bit Crossing
+## CDC002 — Multi-bit Crossing
 
-| Field | Value |
-|---|---|
-| **ID** | CDC002 |
-| **Name** | multi_bit_crossing |
-| **Severity** | error |
-| **Description** | Multi-bit bus crosses clock domains without gray-code or handshake |
+| Property | Value |
+|----------|-------|
+| Severity | error |
+| Description | Multi-bit bus crosses domains without gray-code encoding or handshake protocol |
 
-**When it fires:**
-A multi-bit register (width > 1) crosses clock domains. Multi-bit signals require special handling because individual bits may arrive at different times, causing data corruption.
+**Detection**: A CDC001 crossing where the source register has width > 1 bit, and the source name does not contain "gray"/"grey" or "handshake"/"valid"/"ready" substrings.
 
-**How to fix:**
-- Use gray-code encoding for counter/bus transfers
-- Use a handshake protocol with valid/ready
-- Use an async FIFO
-- Use a multi-cycle path constraint if timing is guaranteed
+**Why it matters**: Multi-bit buses can arrive at the destination domain with partial updates (e.g., some bits old, some new), causing data corruption.
+
+**Config**:
+```yaml
+rules:
+  CDC002:
+    enabled: true
+    severity: error
+```
 
 ---
 
-### CDC003 — Reconvergence Hazard
+## CDC003 — Reconvergence Hazard
 
-| Field | Value |
-|---|---|
-| **ID** | CDC003 |
-| **Name** | reconvergence_hazard |
-| **Severity** | warning |
-| **Description** | Multiple paths from same source reconverge in destination domain |
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | Multiple paths from same source reconverge in destination domain |
 
-**When it fires:**
-A single source register fans out to multiple destination registers in a different clock domain, and those paths reconverge at a common downstream register without synchronization on all paths.
+**Detection**: A multi-bit source register fans out to two or more destination registers in a different domain, and those paths reconverge at a common consumer register. The source bus must be multi-bit (>1 bit) for the hazard to be flagged.
 
-**Hazard:**
-Different synchronization latencies on the paths can cause the reconverging logic to see stale data from one path and new data from another, leading to functional errors.
+**Why it matters**: Different bits of the same bus can arrive at the reconvergence point at different times, causing transient incorrect values.
 
-**Example:**
-```systemverilog
-// src fans out to dst1 and dst2, both reconverge at consumer
-always_ff @(posedge clk_a) src <= data;
-always_ff @(posedge clk_b) dst1 <= src;
-always_ff @(posedge clk_b) dst2 <= src;
-always_ff @(posedge clk_b) consumer <= dst1 & dst2;  // Reconvergence!
+**Config**:
+```yaml
+rules:
+  CDC003:
+    enabled: true
+    severity: warning
 ```
 
-**How to fix:**
-- Ensure all paths are synchronized (same sync chain depth)
-- Use a single synchronization point before fanout
-- Waive if single-bit and no timing hazard
+---
 
-## Configuration
+## CDC004 — Gated Clock Crossing
 
-Rules can be configured via CLI flags:
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | Register clocked by gated clock crosses to another domain |
+
+**Detection**: A CDC001 crossing where the source register's clock is detected as gated (AND-gated with an enable signal).
+
+**Why it matters**: Gated clocks can cause glitches at the clock edge, increasing metastability risk.
+
+**Config**:
+```yaml
+rules:
+  CDC004:
+    enabled: true
+    severity: warning
+```
+
+---
+
+## CDC005 — Muxed Clock No Reset
+
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | Register clocked by muxed clock without reset signal |
+
+**Detection**: A CDC001 crossing where the source register's clock is detected as muxed (selected by a conditional expression) and the register has no reset signal.
+
+**Why it matters**: Muxed clocks can cause runt pulses, and without a reset, the register state is undefined after power-up.
+
+**Config**:
+```yaml
+rules:
+  CDC005:
+    enabled: true
+    severity: warning
+```
+
+---
+
+## CDC006 — Combinational Between Sync
+
+| Property | Value |
+|----------|-------|
+| Severity | error |
+| Description | Combinational logic or direct register feed between synchronizer stages |
+
+**Detection**: A 2FF/3FF synchronizer chain where the first stage has a cross-domain source, OR the second stage has multiple same-domain predecessors (indicating combinational logic between stages).
+
+**Why it matters**: Combinational logic between synchronizer stages defeats the purpose of synchronization by creating additional timing paths.
+
+**Config**:
+```yaml
+rules:
+  CDC006:
+    enabled: true
+    severity: error
+```
+
+---
+
+## CDC007 — Missing Reset
+
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | CDC register without reset signal |
+
+**Detection**: A CDC001 crossing where both source and destination registers have empty reset signals.
+
+**Why it matters**: Without reset, registers start in an undefined state, which can cause functional failures or excessive power consumption.
+
+**Config**:
+```yaml
+rules:
+  CDC007:
+    enabled: true
+    severity: warning
+```
+
+---
+
+## CDC008 — Multi-domain Daisy Chain
+
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | Signal crosses 3+ clock domains in a daisy chain |
+
+**Detection**: A path that traverses 3 or more different clock domains through sequential register-to-register crossings.
+
+**Why it matters**: Each domain crossing adds metastability risk. A daisy chain compounds this risk and makes timing analysis complex.
+
+**Config**:
+```yaml
+rules:
+  CDC008:
+    enabled: true
+    severity: warning
+```
+
+---
+
+## Disabling Rules
 
 ```bash
-# Disable a rule
+# Disable a specific rule
 opencdc check design.sv --top top --disable-rule CDC001
 
 # Override severity
 opencdc check design.sv --top top --severity CDC003=error
 ```
 
-## Extending Rules
+## Config File
 
-To add a new rule:
-
-1. Define the rule in `src/rules/rule.cpp` `RuleEngine::RuleEngine()`
-2. Implement the check in `src/cdc/`
-3. Add unit tests in `tests/unit/`
-4. Add a fixture in `tests/fixtures/sv/`
-5. Add E2E regression test in `tests/regression/frontend_test.cpp`
-6. Document in this file
+```yaml
+rules:
+  CDC001:
+    enabled: false
+  CDC003:
+    severity: error
+  CDC007:
+    enabled: true
+    severity: info
+```

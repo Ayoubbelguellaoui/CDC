@@ -1,0 +1,16 @@
+[
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "error",
+    "waived": false,
+    "source": "simple_cdc_crossing.src_ff",
+    "source_domain": "clk_a",
+    "dest": "simple_cdc_crossing.dst_ff",
+    "dest_domain": "clk_b",
+    "bus_width": 1,
+    "reason": "Register 'simple_cdc_crossing.src_ff' in domain 'clk_a' drives register 'simple_cdc_crossing.dst_ff' in domain 'clk_b' without synchronization. No 2FF/3FF synchronizer chain detected on destination side.",
+    "file": "tests/fixtures/sv/cdc_crossing.sv",
+    "line": 12
+  }
+]

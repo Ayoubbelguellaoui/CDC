@@ -5,6 +5,7 @@
 #include <ostream>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 namespace opencdc::report {
 
@@ -26,6 +27,8 @@ public:
     static std::string escape_json(const std::string& s);
 
     bool has_unsuppressed_errors(const std::vector<cdc::Finding>& findings) const;
+
+    static std::vector<cdc::Finding> sorted_findings(const std::vector<cdc::Finding>& findings);
 };
 
 } // namespace opencdc::report

@@ -1,7 +1,10 @@
 #include "report/report.h"
+#include "report/html_reporter.h"
 #include "cdc/crossing.h"
 #include <gtest/gtest.h>
 #include <sstream>
+#include <fstream>
+#include <cstdio>
 
 class ReportTest : public ::testing::Test {
 protected:
@@ -145,4 +148,37 @@ TEST_F(ReportTest, SummaryWithWaived) {
     EXPECT_NE(out.find("2 finding(s)"), std::string::npos);
     EXPECT_NE(out.find("1 error(s)"), std::string::npos);
     EXPECT_NE(out.find("1 waived"), std::string::npos);
+}
+
+TEST(HtmlReportTest, OptionsAndFiltersAreRendered) {
+    opencdc::cdc::Finding finding;
+    finding.rule_id = "CDC001";
+    finding.severity = "info";
+    finding.source_reg_name = "src";
+    finding.dest_reg_name = "dst";
+    finding.source_loc.file = "source.sv";
+    finding.source_loc.line = 7;
+
+    opencdc::report::HtmlReportOptions options;
+    options.output_dir = "/tmp/opencdc-html-test";
+    options.include_source_snippets = false;
+    options.dark_mode = true;
+    options.custom_css = ".custom-test { color: red; }";
+    opencdc::report::HtmlReporter reporter;
+    reporter.generate_report({finding}, options);
+
+    std::ifstream css(options.output_dir + "/style.css");
+    std::string css_text((std::istreambuf_iterator<char>(css)), {});
+    std::ifstream html(options.output_dir + "/findings.html");
+    std::string html_text((std::istreambuf_iterator<char>(html)), {});
+    EXPECT_NE(css_text.find(".custom-test"), std::string::npos);
+    EXPECT_NE(css_text.find("Explicit dark mode"), std::string::npos);
+    EXPECT_NE(html_text.find("id=\"rule-filter\""), std::string::npos);
+    EXPECT_NE(html_text.find("value=\"info\""), std::string::npos);
+    EXPECT_EQ(html_text.find("source.sv:7"), std::string::npos);
+    std::remove((options.output_dir + "/index.html").c_str());
+    std::remove((options.output_dir + "/findings.html").c_str());
+    std::remove((options.output_dir + "/style.css").c_str());
+    std::remove((options.output_dir + "/script.js").c_str());
+    std::remove(options.output_dir.c_str());
 }

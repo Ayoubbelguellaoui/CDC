@@ -19,6 +19,7 @@ struct Rule {
     bool enabled = true;
     std::string finding_type;
     std::string version;
+    bool severity_overridden = false;
 };
 
 struct RuleOverride {

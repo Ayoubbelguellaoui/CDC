@@ -28,6 +28,12 @@ private:
     bool is_clock_port(const std::string& name,
                        const ir::Graph& graph) const;
 
+    std::string get_root_port_name(const std::string& name,
+                                   const ir::Graph& graph) const;
+
+    std::string trace_to_top_port(const std::string& port_name,
+                                  const ir::Graph& graph) const;
+
     ClockInfo trace_clock(const std::string& clock_name,
                           const ir::Graph& graph) const;
 };

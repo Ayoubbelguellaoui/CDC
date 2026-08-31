@@ -1,0 +1,44 @@
+[
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "error",
+    "waived": false,
+    "source": "reconvergence_hazard.src_ff",
+    "source_domain": "clk_a",
+    "dest": "reconvergence_hazard.dst1_ff",
+    "dest_domain": "clk_b",
+    "bus_width": 1,
+    "reason": "Register 'reconvergence_hazard.src_ff' in domain 'clk_a' drives register 'reconvergence_hazard.dst1_ff' in domain 'clk_b' without synchronization. No 2FF/3FF synchronizer chain detected on destination side.",
+    "file": "tests/fixtures/sv/reconvergence_hazard.sv",
+    "line": 13
+  },
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "error",
+    "waived": false,
+    "source": "reconvergence_hazard.src_ff",
+    "source_domain": "clk_a",
+    "dest": "reconvergence_hazard.dst2_ff",
+    "dest_domain": "clk_b",
+    "bus_width": 1,
+    "reason": "Register 'reconvergence_hazard.src_ff' in domain 'clk_a' drives register 'reconvergence_hazard.dst2_ff' in domain 'clk_b' without synchronization. No 2FF/3FF synchronizer chain detected on destination side.",
+    "file": "tests/fixtures/sv/reconvergence_hazard.sv",
+    "line": 13
+  },
+  {
+    "rule_id": "CDC003",
+    "rule_name": "reconvergence_hazard",
+    "severity": "warning",
+    "waived": false,
+    "source": "reconvergence_hazard.src_ff",
+    "source_domain": "clk_a",
+    "dest": "",
+    "dest_domain": "",
+    "bus_width": 1,
+    "reason": "Single-bit source 'reconvergence_hazard.src_ff' fans out through independent paths that reconverge at 'reconvergence_hazard.consumer_ff'.",
+    "file": "tests/fixtures/sv/reconvergence_hazard.sv",
+    "line": 13
+  }
+]

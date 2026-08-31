@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(opencdc VERSION 0.1.0 LANGUAGES CXX)
+project(opencdc VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -7,6 +7,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(BUILD_TESTING "Build tests" ON)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+endif()
 
 include(FetchContent)
 
@@ -27,6 +31,15 @@ set(SLANG_INCLUDE_THREADTEST OFF CACHE BOOL "" FORCE)
 set(SLANG_INCLUDE_BENCHMARKS OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(slang)
+
+# nlohmann/json — used by LSP for proper JSON-RPC parsing
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    ON
+)
+FetchContent_MakeAvailable(nlohmann_json)
 
 add_subdirectory(src)
 

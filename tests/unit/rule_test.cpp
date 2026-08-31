@@ -11,10 +11,17 @@ protected:
 
 TEST_F(RuleEngineTest, DefaultRulesLoaded) {
     auto rules = engine.rules();
-    ASSERT_EQ(rules.size(), 3u);
+    ASSERT_EQ(rules.size(), 10u);
     EXPECT_EQ(rules[0].id, "CDC001");
     EXPECT_EQ(rules[1].id, "CDC002");
     EXPECT_EQ(rules[2].id, "CDC003");
+    EXPECT_EQ(rules[3].id, "CDC004");
+    EXPECT_EQ(rules[4].id, "CDC005");
+    EXPECT_EQ(rules[5].id, "CDC006");
+    EXPECT_EQ(rules[6].id, "CDC007");
+    EXPECT_EQ(rules[7].id, "CDC008");
+    EXPECT_EQ(rules[8].id, "CDC009");
+    EXPECT_EQ(rules[9].id, "CDC010");
 }
 
 TEST_F(RuleEngineTest, FindRule) {
@@ -108,4 +115,31 @@ TEST_F(RuleEngineTest, IsEnabledAfterDisable) {
     engine.add_override({"CDC001", "", true, false});
     EXPECT_FALSE(engine.is_enabled("CDC001"));
     EXPECT_TRUE(engine.is_enabled("CDC003"));
+}
+
+TEST_F(RuleEngineTest, SeverityNotOverriddenByDefault) {
+    Finding f;
+    f.rule_id = "CDC001";
+    f.rule_name = "unsynchronized_crossing";
+    f.severity = "warning";
+
+    std::vector<Finding> findings = {f};
+    auto filtered = engine.filter(findings);
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_EQ(filtered[0].severity, "warning")
+        << "Analyzer-set severity should not be overridden without explicit config";
+}
+
+TEST_F(RuleEngineTest, SeverityOverriddenOnlyWhenExplicit) {
+    engine.add_override({"CDC001", "info", false, true});
+
+    Finding f;
+    f.rule_id = "CDC001";
+    f.rule_name = "unsynchronized_crossing";
+    f.severity = "warning";
+
+    std::vector<Finding> findings = {f};
+    auto filtered = engine.filter(findings);
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_EQ(filtered[0].severity, "info");
 }

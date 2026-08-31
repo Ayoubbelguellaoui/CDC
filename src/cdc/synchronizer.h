@@ -23,7 +23,8 @@ public:
 
     SyncPattern find_pattern_for_dest(
         uint64_t dest_reg_id,
-        const ir::Graph& graph) const;
+        const ir::Graph& graph,
+        bool strict = false) const;
 
 private:
     bool validate_2ff(const ir::Graph& graph,

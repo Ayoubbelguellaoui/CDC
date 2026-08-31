@@ -1,0 +1,17 @@
+# OpenCDC Configuration File
+
+rules:
+  CDC001:
+    enabled: true
+    severity: error
+  CDC003:
+    enabled: false
+  CDC007:
+    severity: warning
+
+waivers:
+  - rule: CDC001, source: mod.src, dest: mod.dst, justification: "Known safe crossing", owner: "@team", expiry: 2027-12-31
+
+output:
+  format: json
+  file: report.json

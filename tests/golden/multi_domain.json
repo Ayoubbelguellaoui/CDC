@@ -1,0 +1,44 @@
+[
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "error",
+    "waived": false,
+    "source": "multi_domain.r1",
+    "source_domain": "clk_a",
+    "dest": "multi_domain.r2",
+    "dest_domain": "clk_b",
+    "bus_width": 1,
+    "reason": "Register 'multi_domain.r1' in domain 'clk_a' drives register 'multi_domain.r2' in domain 'clk_b' without synchronization. No 2FF/3FF synchronizer chain detected on destination side.",
+    "file": "tests/fixtures/sv/multi_domain.sv",
+    "line": 14
+  },
+  {
+    "rule_id": "CDC008",
+    "rule_name": "multi_domain_daisy_chain",
+    "severity": "warning",
+    "waived": false,
+    "source": "multi_domain.r1",
+    "source_domain": "clk_a",
+    "dest": "",
+    "dest_domain": "",
+    "bus_width": 1,
+    "reason": "Register 'multi_domain.r1' is part of a daisy chain crossing 2 clock domains: multi_domain.r1 -> multi_domain.r2 -> multi_domain.r3.",
+    "file": "tests/fixtures/sv/multi_domain.sv",
+    "line": 14
+  },
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "error",
+    "waived": false,
+    "source": "multi_domain.r2",
+    "source_domain": "clk_b",
+    "dest": "multi_domain.r3",
+    "dest_domain": "clk_c",
+    "bus_width": 1,
+    "reason": "Register 'multi_domain.r2' in domain 'clk_b' drives register 'multi_domain.r3' in domain 'clk_c' without synchronization. No 2FF/3FF synchronizer chain detected on destination side.",
+    "file": "tests/fixtures/sv/multi_domain.sv",
+    "line": 21
+  }
+]

@@ -34,8 +34,10 @@ DomainResult DomainExtractor::extract(const ir::Graph& graph) {
             dom.register_ids.push_back(node.id);
             result.domains.push_back(std::move(dom));
             domain_map[domain_name] = idx;
+            result.register_to_domain[node.id] = idx;
         } else {
             result.domains[it->second].register_ids.push_back(node.id);
+            result.register_to_domain[node.id] = it->second;
         }
     }
 

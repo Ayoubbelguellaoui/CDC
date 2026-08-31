@@ -5,14 +5,18 @@ Open-source static analysis tool for detecting Clock Domain Crossing (CDC) issue
 ## Features
 
 - Verilog/SystemVerilog parsing via [slang](https://github.com/MikePopoloski/slang)
+- Verilog-2001 (`.v`) and SystemVerilog (`.sv`) support
 - Clock domain inference from explicit clock ports
 - Gated and muxed clock resolution to root clocks
 - Register-to-register CDC crossing detection
 - 2FF/3FF synchronizer recognition
 - Multi-bit synchronizer misuse detection
 - Reconvergence hazard detection
-- Configurable rule engine with severity overrides
-- Waiver workflow with auditable trail
+- 10 configurable rules (CDC001-CDC010)
+- False-path support (CLI and config)
+- Reset crossing suppression (config)
+- YAML-like config file support
+- Waiver workflow with auditable trail and expiry dates
 - Machine-readable JSON and text output
 - CI-friendly exit codes
 
@@ -46,8 +50,8 @@ opencdc check design.sv --top top_module
 # JSON output to file
 opencdc check design.sv --top top --format json --out report.json
 
-# Text output
-opencdc check design.sv --top top --format text
+# With config file
+opencdc check design.sv --top top --config opencdc.yaml
 
 # With waivers
 opencdc check design.sv --top top --waiver waivers.txt
@@ -57,6 +61,9 @@ opencdc check design.sv --top top --disable-rule CDC001
 
 # Override severity
 opencdc check design.sv --top top --severity CDC003=error
+
+# False path (suppress specific crossing)
+opencdc check design.sv --top top --false-path src_reg:meta_reg
 ```
 
 ## Rules
@@ -66,8 +73,37 @@ opencdc check design.sv --top top --severity CDC003=error
 | CDC001 | unsynchronized_crossing | error | Register drives register across domains without synchronization |
 | CDC002 | multi_bit_crossing | error | Multi-bit bus crosses domains without gray-code or handshake |
 | CDC003 | reconvergence_hazard | warning | Multiple paths from same source reconverge in destination domain |
+| CDC004 | gated_clock_crossing | warning | Register clocked by gated clock crosses to another domain |
+| CDC005 | muxed_clock_no_reset | warning | Register clocked by muxed clock without reset |
+| CDC006 | combinational_between_sync | error | Combinational logic between synchronizer stages |
+| CDC007 | missing_reset | warning | CDC register without reset signal |
+| CDC008 | multi_domain_daisy_chain | warning | Signal crosses 3+ clock domains in daisy chain |
+| CDC009 | reset_domain_crossing | warning | Register crosses between asynchronous reset domains |
+| CDC010 | path_traversal_truncated | warning | Analysis limits may have hidden additional crossings |
 
 See [docs/rules.md](docs/rules.md) for detailed documentation.
+
+## Config File
+
+```yaml
+rules:
+  CDC001:
+    enabled: true
+    severity: error
+  CDC003:
+    enabled: false
+
+waivers:
+  - rule: CDC001, source: mod.src, dest: mod.dst, justification: "Known safe", owner: "@team"
+
+false_paths:
+  - source: mod.src_reg, dest: mod.meta_reg
+
+output:
+  format: json
+  file: report.json
+  suppress_reset_crossings: true
+```
 
 ## Exit Codes
 

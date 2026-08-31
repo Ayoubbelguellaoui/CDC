@@ -1,0 +1,16 @@
+[
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "warning",
+    "waived": false,
+    "source": "sync_misuse.src_ff",
+    "source_domain": "clk_a",
+    "dest": "sync_misuse.meta",
+    "dest_domain": "clk_b",
+    "bus_width": 8,
+    "reason": "Register 'sync_misuse.src_ff' in domain 'clk_a' drives register 'sync_misuse.meta' in domain 'clk_b' without synchronization.",
+    "file": "tests/fixtures/sv/sync_misuse.sv",
+    "line": 10
+  }
+]

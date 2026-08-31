@@ -133,7 +133,7 @@ TEST_F(WaiverTest, MultipleWaivers) {
 
     auto f1 = make_finding("CDC001", "mod.src", "mod.dst", "clk_a", "clk_b");
     auto f2 = make_finding("CDC001", "mod.src2", "mod.dst2", "clk_a", "clk_b");
-    auto f3 = make_finding("CDC001", "mod.src3", "mod.dst3", "clk_a", "clk_b");
+    auto f3 = make_finding("CDC001", "unrelated.src", "unrelated.dst", "clk_a", "clk_b");
     std::vector<Finding> findings = {f1, f2, f3};
     auto result = engine.apply(findings);
 
@@ -163,4 +163,133 @@ TEST_F(WaiverTest, LoadFromFile) {
     EXPECT_TRUE(result[0].waived);
 
     std::remove(path.c_str());
+}
+
+TEST_F(WaiverTest, MalformedDateDoesNotCrash) {
+    WaiverEngine test_engine;
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    w.expiry = "202A-13-99";
+    test_engine.add_waiver(w);
+
+    auto f = make_finding("CDC001", "mod.src", "mod.dst", "clk_a", "clk_b");
+    std::vector<Finding> findings = {f};
+    auto result = test_engine.apply(findings);
+
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(result[0].waived);
+}
+
+TEST_F(WaiverTest, EmptyRuleIdWaiverDoesNotMatchEverything) {
+    // A waiver with an empty rule id must not act as a universal waiver.
+    Waiver w;
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    engine.add_waiver(w);
+
+    auto f = make_finding("CDC001", "mod.src", "mod.dst", "clk_a", "clk_b");
+    std::vector<Finding> findings = {f};
+    auto result = engine.apply(findings);
+
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(result[0].waived);
+}
+
+TEST_F(WaiverTest, EmptyWaiverFieldStillActsAsWildcard) {
+    // Deliberate wildcard use: empty domain fields match any domain, but the
+    // rule id and register names are specific.
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    engine.add_waiver(w);
+
+    auto f1 = make_finding("CDC001", "mod.src", "mod.dst", "clk_a", "clk_b");
+    auto f2 = make_finding("CDC001", "mod.src", "other.dst", "clk_a", "clk_b");
+    std::vector<Finding> findings = {f1, f2};
+    auto result = engine.apply(findings);
+
+    ASSERT_EQ(result.size(), 2u);
+    EXPECT_TRUE(result[0].waived);
+    EXPECT_FALSE(result[1].waived);
+}
+
+TEST_F(WaiverTest, SpecificWaiverDoesNotMatchEmptyFindingField) {
+    // CDC010-style findings have an empty dest register; a waiver naming a
+    // specific dest must not waive them.
+    Waiver w;
+    w.rule_id = "CDC010";
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    engine.add_waiver(w);
+
+    Finding f;
+    f.rule_id = "CDC010";
+    f.source_reg_name = "mod.src";
+    f.dest_reg_name = "";  // truncation findings carry no dest
+    std::vector<Finding> findings = {f};
+    auto result = engine.apply(findings);
+
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_FALSE(result[0].waived);
+}
+
+TEST_F(WaiverTest, LoadFromFileRejectsMissingRuleId) {
+    // A WILDCARD/REGEX line missing its rule id field would otherwise match
+    // every finding of every rule.
+    std::string path = "/tmp/test_waivers_norule.txt";
+    {
+        std::ofstream f(path);
+        f << "WILDCARD top.*.src top.*.dst\n";
+    }
+
+    WaiverEngine file_engine;
+    std::string error;
+    EXPECT_FALSE(file_engine.load_from_file(path, &error));
+    EXPECT_TRUE(file_engine.waivers().empty());
+    EXPECT_FALSE(error.empty());
+
+    std::remove(path.c_str());
+}
+
+TEST_F(WaiverTest, AddWaiverRejectsEmptyRuleId) {
+    Waiver w;
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    EXPECT_FALSE(engine.add_waiver(w));
+    EXPECT_TRUE(engine.waivers().empty());
+}
+
+TEST_F(WaiverTest, LoadFromFileEmptyFileFails) {
+    std::string path = "/tmp/test_waivers_empty.txt";
+    {
+        std::ofstream f(path);
+        f << "# only comments\n\n";
+    }
+
+    WaiverEngine file_engine;
+    std::string error;
+    EXPECT_FALSE(file_engine.load_from_file(path, &error));
+    EXPECT_FALSE(error.empty());
+
+    std::remove(path.c_str());
+}
+
+TEST_F(WaiverTest, ExpiryDateIsValidThroughEndOfDay) {
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    // Far-future date: inclusive end-of-day semantics keep it valid.
+    w.expiry = "2099-12-31";
+    engine.add_waiver(w);
+
+    auto f = make_finding("CDC001", "mod.src", "mod.dst", "clk_a", "clk_b");
+    std::vector<Finding> findings = {f};
+    auto result = engine.apply(findings);
+
+    ASSERT_EQ(result.size(), 1u);
+    EXPECT_TRUE(result[0].waived);
 }

@@ -1,15 +1,25 @@
 add_executable(opencdc_regression_tests
     frontend_test.cpp
+    stress_test.cpp
+    lsp_test.cpp
     ${CMAKE_SOURCE_DIR}/src/ir/graph.cpp
     ${CMAKE_SOURCE_DIR}/src/frontend/slang_adapter.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/domain.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/resolve.cpp
+    ${CMAKE_SOURCE_DIR}/src/clock/constraints.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/crossing.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/synchronizer.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/reconvergence.cpp
+    ${CMAKE_SOURCE_DIR}/src/cdc/cdc006.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/waiver.cpp
+    ${CMAKE_SOURCE_DIR}/src/cdc/pattern.cpp
+    ${CMAKE_SOURCE_DIR}/src/cdc/reset_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/rules/rule.cpp
     ${CMAKE_SOURCE_DIR}/src/report/report.cpp
+    ${CMAKE_SOURCE_DIR}/src/report/html_reporter.cpp
+    ${CMAKE_SOURCE_DIR}/src/config/config.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/analyzer.cpp
+    ${CMAKE_SOURCE_DIR}/src/lsp/server.cpp
 )
 
 target_include_directories(opencdc_regression_tests
@@ -21,6 +31,8 @@ target_include_directories(opencdc_regression_tests
         ${CMAKE_SOURCE_DIR}/src/cdc
         ${CMAKE_SOURCE_DIR}/src/rules
         ${CMAKE_SOURCE_DIR}/src/report
+        ${CMAKE_SOURCE_DIR}/src/config
+        ${CMAKE_SOURCE_DIR}/src/lsp
 )
 
 target_compile_definitions(opencdc_regression_tests
@@ -32,6 +44,7 @@ target_link_libraries(opencdc_regression_tests
     PRIVATE
         GTest::gtest_main
         slang::slang
+        nlohmann_json::nlohmann_json
 )
 
 gtest_discover_tests(opencdc_regression_tests)

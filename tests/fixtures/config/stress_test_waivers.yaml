@@ -1,0 +1,12 @@
+# Waiver config for stress_test_system
+# Waives CDC001 on uart_rx crossing and CDC007 on resetless_flops.
+
+rules:
+  CDC001:
+    enabled: true
+
+waivers:
+  - rule: CDC001, source: stress_test_system.uart_rx.shift_reg, dest: stress_test_system.sync_2ff_bus.src_reg, source_domain: clk_uart, dest_domain: clk_bridge, justification: "Async FIFO handles this crossing", owner: "@rtl-team"
+
+output:
+  format: json

@@ -5,18 +5,36 @@ add_executable(opencdc_unit_tests
     crossing_test.cpp
     sync_test.cpp
     reconvergence_test.cpp
+    cdc006_test.cpp
     rule_test.cpp
     waiver_test.cpp
+    waiver_regex_test.cpp
     report_test.cpp
+    config_test.cpp
+    pattern_test.cpp
+    constraints_test.cpp
+    parallel_test.cpp
+    resolve_test.cpp
+    analyzer_test.cpp
+    fix_regression_test.cpp
     ${CMAKE_SOURCE_DIR}/src/ir/graph.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/domain.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/resolve.cpp
+    ${CMAKE_SOURCE_DIR}/src/clock/constraints.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/crossing.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/synchronizer.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/reconvergence.cpp
+    ${CMAKE_SOURCE_DIR}/src/cdc/cdc006.cpp
     ${CMAKE_SOURCE_DIR}/src/cdc/waiver.cpp
+    ${CMAKE_SOURCE_DIR}/src/cdc/pattern.cpp
+    ${CMAKE_SOURCE_DIR}/src/cdc/reset_domain.cpp
     ${CMAKE_SOURCE_DIR}/src/rules/rule.cpp
     ${CMAKE_SOURCE_DIR}/src/report/report.cpp
+    ${CMAKE_SOURCE_DIR}/src/report/html_reporter.cpp
+    ${CMAKE_SOURCE_DIR}/src/config/config.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/trend.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/analyzer.cpp
+    ${CMAKE_SOURCE_DIR}/src/frontend/slang_adapter.cpp
 )
 
 target_include_directories(opencdc_unit_tests
@@ -27,16 +45,20 @@ target_include_directories(opencdc_unit_tests
         ${CMAKE_SOURCE_DIR}/src/cdc
         ${CMAKE_SOURCE_DIR}/src/rules
         ${CMAKE_SOURCE_DIR}/src/report
+        ${CMAKE_SOURCE_DIR}/src/analysis
+        ${CMAKE_SOURCE_DIR}/src/util
 )
 
 target_compile_definitions(opencdc_unit_tests
     PRIVATE
         OPENCDC_BIN_DIR="${CMAKE_BINARY_DIR}/src"
+        FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )
 
 target_link_libraries(opencdc_unit_tests
     PRIVATE
         GTest::gtest_main
+        slang::slang
 )
 
 gtest_discover_tests(opencdc_unit_tests)

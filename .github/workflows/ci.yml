@@ -11,7 +11,17 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        compiler: [g++, clang++]
+        include:
+          - compiler: g++
+            cc: gcc
+            cxx: g++
+          - compiler: clang++
+            cc: clang
+            cxx: clang++
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
 
     steps:
       - uses: actions/checkout@v4
@@ -27,18 +37,74 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
-      - name: Unit Tests
-        run: ctest --test-dir build --output-on-failure -R ".*Test"
-
-      - name: Regression Tests
-        run: ctest --test-dir build --output-on-failure -R "FrontendTest"
+      - name: All Tests
+        run: ctest --test-dir build --output-on-failure
 
       - name: CLI Smoke Test
         run: |
-          ./build/src/opencdc check tests/fixtures/sv/cdc_crossing.sv --top simple_cdc_crossing --format json
+          # Verify binary can parse and report (findings = exit 1, OK)
+          ./build/src/opencdc check tests/fixtures/sv/cdc_crossing.sv --top simple_cdc_crossing --format json || true
+          # Clean fixture (no findings = exit 0)
           ./build/src/opencdc check tests/fixtures/sv/sync_2ff.sv --top sync_2ff --format text
           ./build/src/opencdc check tests/fixtures/sv/gated_clock.sv --top gated_clock --verbose
           echo "CLI smoke test passed"
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential lcov
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON -DCMAKE_CXX_FLAGS="--coverage"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run Tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Capture Coverage
+        run: |
+          lcov --capture --directory build --output-file coverage.info
+          lcov --remove coverage.info '/usr/*' '*/_deps/*' '*/tests/*' --output-file coverage.info
+          lcov --list coverage.info
+
+      - name: Upload Coverage
+        if: github.event_name == 'push'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.info
+          fail_ci_if_error: true
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential
+
+      - name: Configure (ASan + UBSan)
+        run: |
+          cmake -B build-san -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build-san -j$(nproc)
+
+      - name: Run Tests with Sanitizers
+        run: ctest --test-dir build-san --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=0
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
 
   lint:
     runs-on: ubuntu-latest

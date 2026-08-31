@@ -1,0 +1,16 @@
+[
+  {
+    "rule_id": "CDC001",
+    "rule_name": "unsynchronized_crossing",
+    "severity": "error",
+    "waived": false,
+    "source": "muxed_crossing.src_ff",
+    "source_domain": "clk_a",
+    "dest": "muxed_crossing.dst_ff",
+    "dest_domain": "clk_b",
+    "bus_width": 1,
+    "reason": "Register 'muxed_crossing.src_ff' in domain 'clk_a' drives register 'muxed_crossing.dst_ff' in domain 'clk_b' without synchronization. No 2FF/3FF synchronizer chain detected on destination side.",
+    "file": "tests/fixtures/sv/muxed_crossing.sv",
+    "line": 13
+  }
+]

@@ -7,13 +7,91 @@ bool ClockResolver::is_clock_port(const std::string& name,
                                   const ir::Graph& graph) const {
     for (const auto& node : graph.nodes()) {
         if (node.kind == ir::NodeKind::Port) {
+            if (node.hier_name == name) return true;
             size_t dot = node.hier_name.rfind('.');
-            std::string short_n = (dot != std::string::npos)
-                ? node.hier_name.substr(dot + 1) : node.hier_name;
-            if (short_n == name) return true;
+            if (dot != std::string::npos) {
+                std::string short_n = node.hier_name.substr(dot + 1);
+                if (short_n == name) return true;
+            }
         }
     }
     return false;
+}
+
+std::string ClockResolver::get_root_port_name(const std::string& name,
+                                              const ir::Graph& graph) const {
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == ir::NodeKind::Port && node.hier_name == name)
+            return node.hier_name;
+    }
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == ir::NodeKind::Port) {
+            size_t dot = node.hier_name.rfind('.');
+            if (dot != std::string::npos) {
+                std::string short_n = node.hier_name.substr(dot + 1);
+                if (short_n == name) return node.hier_name;
+            }
+        }
+    }
+    return name;
+}
+
+std::string ClockResolver::trace_to_top_port(const std::string& port_name,
+                                             const ir::Graph& graph) const {
+    std::string current = port_name;
+
+    size_t dot = current.rfind('.');
+    std::string short_name = (dot != std::string::npos)
+        ? current.substr(dot + 1) : current;
+
+    int has_same_short_count = 0;
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == ir::NodeKind::Port) {
+            size_t nd = node.hier_name.rfind('.');
+            std::string ns = (nd != std::string::npos)
+                ? node.hier_name.substr(nd + 1) : node.hier_name;
+            if (ns == short_name) has_same_short_count++;
+        }
+    }
+    // Domain names remain local signal names. Qualified names are used while
+    // resolving graph connectivity, not exposed as domain identities.
+    if (has_same_short_count <= 1) return short_name;
+
+    for (int depth = 0; depth < 10; ++depth) {
+        bool found_parent = false;
+        for (const auto& node : graph.nodes()) {
+            if (node.kind == ir::NodeKind::Port && node.hier_name == current) {
+                for (uint64_t pred_id : graph.predecessors(node.id)) {
+                    const ir::Node* pred = graph.find_node(pred_id);
+                    if (!pred) continue;
+                    if (pred->kind == ir::NodeKind::Port &&
+                        is_clock_port(pred->hier_name, graph)) {
+                        current = pred->hier_name;
+                        found_parent = true;
+                        break;
+                    }
+                    if (pred->kind == ir::NodeKind::Net) {
+                        for (uint64_t net_pred_id : graph.predecessors(pred_id)) {
+                            const ir::Node* net_pred = graph.find_node(net_pred_id);
+                            if (!net_pred) continue;
+                            if (net_pred->kind == ir::NodeKind::Port &&
+                                is_clock_port(net_pred->hier_name, graph)) {
+                                current = net_pred->hier_name;
+                                found_parent = true;
+                                break;
+                            }
+                        }
+                        if (found_parent) break;
+                    }
+                }
+                break;
+            }
+        }
+        if (!found_parent) break;
+    }
+
+    dot = current.rfind('.');
+    return (dot != std::string::npos) ? current.substr(dot + 1) : current;
 }
 
 ClockInfo ClockResolver::trace_clock(const std::string& clock_name,
@@ -22,26 +100,111 @@ ClockInfo ClockResolver::trace_clock(const std::string& clock_name,
     info.name = clock_name;
 
     if (is_clock_port(clock_name, graph)) {
-        info.root_clock = clock_name;
+        info.root_clock = trace_to_top_port(clock_name, graph);
         return info;
     }
 
-    std::unordered_set<std::string> known_clocks;
     for (const auto& node : graph.nodes()) {
-        if (node.kind == ir::NodeKind::Port) {
-            size_t dot = node.hier_name.rfind('.');
-            std::string short_n = (dot != std::string::npos)
-                ? node.hier_name.substr(dot + 1) : node.hier_name;
-            known_clocks.insert(short_n);
+        if (node.kind == ir::NodeKind::Port && node.hier_name == clock_name) {
+            info.root_clock = trace_to_top_port(clock_name, graph);
+            return info;
         }
     }
 
-    for (const auto& known : known_clocks) {
-        if (clock_name.size() > known.size() &&
-            clock_name.substr(0, known.size()) == known) {
-            info.root_clock = known;
-            info.is_gated = true;
-            return info;
+    for (const auto& node : graph.nodes()) {
+        if (node.kind == ir::NodeKind::Net) {
+            bool match = (node.hier_name == clock_name);
+            if (!match) {
+                size_t dot = node.hier_name.rfind('.');
+                if (dot != std::string::npos &&
+                    node.hier_name.substr(dot + 1) == clock_name) {
+                    match = true;
+                }
+            }
+            if (!match) continue;
+
+            for (uint64_t pred_id : graph.predecessors(node.id)) {
+                const ir::Node* pred = graph.find_node(pred_id);
+                if (!pred) continue;
+                if (pred->kind == ir::NodeKind::Combinational) {
+                    const ir::Node* clock_port = nullptr;
+                    for (uint64_t cp_id : graph.predecessors(pred_id)) {
+                        const ir::Node* cp = graph.find_node(cp_id);
+                        if (!cp) continue;
+                        if (cp->kind == ir::NodeKind::Port) {
+                            if (is_clock_port(cp->hier_name, graph)) {
+                                clock_port = cp;
+                                if (pred->logic_type == ir::LogicType::And) break;
+                            }
+                        }
+                    }
+                    if (clock_port) {
+                        info.root_clock = trace_to_top_port(clock_port->hier_name, graph);
+                        info.is_gated = (pred->logic_type == ir::LogicType::And);
+                        info.is_muxed = (pred->logic_type == ir::LogicType::Mux);
+                        return info;
+                    }
+                } else if (pred->kind == ir::NodeKind::Port) {
+                    if (is_clock_port(pred->hier_name, graph)) {
+                        info.root_clock = trace_to_top_port(pred->hier_name, graph);
+                        return info;
+                    }
+                } else if (pred->kind == ir::NodeKind::Net) {
+                    // Net→Net chain: follow predecessors with depth limit.
+                    std::unordered_set<uint64_t> visited;
+                    visited.insert(pred_id);
+                    const ir::Node* cur = pred;
+                    for (int hop = 0; hop < 8 && cur; ++hop) {
+                        bool found = false;
+                        for (uint64_t np_id : graph.predecessors(cur->id)) {
+                            if (visited.count(np_id)) continue;
+                            visited.insert(np_id);
+                            const ir::Node* np = graph.find_node(np_id);
+                            if (!np) continue;
+                            if (np->kind == ir::NodeKind::Port &&
+                                is_clock_port(np->hier_name, graph)) {
+                                info.root_clock = trace_to_top_port(np->hier_name, graph);
+                                return info;
+                            }
+                            if (np->kind == ir::NodeKind::Combinational) {
+                                // Check direct Port predecessors.
+                                for (uint64_t cp_id : graph.predecessors(np_id)) {
+                                    const ir::Node* cp = graph.find_node(cp_id);
+                                    if (cp && cp->kind == ir::NodeKind::Port &&
+                                        is_clock_port(cp->hier_name, graph)) {
+                                        info.root_clock = trace_to_top_port(cp->hier_name, graph);
+                                        info.is_gated = (np->logic_type == ir::LogicType::And);
+                                        info.is_muxed = (np->logic_type == ir::LogicType::Mux);
+                                        return info;
+                                    }
+                                }
+                                // Also check Net predecessors of the Combinational
+                                // node (one more level) for clock sources.
+                                for (uint64_t net_pred_id : graph.predecessors(np_id)) {
+                                    const ir::Node* net_pred = graph.find_node(net_pred_id);
+                                    if (!net_pred || net_pred->kind != ir::NodeKind::Net) continue;
+                                    for (uint64_t pp_id : graph.predecessors(net_pred_id)) {
+                                        const ir::Node* pp = graph.find_node(pp_id);
+                                        if (pp && pp->kind == ir::NodeKind::Port &&
+                                            is_clock_port(pp->hier_name, graph)) {
+                                            info.root_clock = trace_to_top_port(pp->hier_name, graph);
+                                            info.is_gated = (np->logic_type == ir::LogicType::And);
+                                            info.is_muxed = (np->logic_type == ir::LogicType::Mux);
+                                            return info;
+                                        }
+                                    }
+                                }
+                            }
+                            if (np->kind == ir::NodeKind::Net) {
+                                cur = np;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) break;
+                    }
+                }
+            }
         }
     }
 
@@ -56,7 +219,7 @@ ClockInfo ClockResolver::trace_clock(const std::string& clock_name,
         }
     }
 
-    info.root_clock = clock_name;
+    info.root_clock.clear();
     return info;
 }
 

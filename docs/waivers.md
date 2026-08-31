@@ -1,74 +1,62 @@
 # Waivers
 
-Waivers allow you to suppress known-safe CDC findings while maintaining an auditable record.
+Waivers suppress known-safe CDC findings. They provide an auditable trail of reviewed crossings.
 
-## Format
+## Waiver File Format
 
-Waiver files use a simple line-based format:
+Each waiver is a single line with space-separated fields:
 
 ```
-# Comments start with #
-RULE_ID  SOURCE_REG  DEST_REG  SRC_DOMAIN  DST_DOMAIN  "JUSTIFICATION"  @OWNER  EXPIRY_DATE
+RULE_ID SOURCE DEST SOURCE_DOMAIN DEST_DOMAIN "JUSTIFICATION" OWNER [EXPIRY]
 ```
 
 ### Fields
 
 | Field | Required | Description |
-|---|---|---|
-| RULE_ID | Yes | Rule to waive (e.g., CDC001) |
-| SOURCE_REG | Yes | Source register hierarchical name |
-| DEST_REG | Yes | Destination register hierarchical name |
-| SRC_DOMAIN | Yes | Source clock domain |
-| DST_DOMAIN | Yes | Destination clock domain |
-| JUSTIFICATION | Yes | Quoted string explaining why the waiver is safe |
-| OWNER | No | `@username` of person who approved the waiver |
-| EXPIRY_DATE | No | `YYYY-MM-DD` — waiver expires after this date |
+|-------|----------|-------------|
+| RULE_ID | Yes | Rule ID (e.g., CDC001) |
+| SOURCE | Yes | Source register name (substring match) |
+| DEST | Yes | Destination register name (substring match) |
+| SOURCE_DOMAIN | Yes | Source clock domain (empty = any) |
+| DEST_DOMAIN | Yes | Destination clock domain (empty = any) |
+| JUSTIFICATION | Yes | Quoted reason for the waiver |
+| OWNER | Yes | Who approved the waiver (e.g., @team) |
+| EXPIRY | No | Expiry date (YYYY-MM-DD) |
 
-### Matching Rules
+### Example
 
-- Matching is **case-insensitive**
-- Empty fields match any value (wildcard)
-- Expired waivers are automatically skipped
-- First matching waiver wins
-
-## Example
-
-```
-# Waivers for verified crossings
-CDC001 mod.src_ff mod.dst_ff clk_a clk_b "Reviewed by designer, 2FF sync added downstream" @john 2026-12-31
-CDC003 mod.data mod.meta1 mod.meta2 clk_a clk_b "Single-bit, no timing hazard" @jane
+```yaml
+# waivers.txt
+CDC001 mod.src mod.dst clk_a clk_b "Known safe crossing reviewed by team" @reviewer 2027-12-31
+CDC002 bus.src bus.dst clk_x clk_y "Gray-coded bus" @designer
 ```
 
-## Usage
+## CLI Usage
 
 ```bash
 opencdc check design.sv --top top --waiver waivers.txt
 ```
 
-## Behavior
+## Config File Usage
 
-- Waived findings are **still included** in the report with `"waived": true`
-- Waived errors do **not** cause exit code 1
-- Waiver justification and owner appear in both JSON and text output
-- Expired waivers are treated as if they don't exist
-
-## JSON Output for Waived Findings
-
-```json
-{
-  "rule_id": "CDC001",
-  "severity": "error",
-  "waived": true,
-  "waiver_justification": "Reviewed by designer, 2FF sync added downstream",
-  "waiver_owner": "john",
-  "source": "mod.src_ff",
-  "dest": "mod.dst_ff"
-}
+```yaml
+waivers:
+  - rule: CDC001, source: mod.src, dest: mod.dst, justification: "Known safe", owner: "@team"
+  - rule: CDC002, source: bus.src, dest: bus.dst, justification: "Gray-coded", owner: "@designer", expiry: "2027-12-31"
 ```
 
-## Auditing
+## Matching Rules
 
-Waivers leave a complete audit trail:
-- Every waived finding appears in the report with its justification
-- The `--format json` output includes all waiver metadata
-- Version control on waiver files provides change history
+- **Case-insensitive**: All field comparisons are case-insensitive
+- **Substring match**: Source and dest names are matched as substrings (e.g., "src" matches "mod.src_ff")
+- **Empty fields**: Empty source/dest/domain fields match any value
+- **Expiry**: Waivers with expired dates are automatically skipped
+
+## Audit Trail
+
+Waived findings are still included in the output with:
+- `waived: true`
+- `waiver_justification`: The reason text
+- `waiver_owner`: Who approved it
+
+This allows reviewers to see what was waived and why.

@@ -1,78 +1,127 @@
 # Architecture
 
-OpenCDC is a static analysis tool for detecting Clock Domain Crossing (CDC) issues in RTL designs.
+## Overview
+
+OpenCDC is a static analysis tool that detects Clock Domain Crossing (CDC) issues in RTL designs. It parses SystemVerilog/Verilog source files, builds an intermediate representation (IR) graph, and runs a series of analysis passes to find potential CDC violations.
 
 ## Pipeline
 
 ```
-RTL Input (.sv/.v)
-       │
-       ▼
+Source Files (.sv/.v)
+        │
+        ▼
 ┌─────────────────┐
-│  slang Frontend  │  Parse, elaborate, extract registers/ports/edges
+│  Slang Frontend  │  Parse SV/V via slang, build IR graph
+│  (SlangAdapter)  │  Extract registers, clocks, resets, edges
 └────────┬────────┘
-         │  ir::Graph
+         │
          ▼
 ┌─────────────────┐
-│ Clock Resolver   │  Trace gated/muxed clocks to root clock
+│  Domain Extract  │  Group registers into clock domains
+│  (DomainExtractor)│
 └────────┬────────┘
-         │  ir::Graph (root_clock populated)
+         │
          ▼
 ┌─────────────────┐
-│ Domain Extractor │  Group registers by clock domain
+│  Clock Resolver  │  Trace gated/muxed clocks to root
+│  (ClockResolver) │  Detect clock properties
 └────────┬────────┘
-         │  vector<ClockDomain>
+         │
          ▼
 ┌─────────────────┐
-│ Crossing Analyzer│  Find register→register edges crossing domains
+│ Crossing Analysis│  Detect CDC001/002/004/005/007/008/010
+│(CrossingAnalyzer)│  Check for 2FF/3FF sync chains
 └────────┬────────┘
-         │  vector<Finding>
+         │
          ▼
 ┌─────────────────┐
-│ Reconvergence    │  Detect fanout from same source reconverging
+│  Reconvergence   │  Detect CDC003 reconvergence hazards
+│  (Reconvergence) │
 └────────┬────────┘
-         │  + CDC003 findings
+         │
          ▼
 ┌─────────────────┐
-│ Rule Engine      │  Apply severity overrides, enable/disable rules
+│  CDC006 Analysis │  Detect combinational logic between
+│  (Cdc006Analyzer)│  synchronizer stages
 └────────┬────────┘
-         │  filtered findings
+         │
          ▼
 ┌─────────────────┐
-│ Waiver Engine    │  Match waivers, mark findings as waived
+│  Rule Engine     │  Apply rule overrides (enable/disable/
+│  (RuleEngine)    │  severity changes)
 └────────┬────────┘
-         │  waived findings
+         │
          ▼
 ┌─────────────────┐
-│ Reporter         │  JSON array, text summary, file output
+│  Waiver Engine   │  Match and suppress waived findings
+│  (WaiverEngine)  │  Support expiry dates
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Reporter        │  JSON or text output
+│  (Reporter)      │  Summary counts
 └─────────────────┘
 ```
 
-## Modules
+## Module Map
 
-| Module | Files | Responsibility |
-|---|---|---|
-| **Frontend** | `src/frontend/slang_adapter.*` | Parse SystemVerilog via slang, build graph |
-| **IR** | `src/ir/graph.*` | Directed graph: Nodes (registers, ports) + Edges |
-| **Clock** | `src/clock/domain.*`, `src/clock/resolve.*` | Domain extraction, gated clock resolution |
-| **CDC** | `src/cdc/crossing.*`, `src/cdc/synchronizer.*`, `src/cdc/reconvergence.*`, `src/cdc/waiver.*` | Core analysis: crossings, sync chains, reconvergence, waivers |
-| **Rules** | `src/rules/rule.*` | Rule definitions, severity overrides, enable/disable |
-| **Report** | `src/report/report.*` | JSON/text output, summary, file writing |
+```
+src/
+├── ir/                    # Intermediate Representation
+│   ├── graph.h/cpp        # Directed graph: nodes (registers/ports) + edges
+│
+├── frontend/              # Language Frontend
+│   ├── slang_adapter.h/cpp # Slang parser bridge, AST walking
+│
+├── clock/                 # Clock Analysis
+│   ├── domain.h/cpp       # Clock domain extraction
+│   └── resolve.h/cpp      # Clock resolution (gated/muxed detection)
+│
+├── cdc/                   # CDC Analysis
+│   ├── crossing.h/cpp     # Main crossing analyzer (CDC001/002/004/005/007/008)
+│   ├── synchronizer.h/cpp # 2FF/3FF sync chain detection
+│   ├── reconvergence.h/cpp # Reconvergence hazard detection (CDC003)
+│   ├── cdc006.h/cpp       # Combinational between sync stages (CDC006)
+│   └── waiver.h/cpp       # Waiver matching and application
+│
+├── rules/                 # Rule Management
+│   └── rule.h/cpp         # Rule engine: enable/disable/override
+│
+├── report/                # Output
+│   └── report.h/cpp       # JSON and text report generation
+│
+├── config/                # Configuration
+│   └── config.h/cpp       # YAML-like config parser
+│
+└── opencdc/               # Public API
+    └── opencdc.h          # CheckOptions, ExitCode, run()
+```
 
-## Graph Model
+## IR Graph Design
 
-- **Nodes**: `Register` (with clock_domain, root_clock, width, reset) or `Port`
-- **Edges**: Directed register→register or register→port connectivity
-- Source locations preserved for all register nodes
-- `root_clock` populated by ClockResolver for gated/muxed clock designs
+The IR graph is a directed graph where:
 
-## Data Flow
+- **Nodes** represent registers and ports. Each node has:
+  - `id` — unique 64-bit identifier
+  - `hier_name` — full hierarchical name (e.g., `top.u_mod.reg_a`)
+  - `clock_domain` — name of the clock driving this register
+  - `root_clock` — resolved root clock (after ClockResolver)
+  - `clock_is_gated` / `clock_is_muxed` — clock properties
+  - `reset_signal` — name of the reset signal (if any)
+  - `width` — bit width
+  - `loc` — source location (file, line, column)
 
-1. `SlangAdapter::elaborate()` → `FrontendResult` (graph + clock/reset info)
-2. `ClockResolver::resolve()` → mutates graph nodes with root_clock
-3. `DomainExtractor::extract()` → `DomainResult` (domains + warnings)
-4. `CrossingAnalyzer::analyze()` → `vector<Finding>` (CDC001, CDC002)
-5. `ReconvergenceAnalyzer::analyze()` → `vector<Finding>` (CDC003)
-6. `RuleEngine::filter()` → apply severity/enable overrides
-7. `WaiverEngine::apply()` → mark waived findings
-8. `Reporter` → output to stdout/file
+- **Edges** represent data flow from source register to destination register.
+
+## Key Design Decisions
+
+1. **Bounded analysis**: Graph and path limits prevent unbounded memory use; truncation is reported as CDC010 or an incomplete-analysis error.
+
+2. **Structural pattern matching**: Pattern recognition uses graph shape and explicit logic annotations; incomplete frontend information can still produce false positives or negatives.
+
+3. **Configurable rules**: CDC001-CDC010 can be enabled/disabled and have adjustable severity levels.
+
+4. **False-path support**: Users can specify false paths via CLI or config to suppress intentional crossings.
+
+5. **Reset crossing control**: Config option to suppress CDC001 findings when the destination register has a reset signal.

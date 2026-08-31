@@ -1,5 +1,7 @@
 #include "cdc/reconvergence.h"
+#include "cdc/synchronizer.h"
 #include <unordered_set>
+#include <queue>
 
 namespace opencdc::cdc {
 
@@ -11,7 +13,7 @@ std::vector<uint64_t> ReconvergenceAnalyzer::find_fanout_sources(
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register) continue;
 
-        auto succs = graph.successors(node.id);
+        auto succs = graph.register_successors(node.id);
         if (succs.size() < 2) continue;
 
         bool crosses_domain = false;
@@ -40,27 +42,19 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
 
     std::vector<const Finding*> src_crossings;
     for (const auto& f : crossings) {
-        if (f.source_reg_id == source_id)
+        if (f.source_reg_id == source_id && f.rule_id == "CDC001")
             src_crossings.push_back(&f);
     }
 
     if (src_crossings.size() < 2) return findings;
 
+    // Use the canonical SynchronizerMatcher rather than duplicating chain detection
+    // inline. The previous lambda checked for independent successors rather than a
+    // proper register chain (dest→s1→s2), which could suppress CDC003 incorrectly.
+    SynchronizerMatcher sync_matcher;
     auto has_sync_chain = [&](uint64_t dest_id) -> bool {
-        const ir::Node* dest = graph.find_node(dest_id);
-        if (!dest) return false;
-        for (uint64_t s : graph.successors(dest_id)) {
-            const ir::Node* sn = graph.find_node(s);
-            if (!sn || sn->kind != ir::NodeKind::Register) continue;
-            if (sn->clock_domain != dest->clock_domain) continue;
-            for (uint64_t s2 : graph.successors(s)) {
-                const ir::Node* sn2 = graph.find_node(s2);
-                if (!sn2 || sn2->kind != ir::NodeKind::Register) continue;
-                if (sn2->clock_domain != dest->clock_domain) continue;
-                return true;
-            }
-        }
-        return false;
+        return sync_matcher.find_pattern_for_dest(dest_id, graph, /*strict=*/false)
+               != SyncPattern::None;
     };
 
     for (size_t i = 0; i < src_crossings.size(); ++i) {
@@ -70,48 +64,76 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
 
             if (a->dest_reg_id == b->dest_reg_id) continue;
 
-            if (has_sync_chain(a->dest_reg_id) || has_sync_chain(b->dest_reg_id))
+            // A synchronizer chain on the destination only makes the crossing
+            // safe for single-bit sources. A multi-bit bus split across
+            // independent synchronizers still reconverges with bit skew, so
+            // the hazard must be reported regardless of sync chains.
+            if (src->width <= 1 &&
+                (has_sync_chain(a->dest_reg_id) || has_sync_chain(b->dest_reg_id)))
                 continue;
 
-            const ir::Node* da = graph.find_node(a->dest_reg_id);
-            const ir::Node* db = graph.find_node(b->dest_reg_id);
-            if (!da || !db) continue;
-
-            auto da_succs = graph.successors(a->dest_reg_id);
-            auto db_succs = graph.successors(b->dest_reg_id);
-
-            for (uint64_t da_s : da_succs) {
-                for (uint64_t db_s : db_succs) {
-                    if (da_s == db_s) {
-                        Finding f;
-                        f.rule_id = "CDC003";
-                        f.rule_name = "reconvergence_hazard";
-                        f.severity = "warning";
-                        f.source_reg_id = source_id;
-                        f.source_reg_name = src->hier_name;
-                        f.source_domain = a->source_domain;
-                        f.reconvergence.is_reconvergent = true;
-                        f.reconvergence.common_source_id = source_id;
-                        f.reconvergence.common_source_name = src->hier_name;
-                        f.reconvergence.is_hazardous = (src->width > 1);
-                        f.source_loc = src->loc;
-
-                        if (src->width > 1) {
-                            f.reconvergence.explanation =
-                                "Multi-bit source '" + src->hier_name +
-                                "' (width=" + std::to_string(src->width) +
-                                ") fans out through independent synchronizer paths that reconverge at '"
-                                + graph.find_node(da_s)->hier_name + "'.";
-                        } else {
-                            f.reconvergence.explanation =
-                                "Single-bit source '" + src->hier_name +
-                                "' fans out through independent paths that reconverge at '"
-                                + graph.find_node(da_s)->hier_name + "'.";
-                        }
-
-                        f.reason = f.reconvergence.explanation;
-                        findings.push_back(std::move(f));
+            // Bounded BFS: collect up to 16 register descendants per path (max 3 hops)
+            auto collect_descendants = [&](uint64_t start_id) -> std::vector<uint64_t> {
+                std::vector<uint64_t> result;
+                std::queue<std::pair<uint64_t, int>> bfs;
+                std::unordered_set<uint64_t> visited;
+                bfs.push({start_id, 0});
+                visited.insert(start_id);
+                while (!bfs.empty() && result.size() < 16) {
+                    auto [cur, depth] = bfs.front();
+                    bfs.pop();
+                    if (depth > 0 && graph.find_node(cur) &&
+                        graph.find_node(cur)->kind == ir::NodeKind::Register) {
+                        result.push_back(cur);
                     }
+                    if (depth >= 3) continue;
+                    for (uint64_t s : graph.register_successors(cur)) {
+                        if (visited.insert(s).second) {
+                            bfs.push({s, depth + 1});
+                        }
+                    }
+                }
+                return result;
+            };
+
+            auto da_desc = collect_descendants(a->dest_reg_id);
+            auto db_desc = collect_descendants(b->dest_reg_id);
+
+            std::unordered_set<uint64_t> da_set(da_desc.begin(), da_desc.end());
+            for (uint64_t db_d : db_desc) {
+                if (da_set.count(db_d)) {
+                    Finding f;
+                    f.rule_id = "CDC003";
+                    f.rule_name = "reconvergence_hazard";
+                    f.severity = "warning";
+                    f.source_reg_id = source_id;
+                    f.source_reg_name = src->hier_name;
+                    f.source_domain = a->source_domain;
+                    f.reconvergence.is_reconvergent = true;
+                    f.reconvergence.common_source_id = source_id;
+                    f.reconvergence.common_source_name = src->hier_name;
+                    f.reconvergence.is_hazardous = (src->width > 1);
+                    f.source_loc = src->loc;
+
+                    const ir::Node* consumer = graph.find_node(db_d);
+                    std::string consumer_name = consumer ? consumer->hier_name : "<unknown>";
+
+                    if (src->width > 1) {
+                        f.reconvergence.explanation =
+                            "Multi-bit source '" + src->hier_name +
+                            "' (width=" + std::to_string(src->width) +
+                            ") fans out through independent synchronizer paths that reconverge at '"
+                            + consumer_name + "'.";
+                    } else {
+                        f.reconvergence.explanation =
+                            "Single-bit source '" + src->hier_name +
+                            "' fans out through independent paths that reconverge at '"
+                            + consumer_name + "'.";
+                    }
+
+                    f.reason = f.reconvergence.explanation;
+                    findings.push_back(std::move(f));
+                    break;  // one reconvergence per pair is enough
                 }
             }
         }

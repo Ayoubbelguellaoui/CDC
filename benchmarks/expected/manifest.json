@@ -1,0 +1,244 @@
+{
+  "version": "1.0",
+  "description": "Expected results for OpenCDC benchmark fixtures. Each fixture tests specific rules with positive/negative/ambiguous controls.",
+  "generated_at": "2026-08-18",
+  "benchmarks": {
+    "cdc001_benchmark": {
+      "file": "benchmarks/fixtures/cdc001_benchmark.sv",
+      "top": "cdc001_benchmark",
+      "description": "Unsynchronized crossing detection",
+      "expected": {
+        "positive_controls": [
+          {
+            "rule": "CDC001",
+            "source": "cdc001_benchmark.positive_single_src",
+            "dest": "cdc001_benchmark.positive_single_dst",
+            "note": "Direct single-bit crossing, no sync"
+          },
+          {
+            "rule": "CDC001",
+            "source": "cdc001_benchmark.positive_multi_src",
+            "dest": "cdc001_benchmark.positive_multi_dst",
+            "note": "Direct multi-bit crossing, no sync"
+          },
+          {
+            "rule": "CDC001",
+            "source": "cdc001_benchmark.positive_sync_src",
+            "dest": "cdc001_benchmark.positive_sync_meta",
+            "note": "Crossing with downstream sync chain"
+          }
+        ],
+        "negative_controls": [
+          {
+            "rule": "CDC001",
+            "source": "cdc001_benchmark.negative_same_src",
+            "dest": "cdc001_benchmark.negative_same_dst",
+            "expected": "no_finding",
+            "note": "Same-domain register-to-register"
+          },
+          {
+            "rule": "CDC001",
+            "source": "cdc001_benchmark.negative_chain_a",
+            "dest": "cdc001_benchmark.negative_chain_b",
+            "expected": "no_finding",
+            "note": "Same-domain chain"
+          }
+        ],
+        "known_behavior": "CDC001 fires on EVERY crossing edge even if sync chain exists downstream. detected_sync field annotates but does not suppress."
+      }
+    },
+    "cdc002_benchmark": {
+      "file": "benchmarks/fixtures/cdc002_benchmark.sv",
+      "top": "cdc002_benchmark",
+      "description": "Multi-bit crossing detection",
+      "expected": {
+        "positive_controls": [
+          {
+            "rule": "CDC002",
+            "source": "cdc002_benchmark.positive_bus_src",
+            "dest": "cdc002_benchmark.positive_bus_dst",
+            "note": "Plain 8-bit bus crossing"
+          },
+          {
+            "rule": "CDC002",
+            "source": "cdc002_benchmark.positive_cnt_src",
+            "dest": "cdc002_benchmark.positive_cnt_dst",
+            "note": "Plain 4-bit counter crossing"
+          }
+        ],
+        "negative_controls": [
+          {
+            "rule": "CDC002",
+            "source": "cdc002_benchmark.gray_counter",
+            "dest": "cdc002_benchmark.gray_dst_ff1",
+            "expected": "no_finding",
+            "note": "True gray-coded crossing (name+structural)"
+          },
+          {
+            "rule": "CDC002",
+            "source": "cdc002_benchmark.hs_data_src",
+            "dest": "cdc002_benchmark.hs_data_dst",
+            "expected": "cdc002_fires",
+            "note": "KNOWN GAP: Handshake-protected bus still triggers CDC002 (name-only detection)"
+          }
+        ],
+        "ambiguous_controls": [
+          {
+            "rule": "CDC002",
+            "source": "cdc002_benchmark.gray_named_but_not_gray_src",
+            "dest": "cdc002_benchmark.gray_named_but_not_gray_dst",
+            "expected": "no_finding",
+            "note": "Signal named gray but NOT gray-coded. Detected by name heuristic. KNOWN GAP."
+          }
+        ],
+        "known_behavior": "CDC002 uses name heuristic only for gray-code. No structural analysis. Handshake detection uses name heuristic only."
+      }
+    },
+    "cdc003_benchmark": {
+      "file": "benchmarks/fixtures/cdc003_benchmark.sv",
+      "top": "cdc003_benchmark",
+      "description": "Reconvergence hazard detection",
+      "expected": {
+        "positive_controls": [
+          {
+            "rule": "CDC003",
+            "source": "cdc003_benchmark.pos_src",
+            "dest": "",
+            "note": "Multi-bit source, 2 paths reconverge"
+          }
+        ],
+        "known_behavior": "CDC003 fires on any reconvergence regardless of source width. Fires on single-bit sources too."
+      }
+    },
+    "cdc004_benchmark": {
+      "file": "benchmarks/fixtures/cdc004_benchmark.sv",
+      "top": "cdc004_benchmark",
+      "description": "Gated clock detection",
+      "expected": {
+        "negative_controls": [
+          {
+            "rule": "CDC004",
+            "source": "cdc004_benchmark.positive_src",
+            "dest": "cdc004_benchmark.positive_dst",
+            "expected": "no_finding",
+            "note": "KNOWN GAP: CDC004 does not fire on gated clock crossing. Gated clock detection not implemented."
+          }
+        ]
+      }
+    },
+    "cdc005_benchmark": {
+      "file": "benchmarks/fixtures/cdc005_benchmark.sv",
+      "top": "cdc005_benchmark",
+      "description": "Muxed clock without reset",
+      "expected": {
+        "positive_controls": [
+          {
+            "rule": "CDC005",
+            "source": "cdc005_benchmark.positive_src",
+            "dest": "cdc005_benchmark.positive_dst",
+            "note": "Muxed clock, no reset"
+          }
+        ],
+        "negative_controls": [
+          {
+            "rule": "CDC005",
+            "source": "cdc005_benchmark.negative_src",
+            "dest": "cdc005_benchmark.negative_dst",
+            "expected": "no_finding",
+            "note": "Muxed clock WITH reset"
+          }
+        ]
+      }
+    },
+    "cdc006_benchmark": {
+      "file": "benchmarks/fixtures/cdc006_benchmark.sv",
+      "top": "cdc006_benchmark",
+      "description": "Combinational logic between sync stages",
+      "expected": {
+        "positive_controls": [
+          {
+            "rule": "CDC006",
+            "source": "cdc006_benchmark.positive_src",
+            "dest": "cdc006_benchmark.positive_meta",
+            "note": "Cross-domain source feeds first sync stage"
+          },
+          {
+            "rule": "CDC006",
+            "source": "cdc006_benchmark.pos2_src",
+            "dest": "cdc006_benchmark.pos2_meta",
+            "note": "Multi-predecessor second stage"
+          }
+        ],
+        "known_behavior": "CDC006 fires on ANY cross-domain source feeding first sync stage. Also fires on negative_src -> negative_meta (proper 2FF chain) because it checks src->meta edge."
+      }
+    },
+    "cdc007_benchmark": {
+      "file": "benchmarks/fixtures/cdc007_benchmark.sv",
+      "top": "cdc007_benchmark",
+      "description": "Missing reset on CDC registers",
+      "expected": {
+        "positive_controls": [
+          {
+            "rule": "CDC007",
+            "source": "cdc007_benchmark.positive_src",
+            "dest": "cdc007_benchmark.positive_dst",
+            "note": "Both registers lack reset"
+          }
+        ],
+        "negative_controls": [
+          {
+            "rule": "CDC007",
+            "source": "cdc007_benchmark.negative_src",
+            "dest": "cdc007_benchmark.negative_dst",
+            "expected": "no_finding",
+            "note": "Both registers have reset"
+          }
+        ]
+      }
+    },
+    "cdc008_benchmark": {
+      "file": "benchmarks/fixtures/cdc008_benchmark.sv",
+      "top": "cdc008_benchmark",
+      "description": "Multi-domain daisy chain",
+      "expected": {
+        "negative_controls": [
+          {
+            "rule": "CDC008",
+            "source": "cdc008_benchmark.positive_src",
+            "dest": "cdc008_benchmark.positive_dst",
+            "expected": "no_finding",
+            "note": "KNOWN GAP: CDC008 does not fire on 3-domain daisy chain. Multi-domain detection not implemented."
+          }
+        ]
+      }
+    }
+  },
+  "known_gaps": [
+    {
+      "rule": "CDC004",
+      "gap": "Gated clock detection not implemented",
+      "severity": "high"
+    },
+    {
+      "rule": "CDC008",
+      "gap": "Multi-domain daisy chain detection not implemented",
+      "severity": "high"
+    },
+    {
+      "rule": "CDC002",
+      "gap": "Gray-code detection is name-only, no structural analysis",
+      "severity": "medium"
+    },
+    {
+      "rule": "CDC002",
+      "gap": "Handshake detection is name-only, no protocol analysis",
+      "severity": "medium"
+    },
+    {
+      "rule": "CDC001",
+      "gap": "Fires on ALL crossing edges even with downstream sync chain",
+      "severity": "low",
+      "note": "By design: annotates sync chain in detected_sync field"
+    }
+  ]
+}

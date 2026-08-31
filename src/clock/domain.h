@@ -4,6 +4,7 @@
 #include "ir/graph.h"
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace opencdc::clock {
 
@@ -16,6 +17,7 @@ struct ClockDomain {
 struct DomainResult {
     std::vector<ClockDomain> domains;
     std::vector<std::string> warnings;
+    std::unordered_map<uint64_t, size_t> register_to_domain;
 };
 
 class DomainExtractor {

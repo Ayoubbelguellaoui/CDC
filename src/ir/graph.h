@@ -37,11 +37,11 @@ enum class LogicType {
 };
 
 struct Node {
-    uint64_t id;
+    uint64_t id = 0;
     std::string hier_name;
     std::string short_name;
     std::string module_path;
-    NodeKind kind;
+    NodeKind kind = NodeKind::Register;
     uint32_t width = 1;
     std::string clock_domain;
     std::string root_clock;
@@ -70,7 +70,9 @@ struct Edge {
 
 struct ValidationResult {
     std::vector<std::string> errors;
-    bool ok() const { return errors.empty(); }
+    bool ok() const {
+        return errors.empty();
+    }
 };
 
 // E1-E3: Safety limits to prevent OOM on pathological designs
@@ -78,32 +80,28 @@ static constexpr size_t MAX_GRAPH_NODES = 500000;
 static constexpr size_t MAX_GRAPH_EDGES = 1000000;
 static constexpr size_t MAX_PATH_DEPTH = 50;
 
+// Edge dedup key packs two IDs into uint64_t as (from << 32) | to.
+// Verify node IDs always fit in 32 bits.
+static_assert(MAX_GRAPH_NODES <= UINT32_MAX,
+              "MAX_GRAPH_NODES exceeds uint32_t range; edge key packing unsafe");
+
 class Graph {
-public:
+   public:
     Graph() = default;
 
-    uint64_t add_register(const std::string& hier_name,
-                          const std::string& clock_domain,
-                          uint32_t width,
-                          const SourceLoc& loc,
+    uint64_t add_register(const std::string& hier_name, const std::string& clock_domain,
+                          uint32_t width, const SourceLoc& loc,
                           const std::string& module_path = "");
 
-    uint64_t add_port(const std::string& hier_name,
-                      uint32_t width,
-                      const SourceLoc& loc,
+    uint64_t add_port(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
                       const std::string& module_path = "");
 
-    uint64_t add_net(const std::string& hier_name,
-                     uint32_t width,
-                     const SourceLoc& loc,
+    uint64_t add_net(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
                      const std::string& module_path = "");
 
-    uint64_t add_combinational(const std::string& hier_name,
-                               LogicType logic_type,
-                               const std::vector<uint64_t>& inputs,
-                               uint32_t width,
-                               const SourceLoc& loc,
-                               const std::string& module_path = "");
+    uint64_t add_combinational(const std::string& hier_name, LogicType logic_type,
+                               const std::vector<uint64_t>& inputs, uint32_t width,
+                               const SourceLoc& loc, const std::string& module_path = "");
 
     void add_edge(uint64_t from_id, uint64_t to_id);
 
@@ -111,17 +109,23 @@ public:
     Node* find_node_mutable(uint64_t id);
     const Node* find_node_by_name(const std::string& hier_name) const;
 
-    const std::vector<Node>& nodes() const { return nodes_; }
-    std::vector<Node>& nodes_mutable() { return nodes_; }
-    const std::vector<Edge>& edges() const { return edges_; }
+    const std::vector<Node>& nodes() const {
+        return nodes_;
+    }
+    std::vector<Node>& nodes_mutable() {
+        return nodes_;
+    }
+    const std::vector<Edge>& edges() const {
+        return edges_;
+    }
 
     std::vector<uint64_t> successors(uint64_t id) const;
     std::vector<uint64_t> predecessors(uint64_t id) const;
 
-    std::vector<uint64_t> register_predecessors(
-        uint64_t id, bool traverse_combinational = true) const;
-    std::vector<uint64_t> register_successors(
-        uint64_t id, bool traverse_combinational = true) const;
+    std::vector<uint64_t> register_predecessors(uint64_t id,
+                                                bool traverse_combinational = true) const;
+    std::vector<uint64_t> register_successors(uint64_t id,
+                                              bool traverse_combinational = true) const;
 
     struct RegPath {
         uint64_t src_reg_id;
@@ -138,22 +142,26 @@ public:
         size_t visited_edges = 0;
     };
 
-    PathTraversalResult find_register_paths(
-        uint64_t src_reg_id, size_t max_paths = 10000) const;
+    PathTraversalResult find_register_paths(uint64_t src_reg_id, size_t max_paths = 10000) const;
 
     ValidationResult validate() const;
-    bool truncated() const { return truncated_; }
+    bool truncated() const {
+        return truncated_;
+    }
 
     bool is_data_node(NodeKind k) const {
-        return k == NodeKind::Port || k == NodeKind::Net ||
-               k == NodeKind::Combinational;
+        return k == NodeKind::Port || k == NodeKind::Net || k == NodeKind::Combinational;
     }
 
     size_t register_count() const;
-    size_t edge_count() const { return edges_.size(); }
-    uint64_t generation() const { return generation_; }
+    size_t edge_count() const {
+        return edges_.size();
+    }
+    uint64_t generation() const {
+        return generation_;
+    }
 
-private:
+   private:
     std::vector<Node> nodes_;
     std::vector<Edge> edges_;
     std::unordered_map<uint64_t, size_t> id_to_idx_;
@@ -166,6 +174,6 @@ private:
     bool truncated_ = false;
 };
 
-} // namespace opencdc::ir
+}  // namespace opencdc::ir
 
-#endif // OPENCDC_IR_GRAPH_H
+#endif  // OPENCDC_IR_GRAPH_H

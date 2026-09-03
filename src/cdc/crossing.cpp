@@ -1,19 +1,23 @@
 #include "cdc/crossing.h"
-#include "util/parallel.h"
-#include <unordered_set>
+
 #include <algorithm>
 #include <cctype>
+#include <unordered_set>
+
+#include "util/parallel.h"
 
 namespace opencdc::cdc {
 
 bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id,
-                                                   const ir::Graph& graph) const {
+                                                  const ir::Graph& graph) const {
     const ir::Node* src = graph.find_node(src_id);
     const ir::Node* dst = graph.find_node(dst_id);
 
-    if (!src || !dst) return false;
+    if (!src || !dst)
+        return false;
 
-    if (src->width <= 1) return true;
+    if (src->width <= 1)
+        return true;
 
     if (pattern_recognizer_) {
         if (pattern_recognizer_->is_verified_safe_crossing(src_id, dst_id, graph))
@@ -24,19 +28,19 @@ bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_
 }
 
 const clock::ClockDomain* CrossingAnalyzer::find_domain_for_node(
-    uint64_t node_id,
-    const std::vector<clock::ClockDomain>& domains,
+    uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
     const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
     auto it = register_to_domain.find(node_id);
-    if (it == register_to_domain.end()) return nullptr;
-    if (it->second >= domains.size()) return nullptr;
+    if (it == register_to_domain.end())
+        return nullptr;
+    if (it->second >= domains.size())
+        return nullptr;
     return &domains[it->second];
 }
 
 std::string CrossingAnalyzer::build_reason(const Finding& f) const {
-    std::string r = "Register '" + f.source_reg_name + "' in domain '" +
-                    f.source_domain + "' drives register '" + f.dest_reg_name +
-                    "' in domain '" + f.dest_domain +
+    std::string r = "Register '" + f.source_reg_name + "' in domain '" + f.source_domain +
+                    "' drives register '" + f.dest_reg_name + "' in domain '" + f.dest_domain +
                     "' without synchronization.";
 
     if (f.detected_sync == SyncPattern::None) {
@@ -46,11 +50,8 @@ std::string CrossingAnalyzer::build_reason(const Finding& f) const {
 }
 
 std::vector<Finding> CrossingAnalyzer::analyze(
-    const ir::Graph& graph,
-    const std::vector<clock::ClockDomain>& domains,
-    const std::unordered_map<uint64_t, size_t>& register_to_domain,
-    size_t num_threads) {
-
+    const ir::Graph& graph, const std::vector<clock::ClockDomain>& domains,
+    const std::unordered_map<uint64_t, size_t>& register_to_domain, size_t num_threads) {
     // Collect all source register IDs for parallel processing
     std::vector<uint64_t> source_ids;
     for (const auto& node : graph.nodes()) {
@@ -62,11 +63,13 @@ std::vector<Finding> CrossingAnalyzer::analyze(
     auto process_register = [&](uint64_t src_id) -> std::vector<Finding> {
         std::vector<Finding> local_findings;
         const ir::Node* src = graph.find_node(src_id);
-        if (!src || src->kind != ir::NodeKind::Register) return local_findings;
+        if (!src || src->kind != ir::NodeKind::Register)
+            return local_findings;
 
         const clock::ClockDomain* src_dom =
             find_domain_for_node(src_id, domains, register_to_domain);
-        if (!src_dom) return local_findings;
+        if (!src_dom)
+            return local_findings;
 
         auto path_result = graph.find_register_paths(src_id);
         if (path_result.truncated) {
@@ -81,7 +84,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             trunc.bus_width = src->width;
             trunc.source_module_path = src->module_path;
             trunc.reason = "Path traversal truncated at " + std::to_string(path_result.max_paths) +
-                          " paths from register '" + src->hier_name + "'.";
+                           " paths from register '" + src->hier_name + "'.";
             local_findings.push_back(std::move(trunc));
         }
 
@@ -90,16 +93,20 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         for (const auto& reg_path : path_result.paths) {
             uint64_t dst_id = reg_path.dst_reg_id;
             const ir::Node* dst = graph.find_node(dst_id);
-            if (!dst || dst->kind != ir::NodeKind::Register) continue;
+            if (!dst || dst->kind != ir::NodeKind::Register)
+                continue;
 
             const clock::ClockDomain* dst_dom =
                 find_domain_for_node(dst_id, domains, register_to_domain);
-            if (!dst_dom) continue;
+            if (!dst_dom)
+                continue;
 
-            if (src_dom->id == dst_dom->id) continue;
+            if (src_dom->id == dst_dom->id)
+                continue;
 
             std::string key = std::to_string(src_id) + "->" + std::to_string(dst_id);
-            if (seen.count(key)) continue;
+            if (seen.count(key))
+                continue;
             seen.insert(key);
 
             bool is_false_path = false;
@@ -116,11 +123,13 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 ctx.path_nodes.clear();
                 for (auto nid : reg_path.node_ids) {
                     const ir::Node* n = graph.find_node(nid);
-                    if (n) ctx.path_nodes.push_back(n->hier_name);
+                    if (n)
+                        ctx.path_nodes.push_back(n->hier_name);
                 }
                 is_false_path = clock_constraints_->is_false_path(ctx);
             }
-            if (is_false_path) continue;
+            if (is_false_path)
+                continue;
 
             Finding f;
             f.rule_id = "CDC001";
@@ -138,20 +147,19 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             f.bus_width = src->width;
             f.source_module_path = src->module_path;
             f.dest_module_path = dst->module_path;
-            f.crosses_module_boundary = !src->module_path.empty() &&
-                                        !dst->module_path.empty() &&
+            f.crosses_module_boundary = !src->module_path.empty() && !dst->module_path.empty() &&
                                         src->module_path != dst->module_path;
 
             SyncPattern crossing_sync = f.detected_sync;
 
-            f.is_gray_coded = (pattern_recognizer_ &&
-                              (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                               pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                              src->is_gray_coded || dst->is_gray_coded;
+            f.is_gray_coded =
+                (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
+                                         pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
+                src->is_gray_coded || dst->is_gray_coded;
 
             f.has_handshake = (pattern_recognizer_ &&
-                              (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
-                               pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
+                               (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
+                                pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
                               src->is_handshake_signal || dst->is_handshake_signal;
 
             if (crossing_sync != SyncPattern::None) {
@@ -167,9 +175,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                          clock::pattern_matches(mcp.to_clock, dst_dom->name))) {
                         f.has_multicycle_exception = true;
                         f.multicycle_cycles = mcp.cycles;
-                        f.constraint_source = "multicycle_path: " + mcp.from_clock +
-                                              " -> " + mcp.to_clock +
-                                              " (" + std::to_string(mcp.cycles) + " cycles)";
+                        f.constraint_source = "multicycle_path: " + mcp.from_clock + " -> " +
+                                              mcp.to_clock + " (" + std::to_string(mcp.cycles) +
+                                              " cycles)";
                         break;
                     }
                 }
@@ -199,10 +207,10 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 mb.source_loc = src->loc;
                 mb.detected_sync = f.detected_sync;
                 mb.bus_width = src->width;
-                mb.is_gray_coded = (pattern_recognizer_ &&
-                                    (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                                     pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                                   src->is_gray_coded || dst->is_gray_coded;
+                mb.is_gray_coded =
+                    (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
+                                             pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
+                    src->is_gray_coded || dst->is_gray_coded;
                 mb.has_handshake = (pattern_recognizer_ &&
                                     (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
                                      pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
@@ -211,9 +219,8 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 mb.dest_module_path = dst->module_path;
                 mb.crosses_module_boundary = f.crosses_module_boundary;
                 mb.reason = "Multi-bit bus '" + src->hier_name +
-                            "' (width=" + std::to_string(src->width) +
-                            ") crosses from domain '" + src_dom->name +
-                            "' to domain '" + dst_dom->name +
+                            "' (width=" + std::to_string(src->width) + ") crosses from domain '" +
+                            src_dom->name + "' to domain '" + dst_dom->name +
                             "' without gray-code encoding or handshake protocol.";
                 local_findings.push_back(std::move(mb));
             }
@@ -238,10 +245,10 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 gc.dest_module_path = dst->module_path;
                 std::string gated_info;
                 if (gated_src && gated_dst) {
-                    gated_info = "both source '" + gated_src->hier_name +
-                                 "' (domain '" + gated_src->clock_domain +
-                                 "') and destination '" + gated_dst->hier_name +
-                                 "' (domain '" + gated_dst->clock_domain + "')";
+                    gated_info = "both source '" + gated_src->hier_name + "' (domain '" +
+                                 gated_src->clock_domain + "') and destination '" +
+                                 gated_dst->hier_name + "' (domain '" + gated_dst->clock_domain +
+                                 "')";
                 } else {
                     const ir::Node* g = gated_src ? gated_src : gated_dst;
                     gated_info = "'" + g->hier_name + "' (domain '" + g->clock_domain +
@@ -272,9 +279,8 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 mr.bus_width = src->width;
                 mr.source_module_path = src->module_path;
                 mr.dest_module_path = dst->module_path;
-                mr.reason = "Register '" + muxed_node->hier_name +
-                            "' is clocked by muxed clock '" + muxed_node->clock_domain +
-                            "' without reset signal.";
+                mr.reason = "Register '" + muxed_node->hier_name + "' is clocked by muxed clock '" +
+                            muxed_node->clock_domain + "' without reset signal.";
                 local_findings.push_back(std::move(mr));
             }
 
@@ -294,14 +300,15 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 nr.bus_width = src->width;
                 nr.source_module_path = src->module_path;
                 nr.dest_module_path = dst->module_path;
-                std::string missing = (src->reset_signal.empty() && dst->reset_signal.empty())
-                                          ? "neither register has"
-                                          : "'" + std::string(src->reset_signal.empty()
-                                                                  ? src->hier_name
-                                                                  : dst->hier_name) + "' lacks";
-                nr.reason = "CDC crossing between registers '" + src->hier_name +
-                            "' and '" + dst->hier_name +
-                            "': " + missing + " a reset signal.";
+                std::string missing =
+                    (src->reset_signal.empty() && dst->reset_signal.empty())
+                        ? "neither register has"
+                        : "'" +
+                              std::string(src->reset_signal.empty() ? src->hier_name
+                                                                    : dst->hier_name) +
+                              "' lacks";
+                nr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
+                            dst->hier_name + "': " + missing + " a reset signal.";
                 local_findings.push_back(std::move(nr));
             }
         }
@@ -322,8 +329,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             per_register.push_back(process_register(id));
         }
     } else {
-        per_register = util::parallel_map<uint64_t, decltype(process_register), std::vector<Finding>>(
-            source_ids, process_register, num_threads);
+        per_register =
+            util::parallel_map<uint64_t, decltype(process_register), std::vector<Finding>>(
+                source_ids, process_register, num_threads);
     }
 
     // Merge
@@ -337,12 +345,15 @@ std::vector<Finding> CrossingAnalyzer::analyze(
     // Daisy-chain detection (sequential — needs global visited set)
     std::unordered_set<uint64_t> reported_sources;
     for (const auto& src : graph.nodes()) {
-        if (src.kind != ir::NodeKind::Register) continue;
-        if (reported_sources.count(src.id)) continue;
+        if (src.kind != ir::NodeKind::Register)
+            continue;
+        if (reported_sources.count(src.id))
+            continue;
 
         const clock::ClockDomain* src_dom =
             find_domain_for_node(src.id, domains, register_to_domain);
-        if (!src_dom) continue;
+        if (!src_dom)
+            continue;
 
         std::vector<uint64_t> domain_chain;
         domain_chain.push_back(src.id);
@@ -358,12 +369,15 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             uint64_t node_id = stack.back();
             stack.pop_back();
             for (uint64_t succ : graph.register_successors(node_id)) {
-                if (visited.count(succ)) continue;
+                if (visited.count(succ))
+                    continue;
                 const ir::Node* succ_node = graph.find_node(succ);
-                if (!succ_node || succ_node->kind != ir::NodeKind::Register) continue;
+                if (!succ_node || succ_node->kind != ir::NodeKind::Register)
+                    continue;
                 const clock::ClockDomain* succ_dom =
                     find_domain_for_node(succ, domains, register_to_domain);
-                if (!succ_dom) continue;
+                if (!succ_dom)
+                    continue;
                 if (!visited_domain_ids.count(succ_dom->id)) {
                     domain_chain.push_back(succ);
                     visited_domain_ids.insert(succ_dom->id);
@@ -389,14 +403,14 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             for (size_t i = 0; i < domain_chain.size(); ++i) {
                 const ir::Node* n = graph.find_node(domain_chain[i]);
                 if (n) {
-                    if (!chain_desc.empty()) chain_desc += " -> ";
+                    if (!chain_desc.empty())
+                        chain_desc += " -> ";
                     chain_desc += n->hier_name;
                 }
             }
-            dc.reason = "Register '" + src.hier_name +
-                        "' is part of a daisy chain crossing " +
-                        std::to_string(domain_chain.size() - 1) +
-                        " clock domains: " + chain_desc + ".";
+            dc.reason = "Register '" + src.hier_name + "' is part of a daisy chain crossing " +
+                        std::to_string(domain_chain.size() - 1) + " clock domains: " + chain_desc +
+                        ".";
             findings.push_back(std::move(dc));
         }
     }
@@ -404,4 +418,4 @@ std::vector<Finding> CrossingAnalyzer::analyze(
     return findings;
 }
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc

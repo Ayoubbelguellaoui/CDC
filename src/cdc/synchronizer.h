@@ -1,10 +1,11 @@
 #ifndef OPENCDC_CDC_SYNCHRONIZER_H
 #define OPENCDC_CDC_SYNCHRONIZER_H
 
-#include "ir/graph.h"
-#include "clock/domain.h"
-#include <vector>
 #include <string>
+#include <vector>
+
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 namespace opencdc::cdc {
 
@@ -18,22 +19,18 @@ struct SynchronizerChain {
 };
 
 class SynchronizerMatcher {
-public:
+   public:
     std::vector<SynchronizerChain> match(const ir::Graph& graph);
 
-    SyncPattern find_pattern_for_dest(
-        uint64_t dest_reg_id,
-        const ir::Graph& graph,
-        bool strict = false) const;
+    SyncPattern find_pattern_for_dest(uint64_t dest_reg_id, const ir::Graph& graph,
+                                      bool strict = false) const;
 
-private:
-    bool validate_2ff(const ir::Graph& graph,
-                      uint64_t s1, uint64_t s2) const;
+   private:
+    bool validate_2ff(const ir::Graph& graph, uint64_t s1, uint64_t s2) const;
 
-    bool validate_3ff(const ir::Graph& graph,
-                      uint64_t s1, uint64_t s2, uint64_t s3) const;
+    bool validate_3ff(const ir::Graph& graph, uint64_t s1, uint64_t s2, uint64_t s3) const;
 };
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc
 
-#endif // OPENCDC_CDC_SYNCHRONIZER_H
+#endif  // OPENCDC_CDC_SYNCHRONIZER_H

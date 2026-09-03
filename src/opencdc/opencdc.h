@@ -1,9 +1,9 @@
 #ifndef OPENCDC_OPENCDC_H
 #define OPENCDC_OPENCDC_H
 
+#include <cstdlib>
 #include <string>
 #include <vector>
-#include <cstdlib>
 
 namespace opencdc {
 
@@ -23,14 +23,14 @@ struct CheckOptions {
 };
 
 enum class ExitCode : int {
-    OK             = 0,
-    FINDINGS       = 1,
-    INPUT_ERROR    = 2,
+    OK = 0,
+    FINDINGS = 1,
+    INPUT_ERROR = 2,
     INTERNAL_ERROR = 3,
 };
 
 int run(int argc, const char* argv[]);
 
-} // namespace opencdc
+}  // namespace opencdc
 
-#endif // OPENCDC_OPENCDC_H
+#endif  // OPENCDC_OPENCDC_H

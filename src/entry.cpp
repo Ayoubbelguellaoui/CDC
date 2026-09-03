@@ -1,6 +1,7 @@
-#include "opencdc/opencdc.h"
 #include <exception>
 #include <iostream>
+
+#include "opencdc/opencdc.h"
 
 int main(int argc, const char* argv[]) {
     try {

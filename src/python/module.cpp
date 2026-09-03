@@ -7,5 +7,5 @@ namespace python {
 // pybind11 binding definitions. The actual bindings are in bindings.h
 // and are compiled as part of the Python module.
 
-} // namespace python
-} // namespace opencdc
+}  // namespace python
+}  // namespace opencdc

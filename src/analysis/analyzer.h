@@ -1,14 +1,15 @@
 #ifndef OPENCDC_ANALYSIS_ANALYZER_H
 #define OPENCDC_ANALYSIS_ANALYZER_H
 
-#include "ir/graph.h"
-#include "clock/domain.h"
-#include "cdc/crossing.h"
-#include "config/config.h"
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "cdc/crossing.h"
+#include "clock/domain.h"
+#include "config/config.h"
+#include "ir/graph.h"
 
 namespace opencdc::analysis {
 
@@ -21,7 +22,7 @@ struct AnalysisRequest {
     // Explicit false paths as (source, destination) register name pairs.
     std::vector<std::pair<std::string, std::string>> false_paths;
     std::vector<std::string> disable_rules;
-    std::vector<std::string> severity_overrides; // "RULE=severity"
+    std::vector<std::string> severity_overrides;  // "RULE=severity"
     // Pre-parsed config (optional). When set, the analyzer skips re-parsing.
     std::optional<config::Config> config;
 };
@@ -38,10 +39,10 @@ struct AnalysisResult {
 // Runs the full CDC analysis pipeline. Single entry point shared by the
 // CLI, LSP server, and Python bindings so behavior cannot drift.
 class Analyzer {
-public:
+   public:
     AnalysisResult run(const AnalysisRequest& request);
 };
 
-} // namespace opencdc::analysis
+}  // namespace opencdc::analysis
 
-#endif // OPENCDC_ANALYSIS_ANALYZER_H
+#endif  // OPENCDC_ANALYSIS_ANALYZER_H

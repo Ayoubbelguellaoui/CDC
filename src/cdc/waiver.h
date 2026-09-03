@@ -1,19 +1,16 @@
 #ifndef OPENCDC_CDC_WAIVER_H
 #define OPENCDC_CDC_WAIVER_H
 
-#include "cdc/crossing.h"
 #include <memory>
 #include <regex>
 #include <string>
 #include <vector>
 
+#include "cdc/crossing.h"
+
 namespace opencdc::cdc {
 
-enum class WaiverMatchType {
-    Substring,
-    Wildcard,
-    Regex
-};
+enum class WaiverMatchType { Substring, Wildcard, Regex };
 
 struct Waiver {
     std::string rule_id;
@@ -33,7 +30,7 @@ struct Waiver {
 };
 
 class WaiverEngine {
-public:
+   public:
     // Loads waivers from a whitespace-separated waiver file. On failure returns
     // false and (if provided) sets *error to a diagnostic. A file that parses
     // but yields zero valid waivers is treated as a failure.
@@ -45,7 +42,9 @@ public:
     std::vector<Finding> apply(const std::vector<Finding>& findings) const;
     bool matches(const Finding& f, const Waiver& w) const;
 
-    const std::vector<Waiver>& waivers() const { return waivers_; }
+    const std::vector<Waiver>& waivers() const {
+        return waivers_;
+    }
 
     std::vector<std::string> check_unused(const std::vector<Finding>& findings) const;
 
@@ -53,7 +52,7 @@ public:
         default_match_type_ = type;
     }
 
-private:
+   private:
     std::vector<Waiver> waivers_;
     WaiverMatchType default_match_type_ = WaiverMatchType::Substring;
 
@@ -63,6 +62,6 @@ private:
     static bool fields_match_regex(const std::string& pattern, const std::string& value);
 };
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc
 
-#endif // OPENCDC_CDC_WAIVER_H
+#endif  // OPENCDC_CDC_WAIVER_H

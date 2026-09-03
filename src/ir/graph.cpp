@@ -1,16 +1,27 @@
 #include "ir/graph.h"
+
 #include <algorithm>
 #include <unordered_set>
 
 namespace opencdc::ir {
 
-uint64_t Graph::add_register(const std::string& hier_name,
-                             const std::string& clock_domain,
-                             uint32_t width,
-                             const SourceLoc& loc,
-                             const std::string& module_path) {
-    if (nodes_.size() >= MAX_GRAPH_NODES) { truncated_ = true; return 0; }
-    if (next_id_ == 0) { truncated_ = true; return 0; }
+uint64_t Graph::add_register(const std::string& hier_name, const std::string& clock_domain,
+                             uint32_t width, const SourceLoc& loc, const std::string& module_path) {
+    // Return existing node if hier_name already present — prevents orphaned
+    // nodes when multiple always blocks assign to the same register.
+    auto existing = name_to_idx_.find(hier_name);
+    if (existing != name_to_idx_.end()) {
+        return nodes_[existing->second].id;
+    }
+
+    if (nodes_.size() >= MAX_GRAPH_NODES) {
+        truncated_ = true;
+        return 0;
+    }
+    if (next_id_ == 0) {
+        truncated_ = true;
+        return 0;
+    }
     uint64_t id = next_id_++;
     size_t idx = nodes_.size();
     Node node;
@@ -29,12 +40,21 @@ uint64_t Graph::add_register(const std::string& hier_name,
     return id;
 }
 
-uint64_t Graph::add_port(const std::string& hier_name,
-                         uint32_t width,
-                         const SourceLoc& loc,
+uint64_t Graph::add_port(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
                          const std::string& module_path) {
-    if (nodes_.size() >= MAX_GRAPH_NODES) { truncated_ = true; return 0; }
-    if (next_id_ == 0) { truncated_ = true; return 0; }
+    auto existing = name_to_idx_.find(hier_name);
+    if (existing != name_to_idx_.end()) {
+        return nodes_[existing->second].id;
+    }
+
+    if (nodes_.size() >= MAX_GRAPH_NODES) {
+        truncated_ = true;
+        return 0;
+    }
+    if (next_id_ == 0) {
+        truncated_ = true;
+        return 0;
+    }
     uint64_t id = next_id_++;
     size_t idx = nodes_.size();
     Node node;
@@ -52,12 +72,21 @@ uint64_t Graph::add_port(const std::string& hier_name,
     return id;
 }
 
-uint64_t Graph::add_net(const std::string& hier_name,
-                        uint32_t width,
-                        const SourceLoc& loc,
+uint64_t Graph::add_net(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
                         const std::string& module_path) {
-    if (nodes_.size() >= MAX_GRAPH_NODES) { truncated_ = true; return 0; }
-    if (next_id_ == 0) { truncated_ = true; return 0; }
+    auto existing = name_to_idx_.find(hier_name);
+    if (existing != name_to_idx_.end()) {
+        return nodes_[existing->second].id;
+    }
+
+    if (nodes_.size() >= MAX_GRAPH_NODES) {
+        truncated_ = true;
+        return 0;
+    }
+    if (next_id_ == 0) {
+        truncated_ = true;
+        return 0;
+    }
     uint64_t id = next_id_++;
     size_t idx = nodes_.size();
     Node node;
@@ -75,14 +104,22 @@ uint64_t Graph::add_net(const std::string& hier_name,
     return id;
 }
 
-uint64_t Graph::add_combinational(const std::string& hier_name,
-                                  LogicType logic_type,
-                                  const std::vector<uint64_t>& inputs,
-                                  uint32_t width,
-                                  const SourceLoc& loc,
-                                  const std::string& module_path) {
-    if (nodes_.size() >= MAX_GRAPH_NODES) { truncated_ = true; return 0; }
-    if (next_id_ == 0) { truncated_ = true; return 0; }
+uint64_t Graph::add_combinational(const std::string& hier_name, LogicType logic_type,
+                                  const std::vector<uint64_t>& inputs, uint32_t width,
+                                  const SourceLoc& loc, const std::string& module_path) {
+    auto existing = name_to_idx_.find(hier_name);
+    if (existing != name_to_idx_.end()) {
+        return nodes_[existing->second].id;
+    }
+
+    if (nodes_.size() >= MAX_GRAPH_NODES) {
+        truncated_ = true;
+        return 0;
+    }
+    if (next_id_ == 0) {
+        truncated_ = true;
+        return 0;
+    }
     uint64_t id = next_id_++;
     size_t idx = nodes_.size();
     Node node;
@@ -108,13 +145,19 @@ uint64_t Graph::add_combinational(const std::string& hier_name,
 }
 
 void Graph::add_edge(uint64_t from_id, uint64_t to_id) {
-    if (from_id == to_id) return;  // no self-loops
-    if (!find_node(from_id) || !find_node(to_id)) return;
-    if (edges_.size() >= MAX_GRAPH_EDGES) { truncated_ = true; return; }
+    if (from_id == to_id)
+        return;  // no self-loops
+    if (!find_node(from_id) || !find_node(to_id))
+        return;
+    if (edges_.size() >= MAX_GRAPH_EDGES) {
+        truncated_ = true;
+        return;
+    }
 
     // O(1) dedup using packed edge key instead of O(N) std::find
     uint64_t edge_key = (from_id << 32) | to_id;
-    if (!edge_set_.insert(edge_key).second) return;
+    if (!edge_set_.insert(edge_key).second)
+        return;
 
     edges_.push_back({from_id, to_id});
     adj_[from_id].push_back(to_id);
@@ -124,31 +167,36 @@ void Graph::add_edge(uint64_t from_id, uint64_t to_id) {
 
 const Node* Graph::find_node(uint64_t id) const {
     auto it = id_to_idx_.find(id);
-    if (it == id_to_idx_.end()) return nullptr;
+    if (it == id_to_idx_.end())
+        return nullptr;
     return &nodes_[it->second];
 }
 
 Node* Graph::find_node_mutable(uint64_t id) {
     auto it = id_to_idx_.find(id);
-    if (it == id_to_idx_.end()) return nullptr;
+    if (it == id_to_idx_.end())
+        return nullptr;
     return &nodes_[it->second];
 }
 
 const Node* Graph::find_node_by_name(const std::string& hier_name) const {
     auto it = name_to_idx_.find(hier_name);
-    if (it == name_to_idx_.end()) return nullptr;
+    if (it == name_to_idx_.end())
+        return nullptr;
     return &nodes_[it->second];
 }
 
 std::vector<uint64_t> Graph::successors(uint64_t id) const {
     auto it = adj_.find(id);
-    if (it == adj_.end()) return {};
+    if (it == adj_.end())
+        return {};
     return it->second;
 }
 
 std::vector<uint64_t> Graph::predecessors(uint64_t id) const {
     auto it = radj_.find(id);
-    if (it == radj_.end()) return {};
+    if (it == radj_.end())
+        return {};
     return it->second;
 }
 
@@ -157,8 +205,7 @@ size_t Graph::register_count() const {
                          [](const Node& n) { return n.kind == NodeKind::Register; });
 }
 
-std::vector<uint64_t> Graph::register_predecessors(
-    uint64_t id, bool traverse_combinational) const {
+std::vector<uint64_t> Graph::register_predecessors(uint64_t id, bool traverse_combinational) const {
     std::vector<uint64_t> result;
     std::vector<uint64_t> stack = predecessors(id);
     std::unordered_set<uint64_t> visited;
@@ -167,11 +214,13 @@ std::vector<uint64_t> Graph::register_predecessors(
     while (!stack.empty()) {
         uint64_t cur = stack.back();
         stack.pop_back();
-        if (visited.count(cur)) continue;
+        if (visited.count(cur))
+            continue;
         visited.insert(cur);
 
         const Node* n = find_node(cur);
-        if (!n) continue;
+        if (!n)
+            continue;
 
         if (n->kind == NodeKind::Register) {
             result.push_back(cur);
@@ -179,15 +228,15 @@ std::vector<uint64_t> Graph::register_predecessors(
                    (traverse_combinational || n->kind != NodeKind::Combinational)) {
             auto preds = predecessors(cur);
             for (uint64_t p : preds) {
-                if (!visited.count(p)) stack.push_back(p);
+                if (!visited.count(p))
+                    stack.push_back(p);
             }
         }
     }
     return result;
 }
 
-std::vector<uint64_t> Graph::register_successors(
-    uint64_t id, bool traverse_combinational) const {
+std::vector<uint64_t> Graph::register_successors(uint64_t id, bool traverse_combinational) const {
     std::vector<uint64_t> result;
     std::vector<uint64_t> stack = successors(id);
     std::unordered_set<uint64_t> visited;
@@ -196,11 +245,13 @@ std::vector<uint64_t> Graph::register_successors(
     while (!stack.empty()) {
         uint64_t cur = stack.back();
         stack.pop_back();
-        if (visited.count(cur)) continue;
+        if (visited.count(cur))
+            continue;
         visited.insert(cur);
 
         const Node* n = find_node(cur);
-        if (!n) continue;
+        if (!n)
+            continue;
 
         if (n->kind == NodeKind::Register) {
             result.push_back(cur);
@@ -208,15 +259,15 @@ std::vector<uint64_t> Graph::register_successors(
                    (traverse_combinational || n->kind != NodeKind::Combinational)) {
             auto succs = successors(cur);
             for (uint64_t s : succs) {
-                if (!visited.count(s)) stack.push_back(s);
+                if (!visited.count(s))
+                    stack.push_back(s);
             }
         }
     }
     return result;
 }
 
-Graph::PathTraversalResult Graph::find_register_paths(
-    uint64_t src_reg_id, size_t max_paths) const {
+Graph::PathTraversalResult Graph::find_register_paths(uint64_t src_reg_id, size_t max_paths) const {
     PathTraversalResult result;
     result.max_paths = max_paths;
 
@@ -226,16 +277,16 @@ Graph::PathTraversalResult Graph::find_register_paths(
     // array (rope), so we avoid copying the whole path vector per frame.
     struct RopeNode {
         uint64_t node_id;
-        int      parent_idx;  // index into rope[], -1 for root
+        int parent_idx;  // index into rope[], -1 for root
     };
     std::vector<RopeNode> rope;
     rope.push_back({src_reg_id, -1});
 
     struct Frame {
-        uint64_t                       node_id;
-        int                            rope_idx;   // index of this node in rope[]
-        bool                           has_comb;
-        std::unordered_set<uint64_t>   on_path;    // O(1) cycle check
+        uint64_t node_id;
+        int rope_idx;  // index of this node in rope[]
+        bool has_comb;
+        std::unordered_set<uint64_t> on_path;  // O(1) cycle check
     };
 
     std::vector<Frame> stack;
@@ -247,7 +298,7 @@ Graph::PathTraversalResult Graph::find_register_paths(
     result.visited_nodes = 1;
 
     // Local per-call edge tracking (not a member — must stay local)
-    std::unordered_set<std::string> visited_edges;
+    std::unordered_set<uint64_t> visited_edges;
 
     while (!stack.empty()) {
         Frame f = std::move(stack.back());
@@ -260,18 +311,20 @@ Graph::PathTraversalResult Graph::find_register_paths(
         }
 
         for (uint64_t succ : successors(f.node_id)) {
-            if (f.on_path.count(succ)) continue;  // O(1) cycle check
+            if (f.on_path.count(succ))
+                continue;  // O(1) cycle check
 
             result.visited_nodes++;
             const Node* sn = find_node(succ);
-            if (!sn) continue;
+            if (!sn)
+                continue;
 
             // Add successor to rope
             int succ_rope_idx = static_cast<int>(rope.size());
             rope.push_back({succ, f.rope_idx});
 
-            std::string edge_key = std::to_string(f.node_id) + ":" +
-                                   std::to_string(succ);
+            uint64_t edge_key =
+                (static_cast<uint64_t>(f.node_id) << 32) | static_cast<uint64_t>(succ);
             if (visited_edges.insert(edge_key).second) {
                 result.visited_edges++;
             }
@@ -279,8 +332,8 @@ Graph::PathTraversalResult Graph::find_register_paths(
             if (sn->kind == NodeKind::Register) {
                 // Materialise path only at register endpoints
                 RegPath rp;
-                rp.src_reg_id      = src_reg_id;
-                rp.dst_reg_id      = succ;
+                rp.src_reg_id = src_reg_id;
+                rp.dst_reg_id = succ;
                 rp.has_combinational = f.has_comb;
                 // Walk rope backward to build node_ids in order
                 rp.node_ids.reserve(f.on_path.size() + 1);
@@ -297,10 +350,10 @@ Graph::PathTraversalResult Graph::find_register_paths(
                 }
             } else if (is_data_node(sn->kind)) {
                 Frame nf;
-                nf.node_id  = succ;
+                nf.node_id = succ;
                 nf.rope_idx = succ_rope_idx;
                 nf.has_comb = f.has_comb || (sn->kind == NodeKind::Combinational);
-                nf.on_path  = f.on_path;          // copy the small set
+                nf.on_path = f.on_path;  // copy the small set
                 nf.on_path.insert(succ);
                 stack.push_back(std::move(nf));
             }
@@ -331,12 +384,12 @@ ValidationResult Graph::validate() const {
 
     for (const auto& edge : edges_) {
         if (!find_node(edge.from_id) || !find_node(edge.to_id)) {
-            result.errors.push_back("Dangling edge " + std::to_string(edge.from_id) +
-                                   " -> " + std::to_string(edge.to_id));
+            result.errors.push_back("Dangling edge " + std::to_string(edge.from_id) + " -> " +
+                                    std::to_string(edge.to_id));
         }
     }
 
     return result;
 }
 
-} // namespace opencdc::ir
+}  // namespace opencdc::ir

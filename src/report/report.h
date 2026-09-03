@@ -1,11 +1,12 @@
 #ifndef OPENCDC_REPORT_REPORT_H
 #define OPENCDC_REPORT_REPORT_H
 
-#include "cdc/crossing.h"
+#include <algorithm>
 #include <ostream>
 #include <string>
 #include <vector>
-#include <algorithm>
+
+#include "cdc/crossing.h"
 
 namespace opencdc::report {
 
@@ -17,7 +18,7 @@ struct ReportCounts {
 };
 
 class Reporter {
-public:
+   public:
     void report_json(const std::vector<cdc::Finding>& findings, std::ostream& os) const;
     void report_text(const std::vector<cdc::Finding>& findings, std::ostream& os) const;
     void report_summary(const std::vector<cdc::Finding>& findings, std::ostream& os) const;
@@ -31,6 +32,6 @@ public:
     static std::vector<cdc::Finding> sorted_findings(const std::vector<cdc::Finding>& findings);
 };
 
-} // namespace opencdc::report
+}  // namespace opencdc::report
 
-#endif // OPENCDC_REPORT_REPORT_H
+#endif  // OPENCDC_REPORT_REPORT_H

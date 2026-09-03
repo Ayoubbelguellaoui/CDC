@@ -1,10 +1,13 @@
 #include "report/html_reporter.h"
-#include "opencdc/version.h"
+
 #include <sys/stat.h>
-#include <sstream>
+
 #include <algorithm>
-#include <unordered_map>
 #include <filesystem>
+#include <sstream>
+#include <unordered_map>
+
+#include "opencdc/version.h"
 
 namespace opencdc::report {
 
@@ -21,26 +24,42 @@ std::string HtmlReporter::escape_html(const std::string& s) {
     result.reserve(s.size());
     for (char c : s) {
         switch (c) {
-            case '&': result += "&amp;"; break;
-            case '<': result += "&lt;"; break;
-            case '>': result += "&gt;"; break;
-            case '"': result += "&quot;"; break;
-            case '\'': result += "&#39;"; break;
-            default: result += c; break;
+            case '&':
+                result += "&amp;";
+                break;
+            case '<':
+                result += "&lt;";
+                break;
+            case '>':
+                result += "&gt;";
+                break;
+            case '"':
+                result += "&quot;";
+                break;
+            case '\'':
+                result += "&#39;";
+                break;
+            default:
+                result += c;
+                break;
         }
     }
     return result;
 }
 
 std::string HtmlReporter::severity_class(const std::string& severity) {
-    if (severity == "error") return "severity-error";
-    if (severity == "warning") return "severity-warning";
+    if (severity == "error")
+        return "severity-error";
+    if (severity == "warning")
+        return "severity-warning";
     return "severity-info";
 }
 
 std::string HtmlReporter::severity_icon(const std::string& severity) {
-    if (severity == "error") return "&#10060;";
-    if (severity == "warning") return "&#9888;";
+    if (severity == "error")
+        return "&#10060;";
+    if (severity == "warning")
+        return "&#9888;";
     return "&#8505;";
 }
 
@@ -48,15 +67,16 @@ std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Find
     std::unordered_map<std::string, int> by_severity;
     std::unordered_map<std::string, int> by_rule;
     int waived_count = 0;
-    
+
     for (const auto& f : findings) {
         if (!f.waived) {
             by_severity[f.severity]++;
         }
         by_rule[f.rule_id]++;
-        if (f.waived) waived_count++;
+        if (f.waived)
+            waived_count++;
     }
-    
+
     std::ostringstream html;
     html << "<div class=\"dashboard\">\n";
     html << "  <div class=\"summary-cards\">\n";
@@ -78,7 +98,7 @@ std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Find
     html << "    </div>\n";
     html << "  </div>\n";
     html << "</div>\n";
-    
+
     return html.str();
 }
 
@@ -98,17 +118,17 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
     html << "    </tr>\n";
     html << "  </thead>\n";
     html << "  <tbody>\n";
-    
+
     for (const auto& f : findings) {
         html << "    <tr class=\"finding-row " << severity_class(f.severity) << "\">\n";
         html << "      <td><span class=\"rule-id\">" << escape_html(f.rule_id) << "</span></td>\n";
-        html << "      <td><span class=\"severity-badge\">" << severity_icon(f.severity) 
-             << " " << escape_html(f.severity) << "</span></td>\n";
-        html << "      <td><span class=\"register-name\">" << escape_html(f.source_reg_name) 
-             << "</span><br><span class=\"domain-name\">" << escape_html(f.source_domain) 
+        html << "      <td><span class=\"severity-badge\">" << severity_icon(f.severity) << " "
+             << escape_html(f.severity) << "</span></td>\n";
+        html << "      <td><span class=\"register-name\">" << escape_html(f.source_reg_name)
+             << "</span><br><span class=\"domain-name\">" << escape_html(f.source_domain)
              << "</span></td>\n";
-        html << "      <td><span class=\"register-name\">" << escape_html(f.dest_reg_name) 
-             << "</span><br><span class=\"domain-name\">" << escape_html(f.dest_domain) 
+        html << "      <td><span class=\"register-name\">" << escape_html(f.dest_reg_name)
+             << "</span><br><span class=\"domain-name\">" << escape_html(f.dest_domain)
              << "</span></td>\n";
         html << "      <td class=\"reason-cell\">" << escape_html(f.reason) << "</td>\n";
         html << "      <td class=\"location-cell\">";
@@ -120,7 +140,7 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
         if (f.waived) {
             html << "<span class=\"waived-badge\">WAIVED</span>";
             if (!f.waiver_justification.empty()) {
-                html << "<br><span class=\"waiver-reason\">" << escape_html(f.waiver_justification) 
+                html << "<br><span class=\"waiver-reason\">" << escape_html(f.waiver_justification)
                      << "</span>";
             }
         } else {
@@ -129,45 +149,49 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
         html << "</td>\n";
         html << "    </tr>\n";
     }
-    
+
     html << "  </tbody>\n";
     html << "</table>\n";
-    
+
     return html.str();
 }
 
 std::string HtmlReporter::generate_severity_chart(const std::vector<cdc::Finding>& findings) {
     std::unordered_map<std::string, int> counts;
     for (const auto& f : findings) {
-        if (f.waived) continue;
+        if (f.waived)
+            continue;
         counts[f.severity]++;
     }
-    
+
     size_t active_count = 0;
     for (const auto& f : findings) {
-        if (!f.waived) active_count++;
+        if (!f.waived)
+            active_count++;
     }
-    
+
     std::ostringstream html;
     html << "<div class=\"chart-container\">\n";
     html << "  <h3>By Severity</h3>\n";
     html << "  <div class=\"bar-chart\">\n";
-    
+
     for (const auto& [sev, count] : counts) {
-        int percent = active_count == 0 ? 0 : (count * 100 / active_count);
+        int percent = active_count == 0
+                          ? 0
+                          : static_cast<int>(static_cast<size_t>(count) * 100 / active_count);
         html << "    <div class=\"bar-row\">\n";
         html << "      <span class=\"bar-label\">" << escape_html(sev) << "</span>\n";
         html << "      <div class=\"bar-track\">\n";
-        html << "        <div class=\"bar-fill " << severity_class(sev) 
+        html << "        <div class=\"bar-fill " << severity_class(sev)
              << "\" style=\"width: " << percent << "%\"></div>\n";
         html << "      </div>\n";
         html << "      <span class=\"bar-value\">" << count << "</span>\n";
         html << "    </div>\n";
     }
-    
+
     html << "  </div>\n";
     html << "</div>\n";
-    
+
     return html.str();
 }
 
@@ -176,18 +200,20 @@ std::string HtmlReporter::generate_rule_chart(const std::vector<cdc::Finding>& f
     for (const auto& f : findings) {
         counts[f.rule_id]++;
     }
-    
+
     std::vector<std::pair<std::string, int>> sorted(counts.begin(), counts.end());
-    std::sort(sorted.begin(), sorted.end(), 
+    std::sort(sorted.begin(), sorted.end(),
               [](const auto& a, const auto& b) { return a.second > b.second; });
-    
+
     std::ostringstream html;
     html << "<div class=\"chart-container\">\n";
     html << "  <h3>By Rule</h3>\n";
     html << "  <div class=\"bar-chart\">\n";
-    
+
     for (const auto& [rule, count] : sorted) {
-        int percent = findings.empty() ? 0 : (count * 100 / findings.size());
+        int percent = findings.empty()
+                          ? 0
+                          : static_cast<int>(static_cast<size_t>(count) * 100 / findings.size());
         html << "    <div class=\"bar-row\">\n";
         html << "      <span class=\"bar-label\">" << escape_html(rule) << "</span>\n";
         html << "      <div class=\"bar-track\">\n";
@@ -196,10 +222,10 @@ std::string HtmlReporter::generate_rule_chart(const std::vector<cdc::Finding>& f
         html << "      <span class=\"bar-value\">" << count << "</span>\n";
         html << "    </div>\n";
     }
-    
+
     html << "  </div>\n";
     html << "</div>\n";
-    
+
     return html.str();
 }
 
@@ -506,11 +532,16 @@ footer {
 )CSS";
 
     if (options.dark_mode) {
-        css += "\n/* Explicit dark mode */\n:root { --bg-primary: #1a1a1a; --bg-secondary: #2d2d2d; --text-primary: #e0e0e0; --text-secondary: #a0a0a0; --border-color: #404040; }\n";
+        css +=
+            "\n/* Explicit dark mode */\n:root { --bg-primary: #1a1a1a; --bg-secondary: #2d2d2d; "
+            "--text-primary: #e0e0e0; --text-secondary: #a0a0a0; --border-color: #404040; }\n";
     }
     css += options.custom_css;
-    
+
     std::ofstream file(options.output_dir + "/style.css");
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open " + options.output_dir + "/style.css for writing");
+    }
     file << css;
 }
 
@@ -569,18 +600,21 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 )JS";
-    
+
     std::ofstream file(options.output_dir + "/script.js");
+    if (!file.is_open()) {
+        throw std::runtime_error("Cannot open " + options.output_dir + "/script.js for writing");
+    }
     file << js;
 }
 
 void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
                                    const HtmlReportOptions& options) {
     ensure_directory_exists(options.output_dir);
-    
+
     write_css(options);
     write_js(options);
-    
+
     std::ofstream index(options.output_dir + "/index.html");
     if (!index.is_open()) {
         throw std::runtime_error("Failed to write index.html in " + options.output_dir);
@@ -603,28 +637,28 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     index << "        <a href=\"findings.html\">All Findings</a>\n";
     index << "      </nav>\n";
     index << "    </header>\n";
-    
+
     if (options.include_summary_dashboard) {
         index << generate_summary_dashboard(findings);
     }
-    
+
     index << "    <div class=\"charts\">\n";
     index << generate_severity_chart(findings);
     index << generate_rule_chart(findings);
     index << "    </div>\n";
-    
+
     index << "    <section class=\"findings-section\">\n";
     index << "      <h2>Recent Findings</h2>\n";
-    
+
     size_t recent_count = std::min(findings.size(), size_t(10));
     std::vector<cdc::Finding> recent(findings.begin(), findings.begin() + recent_count);
-     index << generate_findings_table(recent, options.include_source_snippets);
-    
+    index << generate_findings_table(recent, options.include_source_snippets);
+
     index << "      <p style=\"text-align: center; margin-top: 20px;\">\n";
     index << "        <a href=\"findings.html\">View all " << findings.size() << " findings</a>\n";
     index << "      </p>\n";
     index << "    </section>\n";
-    
+
     index << "    <footer>\n";
     index << "      Generated by OpenCDC v" << OPENCDC_VERSION << "\n";
     index << "    </footer>\n";
@@ -632,7 +666,7 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     index << "  <script src=\"script.js\"></script>\n";
     index << "</body>\n";
     index << "</html>\n";
-    
+
     std::ofstream findings_file(options.output_dir + "/findings.html");
     if (!findings_file.is_open()) {
         throw std::runtime_error("Failed to write findings.html in " + options.output_dir);
@@ -641,7 +675,8 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     findings_file << "<html lang=\"en\">\n";
     findings_file << "<head>\n";
     findings_file << "  <meta charset=\"UTF-8\">\n";
-    findings_file << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n";
+    findings_file
+        << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n";
     findings_file << "  <title>All Findings - " << escape_html(options.title) << "</title>\n";
     findings_file << "  <link rel=\"stylesheet\" href=\"style.css\">\n";
     findings_file << "</head>\n";
@@ -655,32 +690,37 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     findings_file << "        <a href=\"findings.html\">All Findings</a>\n";
     findings_file << "      </nav>\n";
     findings_file << "    </header>\n";
-    
+
     findings_file << "    <div class=\"filter-controls\">\n";
-    findings_file << "      <input type=\"text\" id=\"search-input\" placeholder=\"Search findings...\">\n";
-     findings_file << "      <select id=\"severity-filter\">\n";
+    findings_file
+        << "      <input type=\"text\" id=\"search-input\" placeholder=\"Search findings...\">\n";
+    findings_file << "      <select id=\"severity-filter\">\n";
     findings_file << "        <option value=\"\">All Severities</option>\n";
     findings_file << "        <option value=\"error\">Errors</option>\n";
-     findings_file << "        <option value=\"warning\">Warnings</option>\n";
-     findings_file << "        <option value=\"info\">Info</option>\n";
-     findings_file << "      </select>\n";
-     std::vector<std::string> rules;
-     for (const auto& f : findings) {
-         if (std::find(rules.begin(), rules.end(), f.rule_id) == rules.end()) rules.push_back(f.rule_id);
-     }
-     findings_file << "      <select id=\"rule-filter\">\n        <option value=\"\">All Rules</option>\n";
-     for (const auto& rule : rules) {
-         findings_file << "        <option value=\"" << escape_html(rule) << "\">" << escape_html(rule) << "</option>\n";
-     }
-     findings_file << "      </select>\n";
+    findings_file << "        <option value=\"warning\">Warnings</option>\n";
+    findings_file << "        <option value=\"info\">Info</option>\n";
+    findings_file << "      </select>\n";
+    std::vector<std::string> rules;
+    for (const auto& f : findings) {
+        if (std::find(rules.begin(), rules.end(), f.rule_id) == rules.end())
+            rules.push_back(f.rule_id);
+    }
+    findings_file
+        << "      <select id=\"rule-filter\">\n        <option value=\"\">All Rules</option>\n";
+    for (const auto& rule : rules) {
+        findings_file << "        <option value=\"" << escape_html(rule) << "\">"
+                      << escape_html(rule) << "</option>\n";
+    }
+    findings_file << "      </select>\n";
     findings_file << "    </div>\n";
-    
+
     findings_file << "    <section class=\"findings-section\">\n";
     findings_file << "      <h2>" << findings.size() << " Findings</h2>\n";
-     findings_file << generate_findings_table(findings, options.include_source_snippets);
-     findings_file << "      <p class=\"no-results\" style=\"display:none\">No matching findings.</p>\n";
+    findings_file << generate_findings_table(findings, options.include_source_snippets);
+    findings_file
+        << "      <p class=\"no-results\" style=\"display:none\">No matching findings.</p>\n";
     findings_file << "    </section>\n";
-    
+
     findings_file << "    <footer>\n";
     findings_file << "      Generated by OpenCDC v" << OPENCDC_VERSION << "\n";
     findings_file << "    </footer>\n";
@@ -690,4 +730,4 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     findings_file << "</html>\n";
 }
 
-} // namespace opencdc::report
+}  // namespace opencdc::report

@@ -1,13 +1,14 @@
 #include "analysis/analyzer.h"
-#include "frontend/slang_adapter.h"
-#include "clock/constraints.h"
-#include "cdc/reconvergence.h"
+
 #include "cdc/cdc006.h"
+#include "cdc/pattern.h"
+#include "cdc/reconvergence.h"
 #include "cdc/reset_domain.h"
 #include "cdc/waiver.h"
-#include "cdc/pattern.h"
-#include "rules/rule.h"
+#include "clock/constraints.h"
 #include "config/config.h"
+#include "frontend/slang_adapter.h"
+#include "rules/rule.h"
 
 namespace opencdc::analysis {
 
@@ -16,8 +17,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 
     // 1. Frontend: parse and elaborate to IR graph.
     frontend::SlangAdapter adapter;
-    frontend::FrontendResult fe_result =
-        adapter.elaborate(request.input_files, request.top_module);
+    frontend::FrontendResult fe_result = adapter.elaborate(request.input_files, request.top_module);
     if (!fe_result.ok) {
         result.errors = std::move(fe_result.errors);
         return result;
@@ -30,8 +30,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     if (have_constraints_file) {
         clock::ConstraintsParser constraints_parser;
         std::string constraints_error;
-        constraints = constraints_parser.parse_file(request.constraints_path,
-                                                    &constraints_error);
+        constraints = constraints_parser.parse_file(request.constraints_path, &constraints_error);
         if (!constraints_error.empty()) {
             result.errors.push_back(std::move(constraints_error));
             return result;
@@ -39,10 +38,11 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 
         // Generated clocks: remap registers to their master clock root.
         for (auto& node : result.graph.nodes_mutable()) {
-            if (node.kind != ir::NodeKind::Register) continue;
+            if (node.kind != ir::NodeKind::Register)
+                continue;
             auto clock_def = constraints.get_clock(node.clock_domain);
-            if (!clock_def || !clock_def->is_generated ||
-                clock_def->master_clock.empty()) continue;
+            if (!clock_def || !clock_def->is_generated || clock_def->master_clock.empty())
+                continue;
             node.root_clock = clock_def->master_clock;
         }
     }
@@ -97,11 +97,12 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
             for (size_t j = i + 1; j < clocks.size(); ++j) {
                 auto add_if_new = [&](const std::string& a, const std::string& b) {
                     for (const auto& fp : constraints.false_paths) {
-                        if (fp.from_clock == a && fp.to_clock == b) return;
+                        if (fp.from_clock == a && fp.to_clock == b)
+                            return;
                     }
                     clock::FalsePath fp;
                     fp.from_clock = a;
-                    fp.to_clock   = b;
+                    fp.to_clock = b;
                     constraints.false_paths.push_back(fp);
                 };
                 add_if_new(clocks[i], clocks[j]);
@@ -111,14 +112,15 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     };
 
     for (const auto& grp : cfg.clock_groups) {
-        if (grp.exclusive) add_exclusive_fps(grp.clocks);
+        if (grp.exclusive)
+            add_exclusive_fps(grp.clocks);
     }
 
     // 5. Request-level false paths (CLI --false-path or programmatic).
     for (const auto& fp : request.false_paths) {
         clock::FalsePath constraint_fp;
         constraint_fp.from_reg = fp.first;
-        constraint_fp.to_reg   = fp.second;
+        constraint_fp.to_reg = fp.second;
         constraints.false_paths.push_back(constraint_fp);
     }
 
@@ -150,7 +152,8 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // 7. Exclusive clock groups from SDC file (deduped via add_exclusive_fps).
     if (have_constraints_file) {
         for (const auto& group : constraints.clock_groups) {
-            if (group.exclusive) add_exclusive_fps(group.clocks);
+            if (group.exclusive)
+                add_exclusive_fps(group.clocks);
         }
     }
 
@@ -163,22 +166,21 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // Always attach constraints: config and request false paths must be
     // honored even when no constraints file was provided.
     crossing_analyzer.set_clock_constraints(&constraints);
-    auto findings = crossing_analyzer.analyze(result.graph,
-                                              result.domains.domains,
+    auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 
     // 9. Reconvergence.
     cdc::ReconvergenceAnalyzer reconvergence_analyzer;
-    auto reconv_findings = reconvergence_analyzer.analyze(
-        result.graph, result.domains.domains, findings);
+    auto reconv_findings =
+        reconvergence_analyzer.analyze(result.graph, result.domains.domains, findings);
     for (auto& f : reconv_findings) {
         findings.push_back(std::move(f));
     }
 
     // 10. CDC006: combinational logic between synchronizer stages.
     cdc::Cdc006Analyzer cdc006_analyzer;
-    auto cdc006_findings = cdc006_analyzer.analyze(
-        result.graph, result.domains.domains, result.domains.register_to_domain);
+    auto cdc006_findings = cdc006_analyzer.analyze(result.graph, result.domains.domains,
+                                                   result.domains.register_to_domain);
     for (auto& f : cdc006_findings) {
         findings.push_back(std::move(f));
     }
@@ -186,10 +188,10 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // 11. Reset domain crossings.
     cdc::ResetDomainAnalyzer reset_domain_analyzer;
     auto reset_findings = reset_domain_analyzer.check_reset_crossings(
-        result.graph, {}, result.domains.domains,
-        result.domains.register_to_domain);
+        result.graph, {}, result.domains.domains, result.domains.register_to_domain);
     for (auto& f : reset_findings) {
-        if (cfg.suppress_reset_crossings && f.rule_id == "CDC009") continue;
+        if (cfg.suppress_reset_crossings && f.rule_id == "CDC009")
+            continue;
         findings.push_back(std::move(f));
     }
 
@@ -209,16 +211,14 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         waiver.owner = w.owner;
         waiver.expiry = w.expiry;
         if (!waiver_engine.add_waiver(waiver)) {
-            result.warnings.push_back(
-                "Waiver for rule '" + w.rule_id +
-                "' ignored: invalid wildcard/regex pattern");
+            result.warnings.push_back("Waiver for rule '" + w.rule_id +
+                                      "' ignored: invalid wildcard/regex pattern");
         }
     }
     if (!request.waiver_path.empty()) {
         std::string waiver_error;
         if (!waiver_engine.load_from_file(request.waiver_path, &waiver_error)) {
-            result.errors.push_back("could not load waiver file: " +
-                                    request.waiver_path +
+            result.errors.push_back("could not load waiver file: " + request.waiver_path +
                                     (waiver_error.empty() ? "" : " (" + waiver_error + ")"));
             return result;
         }
@@ -237,4 +237,4 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     return result;
 }
 
-} // namespace opencdc::analysis
+}  // namespace opencdc::analysis

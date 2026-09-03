@@ -1,18 +1,19 @@
 #ifndef OPENCDC_PYTHON_BINDINGS_H
 #define OPENCDC_PYTHON_BINDINGS_H
 
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <pybind11/functional.h>
-#include "opencdc/opencdc.h"
-#include "ir/graph.h"
+
+#include "analysis/trend.h"
 #include "cdc/crossing.h"
 #include "cdc/pattern.h"
-#include "clock/domain.h"
 #include "clock/constraints.h"
-#include "report/report.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
+#include "opencdc/opencdc.h"
 #include "report/html_reporter.h"
-#include "analysis/trend.h"
+#include "report/report.h"
 
 namespace py = pybind11;
 
@@ -25,17 +26,18 @@ void init_graph_bindings(py::module& m) {
         .def_readwrite("file", &ir::SourceLoc::file)
         .def_readwrite("line", &ir::SourceLoc::line)
         .def_readwrite("col", &ir::SourceLoc::col);
-    
+
     py::enum_<ir::NodeKind>(m, "NodeKind")
         .value("Register", ir::NodeKind::Register)
         .value("Port", ir::NodeKind::Port)
+        .value("Net", ir::NodeKind::Net)
         .value("Combinational", ir::NodeKind::Combinational);
-    
+
     py::enum_<ir::ResetPolarity>(m, "ResetPolarity")
         .value("ActiveHigh", ir::ResetPolarity::ActiveHigh)
         .value("ActiveLow", ir::ResetPolarity::ActiveLow)
         .value("None", ir::ResetPolarity::None);
-    
+
     py::enum_<ir::LogicType>(m, "LogicType")
         .value("None", ir::LogicType::None)
         .value("And", ir::LogicType::And)
@@ -50,7 +52,7 @@ void init_graph_bindings(py::module& m) {
         .value("HandshakeReady", ir::LogicType::HandshakeReady)
         .value("AsyncFifoPtr", ir::LogicType::AsyncFifoPtr)
         .value("Unknown", ir::LogicType::Unknown);
-    
+
     py::class_<ir::Node>(m, "Node")
         .def_readonly("id", &ir::Node::id)
         .def_readwrite("hier_name", &ir::Node::hier_name)
@@ -68,31 +70,38 @@ void init_graph_bindings(py::module& m) {
         .def_readwrite("is_gray_coded", &ir::Node::is_gray_coded)
         .def_readwrite("is_handshake_signal", &ir::Node::is_handshake_signal)
         .def_readwrite("is_async_fifo_ptr", &ir::Node::is_async_fifo_ptr);
-    
+
     py::class_<ir::Graph>(m, "Graph")
         .def(py::init<>())
-        .def("add_register", &ir::Graph::add_register,
-             py::arg("hier_name"), py::arg("clock_domain"), 
-             py::arg("width") = 1, py::arg("loc") = ir::SourceLoc{})
-        .def("add_port", &ir::Graph::add_port,
-             py::arg("hier_name"), py::arg("width") = 1, py::arg("loc") = ir::SourceLoc{})
-        .def("add_edge", &ir::Graph::add_edge,
-             py::arg("from_id"), py::arg("to_id"))
-        .def("find_node", [](const ir::Graph& g, uint64_t id) {
-            auto* node = g.find_node(id);
-            return node ? py::cast(*node) : py::none();
-        }, py::arg("id"))
-        .def("find_node_by_name", [](const ir::Graph& g, const std::string& name) {
-            auto* node = g.find_node_by_name(name);
-            return node ? py::cast(*node) : py::none();
-        }, py::arg("name"))
+        .def("add_register", &ir::Graph::add_register, py::arg("hier_name"),
+             py::arg("clock_domain"), py::arg("width") = 1, py::arg("loc") = ir::SourceLoc{})
+        .def("add_port", &ir::Graph::add_port, py::arg("hier_name"), py::arg("width") = 1,
+             py::arg("loc") = ir::SourceLoc{})
+        .def("add_edge", &ir::Graph::add_edge, py::arg("from_id"), py::arg("to_id"))
+        .def(
+            "find_node",
+            [](const ir::Graph& g, uint64_t id) {
+                auto* node = g.find_node(id);
+                return node ? py::cast(*node) : py::none();
+            },
+            py::arg("id"))
+        .def(
+            "find_node_by_name",
+            [](const ir::Graph& g, const std::string& name) {
+                auto* node = g.find_node_by_name(name);
+                return node ? py::cast(*node) : py::none();
+            },
+            py::arg("name"))
         .def("successors", &ir::Graph::successors, py::arg("id"))
         .def("predecessors", &ir::Graph::predecessors, py::arg("id"))
         .def("register_count", &ir::Graph::register_count)
         .def("edge_count", &ir::Graph::edge_count)
-        .def("nodes", [](const ir::Graph& g) {
-            return py::make_iterator(g.nodes().begin(), g.nodes().end());
-        }, py::keep_alive<0, 1>());
+        .def(
+            "nodes",
+            [](const ir::Graph& g) {
+                return py::make_iterator(g.nodes().begin(), g.nodes().end());
+            },
+            py::keep_alive<0, 1>());
 }
 
 void init_cdc_bindings(py::module& m) {
@@ -120,13 +129,12 @@ void init_cdc_bindings(py::module& m) {
         .def_readwrite("bus_width", &cdc::Finding::bus_width)
         .def_readwrite("is_gray_coded", &cdc::Finding::is_gray_coded)
         .def_readwrite("has_handshake", &cdc::Finding::has_handshake);
-    
+
     py::class_<cdc::CrossingAnalyzer>(m, "CrossingAnalyzer")
         .def(py::init<>())
-        .def("analyze", &cdc::CrossingAnalyzer::analyze,
-             py::arg("graph"), py::arg("domains"), py::arg("register_to_domain"),
-             py::arg("num_threads") = 0);
-    
+        .def("analyze", &cdc::CrossingAnalyzer::analyze, py::arg("graph"), py::arg("domains"),
+             py::arg("register_to_domain"), py::arg("num_threads") = 0);
+
     py::class_<cdc::PatternRecognizer>(m, "PatternRecognizer")
         .def(py::init<>())
         .def("detect_async_fifos", &cdc::PatternRecognizer::detect_async_fifos)
@@ -143,16 +151,16 @@ void init_clock_bindings(py::module& m) {
         .def_readwrite("id", &clock::ClockDomain::id)
         .def_readwrite("name", &clock::ClockDomain::name)
         .def_readwrite("register_ids", &clock::ClockDomain::register_ids);
-    
+
     py::class_<clock::DomainResult>(m, "DomainResult")
         .def_readwrite("domains", &clock::DomainResult::domains)
         .def_readwrite("register_to_domain", &clock::DomainResult::register_to_domain)
         .def_readwrite("warnings", &clock::DomainResult::warnings);
-    
+
     py::class_<clock::DomainExtractor>(m, "DomainExtractor")
         .def(py::init<>())
         .def("extract", &clock::DomainExtractor::extract);
-    
+
     py::class_<clock::ClockDefinition>(m, "ClockDefinition")
         .def_readwrite("name", &clock::ClockDefinition::name)
         .def_readwrite("frequency_mhz", &clock::ClockDefinition::frequency_mhz)
@@ -163,19 +171,19 @@ void init_clock_bindings(py::module& m) {
         .def_readwrite("master_clock", &clock::ClockDefinition::master_clock)
         .def_readwrite("divider_ratio", &clock::ClockDefinition::divider_ratio)
         .def_readwrite("multiplier_ratio", &clock::ClockDefinition::multiplier_ratio);
-    
+
     py::class_<clock::ClockConstraints>(m, "ClockConstraints")
         .def_readwrite("clocks", &clock::ClockConstraints::clocks)
         .def_readwrite("false_paths", &clock::ClockConstraints::false_paths)
         .def_readwrite("multi_cycle_paths", &clock::ClockConstraints::multi_cycle_paths)
         .def("is_false_path", &clock::ClockConstraints::is_false_path)
         .def("is_asynchronous", &clock::ClockConstraints::is_asynchronous);
-    
+
     py::class_<clock::ConstraintsParser>(m, "ConstraintsParser")
         .def(py::init<>())
         .def("parse_yaml", &clock::ConstraintsParser::parse_yaml)
         .def("parse_file", &clock::ConstraintsParser::parse_file);
-    
+
     py::class_<clock::SdcReader>(m, "SdcReader")
         .def(py::init<>())
         .def("read_sdc", &clock::SdcReader::read_sdc)
@@ -187,15 +195,17 @@ void init_report_bindings(py::module& m) {
         .def(py::init<>())
         .def_readwrite("output_dir", &report::HtmlReportOptions::output_dir)
         .def_readwrite("title", &report::HtmlReportOptions::title)
-        .def_readwrite("include_source_snippets", &report::HtmlReportOptions::include_source_snippets)
-        .def_readwrite("include_summary_dashboard", &report::HtmlReportOptions::include_summary_dashboard)
+        .def_readwrite("include_source_snippets",
+                       &report::HtmlReportOptions::include_source_snippets)
+        .def_readwrite("include_summary_dashboard",
+                       &report::HtmlReportOptions::include_summary_dashboard)
         .def_readwrite("dark_mode", &report::HtmlReportOptions::dark_mode)
         .def_readwrite("custom_css", &report::HtmlReportOptions::custom_css);
-    
+
     py::class_<report::HtmlReporter>(m, "HtmlReporter")
         .def(py::init<>())
-        .def("generate_report", &report::HtmlReporter::generate_report,
-             py::arg("findings"), py::arg("options") = report::HtmlReportOptions{});
+        .def("generate_report", &report::HtmlReporter::generate_report, py::arg("findings"),
+             py::arg("options") = report::HtmlReportOptions{});
 }
 
 void init_analysis_bindings(py::module& m) {
@@ -207,7 +217,7 @@ void init_analysis_bindings(py::module& m) {
         .def_readwrite("total_errors", &analysis::Baseline::total_errors)
         .def_readwrite("total_warnings", &analysis::Baseline::total_warnings)
         .def_readwrite("total_waived", &analysis::Baseline::total_waived);
-    
+
     py::class_<analysis::TrendReport>(m, "TrendReport")
         .def_readwrite("new_findings", &analysis::TrendReport::new_findings)
         .def_readwrite("fixed_findings", &analysis::TrendReport::fixed_findings)
@@ -221,27 +231,27 @@ void init_analysis_bindings(py::module& m) {
         .def("regressed", &analysis::TrendReport::regressed)
         .def("stable", &analysis::TrendReport::stable)
         .def("summary", &analysis::TrendReport::summary);
-    
+
     py::class_<analysis::TrendAnalyzer>(m, "TrendAnalyzer")
         .def(py::init<>())
         .def("save_baseline", &analysis::TrendAnalyzer::save_baseline)
         .def("load_baseline", &analysis::TrendAnalyzer::load_baseline)
-        .def("compare", static_cast<analysis::TrendReport(analysis::TrendAnalyzer::*)(
-            const analysis::Baseline&, const std::vector<cdc::Finding>&)>(
-                &analysis::TrendAnalyzer::compare))
+        .def("compare", static_cast<analysis::TrendReport (analysis::TrendAnalyzer::*)(
+                            const analysis::Baseline&, const std::vector<cdc::Finding>&)>(
+                            &analysis::TrendAnalyzer::compare))
         .def("list_baselines", &analysis::TrendAnalyzer::list_baselines)
         .def("delete_baseline", &analysis::TrendAnalyzer::delete_baseline);
 }
 
 PYBIND11_MODULE(opencdc, m) {
     m.doc() = "OpenCDC Python bindings for CDC analysis";
-    
+
     init_graph_bindings(m);
     init_cdc_bindings(m);
     init_clock_bindings(m);
     init_report_bindings(m);
     init_analysis_bindings(m);
-    
+
     py::class_<CheckOptions>(m, "CheckOptions")
         .def(py::init<>())
         .def_readwrite("top_module", &CheckOptions::top_module)
@@ -256,18 +266,18 @@ PYBIND11_MODULE(opencdc, m) {
         .def_readwrite("disable_rules", &CheckOptions::disable_rules)
         .def_readwrite("severity_overrides", &CheckOptions::severity_overrides)
         .def_readwrite("false_paths", &CheckOptions::false_paths);
-    
+
     py::enum_<ExitCode>(m, "ExitCode")
         .value("OK", ExitCode::OK)
         .value("FINDINGS", ExitCode::FINDINGS)
         .value("INPUT_ERROR", ExitCode::INPUT_ERROR)
         .value("INTERNAL_ERROR", ExitCode::INTERNAL_ERROR);
-    
+
     m.def("run", &run, py::arg("argc"), py::arg("argv"),
           "Run OpenCDC analysis from command line arguments");
 }
 
-} // namespace python
-} // namespace opencdc
+}  // namespace python
+}  // namespace opencdc
 
-#endif // OPENCDC_PYTHON_BINDINGS_H
+#endif  // OPENCDC_PYTHON_BINDINGS_H

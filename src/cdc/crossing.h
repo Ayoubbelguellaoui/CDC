@@ -1,15 +1,16 @@
 #ifndef OPENCDC_CDC_CROSSING_H
 #define OPENCDC_CDC_CROSSING_H
 
-#include "ir/graph.h"
-#include "clock/domain.h"
-#include "clock/constraints.h"
-#include "cdc/synchronizer.h"
-#include "cdc/pattern.h"
-#include <string>
-#include <vector>
-#include <unordered_map>
 #include <cstddef>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "cdc/pattern.h"
+#include "cdc/synchronizer.h"
+#include "clock/constraints.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 namespace opencdc::cdc {
 
@@ -55,12 +56,11 @@ struct Finding {
 };
 
 class CrossingAnalyzer {
-public:
-    std::vector<Finding> analyze(
-        const ir::Graph& graph,
-        const std::vector<clock::ClockDomain>& domains,
-        const std::unordered_map<uint64_t, size_t>& register_to_domain,
-        size_t num_threads = 0);
+   public:
+    std::vector<Finding> analyze(const ir::Graph& graph,
+                                 const std::vector<clock::ClockDomain>& domains,
+                                 const std::unordered_map<uint64_t, size_t>& register_to_domain,
+                                 size_t num_threads = 0);
 
     void set_pattern_recognizer(PatternRecognizer* recognizer) {
         pattern_recognizer_ = recognizer;
@@ -70,22 +70,20 @@ public:
         clock_constraints_ = constraints;
     }
 
-private:
+   private:
     const clock::ClockDomain* find_domain_for_node(
-        uint64_t node_id,
-        const std::vector<clock::ClockDomain>& domains,
+        uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
         const std::unordered_map<uint64_t, size_t>& register_to_domain) const;
 
     std::string build_reason(const Finding& f) const;
 
-    bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id,
-                                     const ir::Graph& graph) const;
+    bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
 
     SynchronizerMatcher sync_matcher_;
     PatternRecognizer* pattern_recognizer_ = nullptr;
     const clock::ClockConstraints* clock_constraints_ = nullptr;
 };
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc
 
-#endif // OPENCDC_CDC_CROSSING_H
+#endif  // OPENCDC_CDC_CROSSING_H

@@ -1,46 +1,47 @@
+#include "analysis/analyzer.h"
+#include "config/config.h"
 #include "opencdc/opencdc.h"
 #include "opencdc/version.h"
-#include "analysis/analyzer.h"
-#include "report/report.h"
 #include "report/html_reporter.h"
-#include "config/config.h"
+#include "report/report.h"
 #ifdef OPENCDC_ENABLE_LSP
 #include "lsp/server.h"
 #endif
-#include <iostream>
-#include <fstream>
 #include <exception>
+#include <fstream>
+#include <iostream>
 #include <string>
 #include <vector>
 
 namespace opencdc {
 
 static void print_usage(const char* prog) {
-    std::cerr << "Usage: " << prog << " <command> [options]\n"
-              << "\nCommands:\n"
-              << "  check <files...>     Analyse SystemVerilog files for CDC violations\n"
-              << "  lsp                  Start the Language Server Protocol server\n"
-              << "\ncheck options:\n"
-              << "  --top <module>       Top module name (required)\n"
-              << "  --config <file>      Configuration file (YAML)\n"
-              << "  --waiver <file>      Waiver file\n"
-              << "  --constraints <file> Clock constraints file (SDC or YAML)\n"
-              << "  --format <fmt>       Output format: json, text, html (default: json)\n"
-              << "  --out <file>         Write report to file (default: stdout)\n"
-              << "  --html-dir <dir>     HTML report output directory (default: opencdc_report)\n"
-              << "  --disable-rule <id>  Disable a rule (e.g., CDC001). Repeatable.\n"
-              << "  --severity <id>=<sev> Override rule severity (e.g., CDC003=error). Repeatable.\n"
-              << "  --false-path <s:d>   False path (e.g., top.src:top.dst). Repeatable.\n"
-              << "  --verbose            Enable verbose output\n"
-              << "\nlsp options:\n"
-              << "  --top <module>       Top module name (required by analysis)\n"
-              << "  --port <n>           TCP port to listen on (default: 2087)\n"
-              << "  --config <file>      Configuration file (YAML)\n"
-              << "  --waiver <file>      Waiver file\n"
-              << "  --constraints <file> Clock constraints file\n"
-              << "\nGeneral:\n"
-              << "  --version            Show version information\n"
-              << "  --help               Show this help message\n";
+    std::cerr
+        << "Usage: " << prog << " <command> [options]\n"
+        << "\nCommands:\n"
+        << "  check <files...>     Analyse SystemVerilog files for CDC violations\n"
+        << "  lsp                  Start the Language Server Protocol server\n"
+        << "\ncheck options:\n"
+        << "  --top <module>       Top module name (required)\n"
+        << "  --config <file>      Configuration file (YAML)\n"
+        << "  --waiver <file>      Waiver file\n"
+        << "  --constraints <file> Clock constraints file (SDC or YAML)\n"
+        << "  --format <fmt>       Output format: json, text, html (default: json)\n"
+        << "  --out <file>         Write report to file (default: stdout)\n"
+        << "  --html-dir <dir>     HTML report output directory (default: opencdc_report)\n"
+        << "  --disable-rule <id>  Disable a rule (e.g., CDC001). Repeatable.\n"
+        << "  --severity <id>=<sev> Override rule severity (e.g., CDC003=error). Repeatable.\n"
+        << "  --false-path <s:d>   False path (e.g., top.src:top.dst). Repeatable.\n"
+        << "  --verbose            Enable verbose output\n"
+        << "\nlsp options:\n"
+        << "  --top <module>       Top module name (required by analysis)\n"
+        << "  --port <n>           TCP port to listen on (default: 2087)\n"
+        << "  --config <file>      Configuration file (YAML)\n"
+        << "  --waiver <file>      Waiver file\n"
+        << "  --constraints <file> Clock constraints file\n"
+        << "\nGeneral:\n"
+        << "  --version            Show version information\n"
+        << "  --help               Show this help message\n";
 }
 
 static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
@@ -100,8 +101,8 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
         } else if (arg == "--false-path" && i + 1 < argc) {
             std::string fp = argv[++i];
             auto colon = fp.find(':');
-            if (colon != std::string::npos && colon > 0 &&
-                colon + 1 < fp.size() && fp.find(':', colon + 1) == std::string::npos) {
+            if (colon != std::string::npos && colon > 0 && colon + 1 < fp.size() &&
+                fp.find(':', colon + 1) == std::string::npos) {
                 opts.false_paths.push_back({fp.substr(0, colon), fp.substr(colon + 1)});
             } else {
                 std::cerr << "Error: --false-path requires non-empty src:dest format\n";
@@ -135,7 +136,7 @@ int run(int argc, const char* argv[]) {
     // input files — irrelevant for the LSP which receives content over the socket).
     if (argc >= 2 && std::string(argv[1]) == "lsp") {
 #ifdef OPENCDC_ENABLE_LSP
-        int    port             = 2087;
+        int port = 2087;
         std::string top_module;
         std::string config_path;
         std::string waiver_path;
@@ -143,9 +144,18 @@ int run(int argc, const char* argv[]) {
 
         for (int i = 2; i < argc; ++i) {
             std::string arg = argv[i];
-            if (arg == "--port" && i + 1 < argc)
-                port = std::stoi(argv[++i]);
-            else if (arg == "--top" && i + 1 < argc)
+            if (arg == "--port" && i + 1 < argc) {
+                try {
+                    port = std::stoi(argv[++i]);
+                    if (port < 0 || port > 65535) {
+                        std::cerr << "Error: --port must be between 0 and 65535\n";
+                        return static_cast<int>(ExitCode::INPUT_ERROR);
+                    }
+                } catch (const std::exception&) {
+                    std::cerr << "Error: --port requires a valid integer\n";
+                    return static_cast<int>(ExitCode::INPUT_ERROR);
+                }
+            } else if (arg == "--top" && i + 1 < argc)
                 top_module = argv[++i];
             else if (arg == "--config" && i + 1 < argc)
                 config_path = argv[++i];
@@ -165,8 +175,7 @@ int run(int argc, const char* argv[]) {
         server.set_waiver_path(waiver_path);
         server.set_constraints_path(constraints_path);
         server.start(port);
-        std::cerr << "OpenCDC LSP server listening on port "
-                  << server.bound_port() << "\n";
+        std::cerr << "OpenCDC LSP server listening on port " << server.bound_port() << "\n";
         server.wait();
         return static_cast<int>(ExitCode::OK);
 #else
@@ -208,17 +217,19 @@ int run(int argc, const char* argv[]) {
     if (opts.format == "json" && !config_output_format.empty()) {
         opts.format = config_output_format;
     }
-    if (opts.output_path.empty() && opts.html_output_dir.empty() &&
-        !config_output_file.empty()) {
-        if (opts.format == "html") opts.html_output_dir = config_output_file;
-        else opts.output_path = config_output_file;
+    if (opts.output_path.empty() && opts.html_output_dir.empty() && !config_output_file.empty()) {
+        if (opts.format == "html")
+            opts.html_output_dir = config_output_file;
+        else
+            opts.output_path = config_output_file;
     }
 
     if (opts.verbose) {
         std::cerr << "OpenCDC v" << version_string() << "\n";
         std::cerr << "Top module: " << opts.top_module << "\n";
         std::cerr << "Input files:";
-        for (const auto& f : opts.input_files) std::cerr << " " << f;
+        for (const auto& f : opts.input_files)
+            std::cerr << " " << f;
         std::cerr << "\n";
     }
 
@@ -250,13 +261,11 @@ int run(int argc, const char* argv[]) {
     }
 
     if (opts.verbose) {
-        std::cerr << "Graph: " << analysis.graph.register_count()
-                  << " registers, " << analysis.graph.edge_count()
-                  << " edges\n";
+        std::cerr << "Graph: " << analysis.graph.register_count() << " registers, "
+                  << analysis.graph.edge_count() << " edges\n";
         std::cerr << "Domains: " << analysis.domains.domains.size() << "\n";
         for (const auto& dom : analysis.domains.domains) {
-            std::cerr << "  " << dom.name << ": "
-                      << dom.register_ids.size() << " register(s)\n";
+            std::cerr << "  " << dom.name << ": " << dom.register_ids.size() << " register(s)\n";
         }
     }
 
@@ -300,9 +309,8 @@ int run(int argc, const char* argv[]) {
         reporter.report_json(findings, *out);
     }
 
-    return reporter.has_unsuppressed_errors(findings)
-               ? static_cast<int>(ExitCode::FINDINGS)
-               : static_cast<int>(ExitCode::OK);
+    return reporter.has_unsuppressed_errors(findings) ? static_cast<int>(ExitCode::FINDINGS)
+                                                      : static_cast<int>(ExitCode::OK);
 }
 
-} // namespace opencdc
+}  // namespace opencdc

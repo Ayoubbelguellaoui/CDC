@@ -1,10 +1,11 @@
 #ifndef OPENCDC_CLOCK_CONSTRAINTS_H
 #define OPENCDC_CLOCK_CONSTRAINTS_H
 
-#include <string>
-#include <vector>
-#include <unordered_map>
 #include <optional>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace opencdc::clock {
 
@@ -76,14 +77,16 @@ struct ClockConstraints {
     bool is_false_path(const std::string& from, const std::string& to) const;
     bool is_asynchronous(const std::string& clk1, const std::string& clk2) const;
     std::optional<ClockDefinition> get_clock(const std::string& name) const;
+
+   private:
 };
 
 class SdcReader {
-public:
+   public:
     ClockConstraints read_sdc(const std::string& path);
     ClockConstraints parse_sdc_content(const std::string& content);
 
-private:
+   private:
     void parse_create_clock(const std::string& line, ClockConstraints& constraints);
     void parse_create_generated_clock(const std::string& line, ClockConstraints& constraints);
     void parse_set_false_path(const std::string& line, ClockConstraints& constraints);
@@ -96,17 +99,17 @@ private:
 };
 
 class ConstraintsParser {
-public:
+   public:
     ClockConstraints parse_yaml(const std::string& content);
     ClockConstraints parse_file(const std::string& path, std::string* error = nullptr);
 
-private:
+   private:
     void parse_clocks_section(const std::string& content, ClockConstraints& constraints);
     void parse_false_paths_section(const std::string& content, ClockConstraints& constraints);
     void parse_multi_cycle_section(const std::string& content, ClockConstraints& constraints);
     void parse_groups_section(const std::string& content, ClockConstraints& constraints);
 };
 
-} // namespace opencdc::clock
+}  // namespace opencdc::clock
 
-#endif // OPENCDC_CLOCK_CONSTRAINTS_H
+#endif  // OPENCDC_CLOCK_CONSTRAINTS_H

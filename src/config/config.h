@@ -2,8 +2,8 @@
 #define OPENCDC_CONFIG_CONFIG_H
 
 #include <string>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
 namespace opencdc::config {
 
@@ -50,11 +50,11 @@ struct Config {
 };
 
 class ConfigParser {
-public:
+   public:
     Config parse_file(const std::string& path, std::string* error = nullptr) const;
     Config parse_string(const std::string& content, std::string* error = nullptr) const;
 
-private:
+   private:
     void parse_rule_section(const std::string& content, Config& config) const;
     void parse_waiver_section(const std::string& content, Config& config) const;
     void parse_output_section(const std::string& content, Config& config) const;
@@ -63,6 +63,6 @@ private:
     static std::string to_lower(const std::string& s);
 };
 
-} // namespace opencdc::config
+}  // namespace opencdc::config
 
-#endif // OPENCDC_CONFIG_CONFIG_H
+#endif  // OPENCDC_CONFIG_CONFIG_H

@@ -29,7 +29,8 @@ inline bool wildcard_match(const std::string& pattern, const std::string& text) 
 
     while (ti < lt.size()) {
         if (pi < lp.size() && (lp[pi] == '?' || lp[pi] == lt[ti])) {
-            ++pi; ++ti;
+            ++pi;
+            ++ti;
         } else if (pi < lp.size() && lp[pi] == '*') {
             star_pi = pi++;
             star_ti = ti;
@@ -41,10 +42,11 @@ inline bool wildcard_match(const std::string& pattern, const std::string& text) 
         }
     }
     // Consume trailing '*' wildcards
-    while (pi < lp.size() && lp[pi] == '*') ++pi;
+    while (pi < lp.size() && lp[pi] == '*')
+        ++pi;
     return pi == lp.size();
 }
 
-} // namespace opencdc::util
+}  // namespace opencdc::util
 
-#endif // OPENCDC_UTIL_STRING_UTIL_H
+#endif  // OPENCDC_UTIL_STRING_UTIL_H

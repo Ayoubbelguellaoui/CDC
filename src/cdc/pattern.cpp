@@ -1,4 +1,5 @@
 #include "cdc/pattern.h"
+
 #include <algorithm>
 
 namespace opencdc::cdc {
@@ -14,7 +15,8 @@ std::string PatternRecognizer::extract_base_name(const std::string& hier_name) c
 std::string PatternRecognizer::extract_module_name(const std::string& hier_name) const {
     size_t last_dot = hier_name.rfind('.');
     if (last_dot != std::string::npos) {
-        if (last_dot == 0) return "";  // leading-dot name: no module component
+        if (last_dot == 0)
+            return "";  // leading-dot name: no module component
         size_t second_last = hier_name.rfind('.', last_dot - 1);
         if (second_last != std::string::npos) {
             return hier_name.substr(second_last + 1, last_dot - second_last - 1);
@@ -27,15 +29,19 @@ std::string PatternRecognizer::extract_module_name(const std::string& hier_name)
 // A1: Structural-only — requires LogicType::GrayEncoder
 bool PatternRecognizer::detect_xor_pattern(const ir::Node& node, const ir::Graph& graph) const {
     (void)graph;
-    if (node.logic_type != ir::LogicType::Xor) return false;
+    if (node.logic_type != ir::LogicType::Xor)
+        return false;
     return node.logic_inputs.size() == 2;
 }
 
-bool PatternRecognizer::verify_gray_encoder_structure(uint64_t node_id, const ir::Graph& graph) const {
+bool PatternRecognizer::verify_gray_encoder_structure(uint64_t node_id,
+                                                      const ir::Graph& graph) const {
     const ir::Node* node = graph.find_node(node_id);
-    if (!node) return false;
+    if (!node)
+        return false;
 
-    if (node->logic_type == ir::LogicType::GrayEncoder) return true;
+    if (node->logic_type == ir::LogicType::GrayEncoder)
+        return true;
 
     if (node->logic_type != ir::LogicType::Xor || node->logic_inputs.size() != 2)
         return false;
@@ -44,27 +50,32 @@ bool PatternRecognizer::verify_gray_encoder_structure(uint64_t node_id, const ir
     uint64_t b_id = node->logic_inputs[1];
     const ir::Node* a = graph.find_node(a_id);
     const ir::Node* b = graph.find_node(b_id);
-    if (!a || !b) return false;
+    if (!a || !b)
+        return false;
 
     auto is_delay_of = [&](const ir::Node* src, uint64_t xor_other) -> bool {
-        if (src->kind != ir::NodeKind::Register) return false;
+        if (src->kind != ir::NodeKind::Register)
+            return false;
         for (uint64_t pred : graph.predecessors(src->id)) {
-            if (pred == xor_other) return true;
+            if (pred == xor_other)
+                return true;
         }
         for (uint64_t reg_pred : graph.register_predecessors(src->id)) {
-            if (reg_pred == xor_other) return true;
+            if (reg_pred == xor_other)
+                return true;
         }
         return false;
     };
 
-    if (a->kind == ir::NodeKind::Register && is_delay_of(a, b_id)) return true;
-    if (b->kind == ir::NodeKind::Register && is_delay_of(b, a_id)) return true;
+    if (a->kind == ir::NodeKind::Register && is_delay_of(a, b_id))
+        return true;
+    if (b->kind == ir::NodeKind::Register && is_delay_of(b, a_id))
+        return true;
 
     return false;
 }
 
-bool PatternRecognizer::detect_gray_encoder(const ir::Node& node,
-                                            const ir::Graph& graph,
+bool PatternRecognizer::detect_gray_encoder(const ir::Node& node, const ir::Graph& graph,
                                             std::vector<uint64_t>& inputs) const {
     (void)graph;
     if (node.logic_type == ir::LogicType::GrayEncoder) {
@@ -75,9 +86,8 @@ bool PatternRecognizer::detect_gray_encoder(const ir::Node& node,
 }
 
 // A2: Structural-only — requires LogicType::GrayDecoder
-bool PatternRecognizer::detect_gray_decoder(const ir::Node& node,
-                                             const ir::Graph& graph,
-                                             std::vector<uint64_t>& inputs) const {
+bool PatternRecognizer::detect_gray_decoder(const ir::Node& node, const ir::Graph& graph,
+                                            std::vector<uint64_t>& inputs) const {
     (void)graph;
     if (node.logic_type == ir::LogicType::GrayDecoder) {
         inputs = node.logic_inputs;
@@ -88,11 +98,12 @@ bool PatternRecognizer::detect_gray_decoder(const ir::Node& node,
 
 // Keep module-name cross-reference — structural check (same instance)
 bool PatternRecognizer::detect_valid_ready_pair(uint64_t valid_id, uint64_t ready_id,
-                                                 const ir::Graph& graph) const {
+                                                const ir::Graph& graph) const {
     const ir::Node* valid_node = graph.find_node(valid_id);
     const ir::Node* ready_node = graph.find_node(ready_id);
 
-    if (!valid_node || !ready_node) return false;
+    if (!valid_node || !ready_node)
+        return false;
 
     std::string valid_mod = extract_module_name(valid_node->hier_name);
     std::string ready_mod = extract_module_name(ready_node->hier_name);
@@ -125,10 +136,13 @@ std::vector<AsyncFifoPattern> PatternRecognizer::detect_async_fifos(const ir::Gr
     // Collect all async FIFO pointer registers grouped by module.
     std::unordered_map<std::string, std::vector<uint64_t>> ptrs_by_module;
     for (const auto& node : graph.nodes()) {
-        if (node.kind != ir::NodeKind::Register) continue;
-        if (!node.is_async_fifo_ptr && node.logic_type != ir::LogicType::AsyncFifoPtr) continue;
+        if (node.kind != ir::NodeKind::Register)
+            continue;
+        if (!node.is_async_fifo_ptr && node.logic_type != ir::LogicType::AsyncFifoPtr)
+            continue;
         std::string base = extract_module_name(node.hier_name);
-        if (base.empty()) continue;
+        if (base.empty())
+            continue;
         ptrs_by_module[base].push_back(node.id);
     }
 
@@ -136,14 +150,17 @@ std::vector<AsyncFifoPattern> PatternRecognizer::detect_async_fifos(const ir::Gr
     // (direct edge or shared successor — shared predecessor is too weak)
     auto are_connected = [&](uint64_t id_a, uint64_t id_b) -> bool {
         for (uint64_t sa : graph.successors(id_a)) {
-            if (sa == id_b) return true;
+            if (sa == id_b)
+                return true;
         }
         for (uint64_t sb : graph.successors(id_b)) {
-            if (sb == id_a) return true;
+            if (sb == id_a)
+                return true;
         }
         for (uint64_t sa : graph.register_successors(id_a)) {
             for (uint64_t sb : graph.register_successors(id_b)) {
-                if (sa == sb) return true;
+                if (sa == sb)
+                    return true;
             }
         }
         return false;
@@ -155,18 +172,19 @@ std::vector<AsyncFifoPattern> PatternRecognizer::detect_async_fifos(const ir::Gr
             for (size_t j = i + 1; j < ptrs.size(); ++j) {
                 const ir::Node* a = graph.find_node(ptrs[i]);
                 const ir::Node* b = graph.find_node(ptrs[j]);
-                if (!a || !b) continue;
-                if (a->clock_domain == b->clock_domain) continue;
+                if (!a || !b)
+                    continue;
+                if (a->clock_domain == b->clock_domain)
+                    continue;
 
                 // Must have structural connectivity to same FIFO element
-                if (!are_connected(ptrs[i], ptrs[j])) continue;
+                if (!are_connected(ptrs[i], ptrs[j]))
+                    continue;
 
                 // Both must be gray-coded (structural requirement for async FIFO)
-                bool a_gray = a->is_gray_coded ||
-                              a->logic_type == ir::LogicType::GrayEncoder ||
+                bool a_gray = a->is_gray_coded || a->logic_type == ir::LogicType::GrayEncoder ||
                               a->logic_type == ir::LogicType::GrayDecoder;
-                bool b_gray = b->is_gray_coded ||
-                              b->logic_type == ir::LogicType::GrayEncoder ||
+                bool b_gray = b->is_gray_coded || b->logic_type == ir::LogicType::GrayEncoder ||
                               b->logic_type == ir::LogicType::GrayDecoder;
 
                 AsyncFifoPattern fifo;
@@ -194,7 +212,8 @@ std::vector<HandshakePattern> PatternRecognizer::detect_handshakes(const ir::Gra
     std::unordered_map<std::string, std::vector<uint64_t>> ready_signals;
 
     for (const auto& node : graph.nodes()) {
-        if (node.kind != ir::NodeKind::Register) continue;
+        if (node.kind != ir::NodeKind::Register)
+            continue;
 
         std::string base = extract_module_name(node.hier_name);
 
@@ -216,7 +235,8 @@ std::vector<HandshakePattern> PatternRecognizer::detect_handshakes(const ir::Gra
 
     for (const auto& [mod, valids] : valid_signals) {
         auto ready_it = ready_signals.find(mod);
-        if (ready_it == ready_signals.end()) continue;
+        if (ready_it == ready_signals.end())
+            continue;
 
         for (uint64_t valid_id : valids) {
             for (uint64_t ready_id : ready_it->second) {
@@ -281,7 +301,8 @@ std::vector<GrayCodePattern> PatternRecognizer::detect_gray_encoding(const ir::G
     // Pair each decoder with the first unpaired encoder that directly drives it.
     for (uint64_t dec_id : decoder_ids) {
         for (auto& gp : patterns) {
-            if (gp.decoder_id != 0) continue;
+            if (gp.decoder_id != 0)
+                continue;
             bool connected = false;
             for (uint64_t succ : graph.successors(gp.encoder_id)) {
                 if (succ == dec_id) {
@@ -301,29 +322,36 @@ std::vector<GrayCodePattern> PatternRecognizer::detect_gray_encoding(const ir::G
 
 bool PatternRecognizer::is_gray_coded(uint64_t node_id, const ir::Graph& graph) const {
     const ir::Node* node = graph.find_node(node_id);
-    if (!node) return false;
-    return node->is_gray_coded ||
-           node->logic_type == ir::LogicType::GrayEncoder ||
+    if (!node)
+        return false;
+    return node->is_gray_coded || node->logic_type == ir::LogicType::GrayEncoder ||
            node->logic_type == ir::LogicType::GrayDecoder;
 }
 
 bool PatternRecognizer::is_handshake_signal(uint64_t node_id, const ir::Graph& graph) const {
     const ir::Node* node = graph.find_node(node_id);
-    if (!node) return false;
-    return node->is_handshake_signal ||
-           node->logic_type == ir::LogicType::HandshakeValid ||
+    if (!node)
+        return false;
+    return node->is_handshake_signal || node->logic_type == ir::LogicType::HandshakeValid ||
            node->logic_type == ir::LogicType::HandshakeReady;
 }
 
 bool PatternRecognizer::is_async_fifo_ptr(uint64_t node_id, const ir::Graph& graph) const {
     const ir::Node* node = graph.find_node(node_id);
-    if (!node) return false;
-    return node->is_async_fifo_ptr ||
-           node->logic_type == ir::LogicType::AsyncFifoPtr;
+    if (!node)
+        return false;
+    return node->is_async_fifo_ptr || node->logic_type == ir::LogicType::AsyncFifoPtr;
 }
 
 void PatternRecognizer::ensure_patterns(const ir::Graph& graph) const {
-    if (cached_graph_generation_ == graph.generation()) return;
+    std::lock_guard<std::mutex> lock(pattern_mutex_);
+    ensure_patterns_locked(graph);
+}
+
+void PatternRecognizer::ensure_patterns_locked(const ir::Graph& graph) const {
+    // Caller must hold pattern_mutex_.
+    if (cached_graph_generation_ == graph.generation())
+        return;
     fifo_cache_ = detect_async_fifos(graph);
     handshake_cache_ = detect_handshakes(graph);
     gray_cache_ = detect_gray_encoding(graph);
@@ -332,28 +360,31 @@ void PatternRecognizer::ensure_patterns(const ir::Graph& graph) const {
 
 // B1: Requires structural verification of the specific crossing — a bare
 // is_gray_coded flag or unrelated same-type nodes are NOT sufficient.
-bool PatternRecognizer::is_verified_safe_crossing(
-    uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const {
+bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id,
+                                                  const ir::Graph& graph) const {
     const ir::Node* src = graph.find_node(src_id);
     const ir::Node* dst = graph.find_node(dst_id);
-    if (!src || !dst) return false;
+    if (!src || !dst)
+        return false;
 
-    ensure_patterns(graph);
+    std::lock_guard<std::mutex> lock(pattern_mutex_);
+    ensure_patterns_locked(graph);
 
     auto connected_to_dst = [&](uint64_t from_id) -> bool {
         for (uint64_t succ : graph.successors(from_id)) {
-            if (succ == dst_id) return true;
+            if (succ == dst_id)
+                return true;
         }
         for (uint64_t rsucc : graph.register_successors(from_id, false)) {
-            if (rsucc == dst_id) return true;
+            if (rsucc == dst_id)
+                return true;
         }
         return false;
     };
 
     // Explicit encoder→decoder logic-type pairs require a real connection.
     if (src->logic_type == ir::LogicType::GrayEncoder &&
-        dst->logic_type == ir::LogicType::GrayDecoder &&
-        connected_to_dst(src_id)) {
+        dst->logic_type == ir::LogicType::GrayDecoder && connected_to_dst(src_id)) {
         return true;
     }
     // NOTE: Only GrayEncoder(src)→GrayDecoder(dst) is a valid CDC-safe gray-code
@@ -365,15 +396,19 @@ bool PatternRecognizer::is_verified_safe_crossing(
     // decode happens downstream in the destination domain) is safe from the
     // encoder side.
     for (const auto& gp : gray_cache_) {
-        if (gp.encoder_id != src_id) continue;
-        if (gp.decoder_id == 0 || gp.decoder_id == dst_id) return true;
+        if (gp.encoder_id != src_id)
+            continue;
+        if (gp.decoder_id == 0 || gp.decoder_id == dst_id)
+            return true;
     }
     // Structural gray encoder feeding the source register (encoder output
     // registered before the crossing).
     for (const auto& gp : gray_cache_) {
-        if (gp.decoder_id != 0) continue;
+        if (gp.decoder_id != 0)
+            continue;
         for (uint64_t pred : graph.predecessors(src_id)) {
-            if (pred == gp.encoder_id) return true;
+            if (pred == gp.encoder_id)
+                return true;
         }
     }
 
@@ -398,7 +433,10 @@ bool PatternRecognizer::is_verified_safe_crossing(
 }
 
 void PatternRecognizer::analyze_and_annotate(ir::Graph& graph) {
-    ensure_patterns(graph);
+    {
+        std::lock_guard<std::mutex> lock(pattern_mutex_);
+        ensure_patterns_locked(graph);
+    }
 
     // Propagate detected patterns onto node flags. OR with existing flags so
     // frontend-provided annotations survive.
@@ -440,4 +478,4 @@ void PatternRecognizer::analyze_and_annotate(ir::Graph& graph) {
     }
 }
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc

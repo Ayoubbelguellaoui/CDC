@@ -1,19 +1,21 @@
 #ifndef OPENCDC_CDC_PATTERN_H
 #define OPENCDC_CDC_PATTERN_H
 
-#include "ir/graph.h"
-#include <vector>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <optional>
+#include <vector>
+
+#include "ir/graph.h"
 
 namespace opencdc::cdc {
 
 struct AsyncFifoPattern {
     uint64_t read_ptr_id;
     uint64_t write_ptr_id;
-    uint64_t data_bus_id;
+    uint64_t data_bus_id = 0;
     std::string read_domain;
     std::string write_domain;
     bool has_gray_encoding;
@@ -23,7 +25,7 @@ struct AsyncFifoPattern {
 struct HandshakePattern {
     uint64_t valid_id;
     uint64_t ready_id;
-    uint64_t data_id;
+    uint64_t data_id = 0;
     std::string source_domain;
     std::string dest_domain;
     bool verified;
@@ -37,7 +39,7 @@ struct GrayCodePattern {
 };
 
 class PatternRecognizer {
-public:
+   public:
     PatternRecognizer() = default;
 
     std::vector<AsyncFifoPattern> detect_async_fifos(const ir::Graph& graph) const;
@@ -47,24 +49,26 @@ public:
     bool is_gray_coded(uint64_t node_id, const ir::Graph& graph) const;
     bool is_handshake_signal(uint64_t node_id, const ir::Graph& graph) const;
     bool is_async_fifo_ptr(uint64_t node_id, const ir::Graph& graph) const;
-    bool is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id,
-                                   const ir::Graph& graph) const;
+    bool is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
 
     void analyze_and_annotate(ir::Graph& graph);
 
     // Pre-compute pattern caches on the main thread before parallel analysis.
     void ensure_patterns(const ir::Graph& graph) const;
 
-private:
+   private:
+    // Requires pattern_mutex_ to be held by caller.
+    void ensure_patterns_locked(const ir::Graph& graph) const;
+
     bool detect_gray_encoder(const ir::Node& node, const ir::Graph& graph,
-                            std::vector<uint64_t>& inputs) const;
+                             std::vector<uint64_t>& inputs) const;
     bool detect_gray_decoder(const ir::Node& node, const ir::Graph& graph,
-                            std::vector<uint64_t>& inputs) const;
+                             std::vector<uint64_t>& inputs) const;
     bool detect_xor_pattern(const ir::Node& node, const ir::Graph& graph) const;
     bool verify_gray_encoder_structure(uint64_t node_id, const ir::Graph& graph) const;
 
     bool detect_valid_ready_pair(uint64_t valid_id, uint64_t ready_id,
-                                const ir::Graph& graph) const;
+                                 const ir::Graph& graph) const;
 
     std::string extract_base_name(const std::string& hier_name) const;
     std::string extract_module_name(const std::string& hier_name) const;
@@ -76,8 +80,9 @@ private:
     mutable std::vector<HandshakePattern> handshake_cache_;
     mutable std::vector<GrayCodePattern> gray_cache_;
     mutable uint64_t cached_graph_generation_ = 0;
+    mutable std::mutex pattern_mutex_;
 };
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc
 
-#endif // OPENCDC_CDC_PATTERN_H
+#endif  // OPENCDC_CDC_PATTERN_H

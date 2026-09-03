@@ -1,44 +1,48 @@
 #include "cdc/reconvergence.h"
-#include "cdc/synchronizer.h"
-#include <unordered_set>
+
 #include <queue>
+#include <unordered_set>
+
+#include "cdc/synchronizer.h"
 
 namespace opencdc::cdc {
 
 std::vector<uint64_t> ReconvergenceAnalyzer::find_fanout_sources(
-    const ir::Graph& graph,
-    const std::vector<clock::ClockDomain>& domains) const {
+    const ir::Graph& graph, const std::vector<clock::ClockDomain>& domains) const {
     std::vector<uint64_t> sources;
 
     for (const auto& node : graph.nodes()) {
-        if (node.kind != ir::NodeKind::Register) continue;
+        if (node.kind != ir::NodeKind::Register)
+            continue;
 
         auto succs = graph.register_successors(node.id);
-        if (succs.size() < 2) continue;
+        if (succs.size() < 2)
+            continue;
 
         bool crosses_domain = false;
         for (uint64_t s : succs) {
             const ir::Node* sn = graph.find_node(s);
-            if (!sn || sn->kind != ir::NodeKind::Register) continue;
+            if (!sn || sn->kind != ir::NodeKind::Register)
+                continue;
             if (sn->clock_domain != node.clock_domain) {
                 crosses_domain = true;
                 break;
             }
         }
-        if (crosses_domain) sources.push_back(node.id);
+        if (crosses_domain)
+            sources.push_back(node.id);
     }
 
     return sources;
 }
 
 std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
-    const ir::Graph& graph,
-    const std::vector<clock::ClockDomain>& domains,
-    const std::vector<Finding>& crossings,
-    uint64_t source_id) const {
+    const ir::Graph& graph, const std::vector<clock::ClockDomain>& domains,
+    const std::vector<Finding>& crossings, uint64_t source_id) const {
     std::vector<Finding> findings;
     const ir::Node* src = graph.find_node(source_id);
-    if (!src) return findings;
+    if (!src)
+        return findings;
 
     std::vector<const Finding*> src_crossings;
     for (const auto& f : crossings) {
@@ -46,15 +50,16 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
             src_crossings.push_back(&f);
     }
 
-    if (src_crossings.size() < 2) return findings;
+    if (src_crossings.size() < 2)
+        return findings;
 
     // Use the canonical SynchronizerMatcher rather than duplicating chain detection
     // inline. The previous lambda checked for independent successors rather than a
     // proper register chain (dest→s1→s2), which could suppress CDC003 incorrectly.
     SynchronizerMatcher sync_matcher;
     auto has_sync_chain = [&](uint64_t dest_id) -> bool {
-        return sync_matcher.find_pattern_for_dest(dest_id, graph, /*strict=*/false)
-               != SyncPattern::None;
+        return sync_matcher.find_pattern_for_dest(dest_id, graph, /*strict=*/false) ==
+               SyncPattern::ThreeFF;
     };
 
     for (size_t i = 0; i < src_crossings.size(); ++i) {
@@ -62,7 +67,8 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
             const Finding* a = src_crossings[i];
             const Finding* b = src_crossings[j];
 
-            if (a->dest_reg_id == b->dest_reg_id) continue;
+            if (a->dest_reg_id == b->dest_reg_id)
+                continue;
 
             // A synchronizer chain on the destination only makes the crossing
             // safe for single-bit sources. A multi-bit bus split across
@@ -82,11 +88,12 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                 while (!bfs.empty() && result.size() < 16) {
                     auto [cur, depth] = bfs.front();
                     bfs.pop();
-                    if (depth > 0 && graph.find_node(cur) &&
-                        graph.find_node(cur)->kind == ir::NodeKind::Register) {
+                    const ir::Node* n = graph.find_node(cur);
+                    if (depth > 0 && n && n->kind == ir::NodeKind::Register) {
                         result.push_back(cur);
                     }
-                    if (depth >= 3) continue;
+                    if (depth >= 3)
+                        continue;
                     for (uint64_t s : graph.register_successors(cur)) {
                         if (visited.insert(s).second) {
                             bfs.push({s, depth + 1});
@@ -119,16 +126,16 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                     std::string consumer_name = consumer ? consumer->hier_name : "<unknown>";
 
                     if (src->width > 1) {
-                        f.reconvergence.explanation =
-                            "Multi-bit source '" + src->hier_name +
-                            "' (width=" + std::to_string(src->width) +
-                            ") fans out through independent synchronizer paths that reconverge at '"
-                            + consumer_name + "'.";
+                        f.reconvergence.explanation = "Multi-bit source '" + src->hier_name +
+                                                      "' (width=" + std::to_string(src->width) +
+                                                      ") fans out through independent synchronizer "
+                                                      "paths that reconverge at '" +
+                                                      consumer_name + "'.";
                     } else {
                         f.reconvergence.explanation =
                             "Single-bit source '" + src->hier_name +
-                            "' fans out through independent paths that reconverge at '"
-                            + consumer_name + "'.";
+                            "' fans out through independent paths that reconverge at '" +
+                            consumer_name + "'.";
                     }
 
                     f.reason = f.reconvergence.explanation;
@@ -142,10 +149,9 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
     return findings;
 }
 
-std::vector<Finding> ReconvergenceAnalyzer::analyze(
-    const ir::Graph& graph,
-    const std::vector<clock::ClockDomain>& domains,
-    const std::vector<Finding>& crossings) {
+std::vector<Finding> ReconvergenceAnalyzer::analyze(const ir::Graph& graph,
+                                                    const std::vector<clock::ClockDomain>& domains,
+                                                    const std::vector<Finding>& crossings) {
     std::vector<Finding> findings;
     auto sources = find_fanout_sources(graph, domains);
 
@@ -159,4 +165,4 @@ std::vector<Finding> ReconvergenceAnalyzer::analyze(
     return findings;
 }
 
-} // namespace opencdc::cdc
+}  // namespace opencdc::cdc

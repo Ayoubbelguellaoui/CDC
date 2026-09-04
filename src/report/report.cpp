@@ -111,9 +111,11 @@ void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostre
 void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
     auto sorted = sorted_findings(findings);
     for (const auto& f : sorted) {
+        // clang-format off
         os << f.severity << " [" << f.rule_id << "] " << f.source_reg_name << " ("
            << f.source_domain << ")"
            << " -> " << f.dest_reg_name << " (" << f.dest_domain << ")";
+        // clang-format on
 
         if (f.waived)
             os << " [WAIVED]";

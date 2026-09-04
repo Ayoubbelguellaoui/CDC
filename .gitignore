@@ -34,3 +34,4 @@ Testing/
 
 # Dependencies (fetched by CMake)
 _deps/
+lcov*.deb

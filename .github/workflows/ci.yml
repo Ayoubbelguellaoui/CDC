@@ -70,7 +70,7 @@ jobs:
 
       - name: Capture Coverage
         run: |
-          lcov --capture --directory build --output-file coverage.info
+          lcov --capture --directory build --output-file coverage.info --rc geninfo_unexecuted_blocks=1
           lcov --remove coverage.info '/usr/*' '*/_deps/*' '*/tests/*' --output-file coverage.info
           lcov --list coverage.info
 

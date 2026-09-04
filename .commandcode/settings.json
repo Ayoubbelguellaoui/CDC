@@ -11,7 +11,18 @@
       "Shell(sh -c rm src/opencdc/version.h && mkdir -p docs/dev && mv BUG_REPORT.md BUG_FIXES.md ENHANCEMENT_SUMMARY.md docs/dev/ && rmdir tools)",
       "Shell(cmake:*)",
       "Shell(cmake --build build -j$(nproc))",
-      "Shell(ctest:*)"
+      "Shell(ctest:*)",
+      "Shell(VERSION:*)",
+      "Shell(setup.py:*)",
+      "Shell(never:*)",
+      "Shell(fresh:*)",
+      "Shell(.:*)",
+      "Shell(was:*)",
+      "Shell(,:*)",
+      "Shell(now:*)",
+      "Shell(stale:*)",
+      "Shell(the:*)",
+      "Shell(3FF:*)"
     ],
     "deny": [],
     "defaultMode": "default"

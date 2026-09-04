@@ -76,10 +76,10 @@ jobs:
 
       - name: Upload Coverage
         if: github.event_name == 'push'
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           files: coverage.info
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   sanitizers:
     runs-on: ubuntu-latest

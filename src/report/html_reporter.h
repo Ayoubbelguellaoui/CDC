@@ -21,7 +21,8 @@ struct HtmlReportOptions {
 class HtmlReporter {
    public:
     void generate_report(const std::vector<cdc::Finding>& findings,
-                         const HtmlReportOptions& options = {});
+                         const HtmlReportOptions& options = {},
+                         const std::string& analysis_status = "complete");
 
    private:
     void write_index_html(const std::vector<cdc::Finding>& findings,
@@ -33,7 +34,8 @@ class HtmlReporter {
     void write_css(const HtmlReportOptions& options);
     void write_js(const HtmlReportOptions& options);
 
-    std::string generate_summary_dashboard(const std::vector<cdc::Finding>& findings);
+    std::string generate_summary_dashboard(const std::vector<cdc::Finding>& findings,
+                                           const std::string& analysis_status = "complete");
     std::string generate_findings_table(const std::vector<cdc::Finding>& findings,
                                         bool include_source_snippets = true);
     std::string generate_severity_chart(const std::vector<cdc::Finding>& findings);

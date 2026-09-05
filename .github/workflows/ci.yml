@@ -70,8 +70,8 @@ jobs:
 
       - name: Capture Coverage
         run: |
-          lcov --capture --directory build --output-file coverage.info --ignore-errors mismatch
-          lcov --remove coverage.info '/usr/*' '*/_deps/*' '*/tests/*' --output-file coverage.info
+          lcov --capture --directory build --output-file coverage.info --ignore-errors mismatch,negative
+          lcov --remove coverage.info '/usr/*' '*/_deps/*' '*/tests/*' --output-file coverage.info --ignore-errors negative
           lcov --list coverage.info
 
       - name: Upload Coverage

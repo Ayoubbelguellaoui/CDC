@@ -1,6 +1,68 @@
 **Changelog**
 All notable changes to OpenCDC will be documented in this file.
 
+**[0.4.0] — 2026-09-05**
+
+**Fixed**
+- **CDC006 multi-stage fix**: Findings for 3FF+ chains now correctly report the actual stage pair with combinational logic, not always the first stage. Also detects combinational predecessors behind combinational nodes.
+- **CDC009 safety status**: Reset domain crossing findings now include `safety_status` and `safety_provenance` fields (was: Unknown/empty, invisible in safety reports).
+- **HTML safety-status filter**: Fixed CSS selector mismatch (`.safety-status` → `.safety-badge`) making the safety-status dropdown filter functional.
+- **CDC001 misleading reason**: Reason string now says "with X detected" when a synchronizer IS found, instead of always saying "without synchronization."
+- **CDC007 dead code**: Removed unreachable `else` branch in reason string ternary.
+- **Synchronizer dedup key**: `match()` deduplication now includes destination register ID, preventing multiple destinations from same source being collapsed.
+- **SynchronizerChain depth**: Depth is now computed from `stage_ids.size()` after chain walk, not hardcoded.
+- **Synchronizer strict mode**: `match()` chain walk now applies the same strict predecessor validation as `find_pattern_for_dest`, preventing inconsistent chain topologies.
+- **CDC001 ambiguous state**: Sync chains with structural warnings (reset polarity mismatch, fanout) now get `SafetyStatus::Ambiguous` instead of `VerifiedSafe`.
+- **CDC007 mixed reset**: Crossings where one register has reset and the other doesn't now emit CDC007 at `info` severity (was: silently unreported).
+- **Synchronizer warnings**: `has_chain_warnings()` method added for per-destination chain health check.
+- **CDC006 between stages**: Now fires on ANY combinational logic feeding a sync stage (not just cross-domain-driven), as unexpected combinational inputs defeat synchronizer purpose.
+- **Synchronizer width validation**: 2FF/3FF synchronizer detection now requires all stages to be single-bit (width=1). Multi-bit buses through synchronizer chains are no longer classified as safe crossings.
+- **CDC007 false positives**: CDC007 now fires as warning only when BOTH source and destination registers lack a reset signal (was: either one).
+- **ClockResolver integration**: Main analysis pipeline now calls `ClockResolver::resolve()` to detect gated/muxed clocks through the IR graph, not just from frontend flags.
+- **Analysis status tracking**: `AnalysisResult` now includes `analysis_status` field ("complete", "incomplete", or "failed") on all exit paths.
+- **Safety provenance**: All findings now carry `safety_status` and `safety_provenance` fields explaining how safety was determined.
+- **Muxed clock warning dedup**: Muxed clock warnings no longer share a `seen_clocks` set with domain resolution, preventing silent suppression.
+- **Synchronizer depth tracking**: 4+ stage synchronizer chains (e.g., src→meta→sync1→sync2→dst) now correctly detected as 3FF/4FF patterns instead of hardcoded 3-stage limit.
+- **CDC006 all stage pairs**: Combinational logic detection now checks ALL adjacent stage pairs in a sync chain, not just the second-to-second stage transition.
+- **CDC006 before-first-stage**: Also detects combinational logic between the cross-domain source and the first sync stage.
+- **CDC003 single-bit reconvergence**: Single-bit sources through independent 2FF sync chains no longer trigger CDC003.
+- **CDC003 BFS truncation warning**: BFS hop/node limit breach now appends a truncation notice to the CDC003 reason string.
+- **Report summary format**: Summary now includes `analysis_status` field in structured `key=value` format.
+
+**Added**
+- **Adversarial test suite**: 18+ new tests proving naming alone does not bypass detection rules (sync, gray-code, handshake, async FIFO, CDC007).
+- **Systematic CDC mutation tests**: 15 new mutation tests (`cdc_mutation_test.cpp`) covering golden sync, missing stage, combinational insertion, multi-bit bus, missing reset, gated clock, reconvergence, safety status, naming bypass, muxed clock, daisy chain, reset domain crossing, mixed reset, and thread determinism.
+- **Thread determinism test**: Verifies identical findings regardless of thread count (1, 2, 4) with complex topology.
+- **Analysis status tests**: Validates analysis_status "complete" and "failed" states.
+- **Safety status unit tests**: Tests verifying `safety_status`/`safety_provenance` populated on CDC001 (safe/unsafe), CDC002, CDC004, CDC005, CDC007, CDC008 findings.
+- **Sync chain adversarial tests**: Missing middle stage, mismatched reset polarity detection.
+- **CDC006 adversarial tests**: Bypass path detection, combinational between stage2-stage3.
+- **SafetyStatus enum**: New enum in Finding model (Unknown, Candidate, VerifiedSafe, VerifiedUnsafe, Ambiguous).
+- **Synchronizer warnings**: `SynchronizerChain` now carries `warnings` vector for reset polarity mismatches and fanout violations.
+- **Stage reset validation**: `validate_stage_reset()` detects async reset on metastability-sensitive stages.
+- **Stage fanout validation**: `validate_stage_fanout()` detects stage1 feeding both stage2 and unrelated logic.
+- **JSON report envelope**: JSON output wrapped in `{"analysis_status":"...","finding_count":N,"findings":[...]}`.
+- **JSON report new fields**: `is_gray_coded`, `has_handshake`, `source_module_path`, `dest_module_path`, `crosses_module_boundary` added to each finding.
+- **HTML safety-status filter**: New dropdown to filter findings by safety status (Verified Safe/Unsafe/Candidate/Ambiguous).
+- **Text report status indicator**: Text output now shows `Analysis status: <status>` header.
+- **Report JSON safety field tests**: Tests verifying `safety_status`, `safety_provenance`, `is_gray_coded`, `has_handshake`, `source_module_path`, `dest_module_path`, `crosses_module_boundary` in JSON output.
+- **HTML safety-status filter rendering test**: Test verifying `<select id="safety-filter">` is rendered with all options.
+- **Text report analysis_status test**: Test verifying `Analysis status:` header appears in text output.
+- **CDC008/009 mutation tests**: Tests for multi-domain daisy chain and reset domain crossing detection.
+- **Mixed reset test**: Test verifying CDC007 fires at `info` severity when only one register lacks reset.
+- **Rule interaction table**: Expanded to cover all 10 rules with interaction descriptions in `docs/rule-semantics.md`.
+- **Safety provenance documentation**: Full provenance model documented in `docs/architecture.md`.
+- **Missing reset adversarial fixture**: `missing_reset_adversarial.sv` + full-pipeline test.
+
+**Changed**
+- **CDC001 sync-chain description**: Updated docs to reflect that CDC002/004/005/007 are NOT suppressed when sync chain detected.
+- **CDC002 detection description**: Updated docs to match structural PatternRecognizer (not substring matching).
+- **Architecture docs**: Updated to reflect ClockResolver integration, analysis_status, suppress_reset_crossings, and CDC009 in pipeline.
+- **Text report**: Uses structured `key=value` summary format.
+- **Rule interaction table**: Expanded to cover all 10 rules with interaction descriptions.
+- **Safety provenance documentation**: Full provenance model documented in architecture.
+- **JSON field semantics**: Documented that `is_gray_coded`/`has_handshake` are informational hints, not safety-classification evidence.
+
 **[0.3.1] — 2026-08-21**
 
 **Fixed**

@@ -425,7 +425,29 @@ bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_
     for (const auto& handshake : handshake_cache_) {
         if ((handshake.valid_id == src_id && handshake.ready_id == dst_id) ||
             (handshake.ready_id == src_id && handshake.valid_id == dst_id)) {
-            return handshake.verified;
+            if (!handshake.verified)
+                continue;
+
+            // B3: Require a feedback path — the ready signal must have a register
+            // successor in a different domain from itself (ack path back to source).
+            // Without this, two cross-domain registers named "valid"/"ready" with
+            // no actual handshake topology would pass verification.
+            const ir::Node* ready_node = graph.find_node(handshake.ready_id);
+            if (!ready_node)
+                continue;
+            bool has_feedback = false;
+            for (uint64_t rsucc : graph.register_successors(handshake.ready_id, false)) {
+                const ir::Node* succ = graph.find_node(rsucc);
+                if (succ && succ->kind == ir::NodeKind::Register &&
+                    succ->clock_domain != ready_node->clock_domain) {
+                    has_feedback = true;
+                    break;
+                }
+            }
+            if (!has_feedback)
+                continue;
+
+            return true;
         }
     }
 

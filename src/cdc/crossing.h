@@ -14,6 +14,8 @@
 
 namespace opencdc::cdc {
 
+enum class SafetyStatus { Unknown, Candidate, VerifiedSafe, VerifiedUnsafe, Ambiguous };
+
 struct CrossingPath {
     std::vector<uint64_t> node_ids;
 };
@@ -53,6 +55,10 @@ struct Finding {
     std::string source_module_path;
     std::string dest_module_path;
     bool crosses_module_boundary = false;
+    SafetyStatus safety_status = SafetyStatus::Unknown;
+    std::string safety_provenance;
+    bool suppressed_by_false_path = false;
+    std::string false_path_source;
 };
 
 class CrossingAnalyzer {

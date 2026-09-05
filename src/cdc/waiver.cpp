@@ -95,12 +95,40 @@ bool WaiverEngine::fields_match(const std::string& waiver_field, const std::stri
     return to_lower(waiver_field) == to_lower(finding_field);
 }
 
-static bool substring_match(const std::string& pattern, const std::string& value) {
+static bool hierarchical_match(const std::string& pattern, const std::string& value) {
     if (pattern.empty())
         return true;
     if (value.empty())
         return false;
-    return to_lower(value).find(to_lower(pattern)) != std::string::npos;
+
+    auto split = [](const std::string& s) {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (start < s.size()) {
+            size_t dot = s.find('.', start);
+            if (dot == std::string::npos) {
+                parts.push_back(s.substr(start));
+                break;
+            }
+            parts.push_back(s.substr(start, dot - start));
+            start = dot + 1;
+        }
+        return parts;
+    };
+
+    auto pat_parts = split(to_lower(pattern));
+    auto val_parts = split(to_lower(value));
+
+    if (pat_parts.size() > val_parts.size())
+        return false;
+
+    // Check if pattern segments form a suffix of the value segments.
+    size_t offset = val_parts.size() - pat_parts.size();
+    for (size_t i = 0; i < pat_parts.size(); ++i) {
+        if (pat_parts[i] != val_parts[offset + i])
+            return false;
+    }
+    return true;
 }
 
 // Rule ids in this tool have the shape CDC001 (letter prefix + digits); "*"
@@ -165,9 +193,9 @@ bool WaiverEngine::matches(const Finding& f, const Waiver& w) const {
         return false;
 
     if (w.match_type == WaiverMatchType::Substring) {
-        if (!substring_match(w.source_reg_name, f.source_reg_name))
+        if (!hierarchical_match(w.source_reg_name, f.source_reg_name))
             return false;
-        if (!substring_match(w.dest_reg_name, f.dest_reg_name))
+        if (!hierarchical_match(w.dest_reg_name, f.dest_reg_name))
             return false;
     } else if (w.match_type == WaiverMatchType::Wildcard) {
         if (!w.source_reg_name.empty()) {

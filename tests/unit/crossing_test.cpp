@@ -243,7 +243,34 @@ TEST_F(CrossingTest, FalsePathSuppressesCrossing) {
     crossing_analyzer.set_clock_constraints(&constraints);
     auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
 
-    EXPECT_TRUE(findings.empty());
+    // False-path suppresses the crossing: a suppressed finding is emitted
+    // for auditability, but it is NOT an active error/warning.
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_TRUE(findings[0].suppressed_by_false_path);
+    EXPECT_EQ(findings[0].severity, "info");
+}
+
+TEST_F(CrossingTest, FalsePathSuppressedFindingHasAuditTrail) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"mod.sv", 6, 5});
+    auto* s = graph.find_node_mutable(src); s->reset_signal = "rst_n";
+    auto* d = graph.find_node_mutable(dst); d->reset_signal = "rst_n";
+    graph.add_edge(src, dst);
+
+    auto dr = domain_extractor.extract(graph);
+    opencdc::clock::ClockConstraints constraints;
+    opencdc::clock::FalsePath fp;
+    fp.from_reg = "mod.src_ff";
+    fp.to_reg = "mod.dst_ff";
+    constraints.false_paths.push_back(fp);
+    crossing_analyzer.set_clock_constraints(&constraints);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_TRUE(findings[0].suppressed_by_false_path);
+    EXPECT_FALSE(findings[0].false_path_source.empty());
+    EXPECT_FALSE(findings[0].safety_provenance.empty());
+    EXPECT_EQ(findings[0].safety_status, SafetyStatus::Ambiguous);
 }
 
 TEST_F(CrossingTest, FalsePathPartialMatch) {
@@ -299,4 +326,37 @@ TEST_F(CrossingTest, MulticyclePathAnnotatesCrossing) {
     ASSERT_EQ(findings.size(), 1u);
     EXPECT_TRUE(findings[0].has_multicycle_exception);
     EXPECT_EQ(findings[0].multicycle_cycles, 3);
+}
+
+TEST_F(CrossingTest, SafetyStatusPopulatedOnUnsyncedCdc001) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"mod.sv", 6, 5});
+    auto* s = graph.find_node_mutable(src); s->reset_signal = "rst_n";
+    auto* d = graph.find_node_mutable(dst); d->reset_signal = "rst_n";
+    graph.add_edge(src, dst);
+
+    auto dr = domain_extractor.extract(graph);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].safety_status, SafetyStatus::VerifiedUnsafe);
+    EXPECT_FALSE(findings[0].safety_provenance.empty());
+}
+
+TEST_F(CrossingTest, SafetyStatusVerifiedSafeWithSyncChain) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t meta = graph.add_register("mod.meta", "clk_b", 1, {"mod.sv", 8, 5});
+    uint64_t sync = graph.add_register("mod.sync", "clk_b", 1, {"mod.sv", 9, 5});
+    for (uint64_t id : {src, meta, sync}) {
+        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+    }
+    graph.add_edge(src, meta);
+    graph.add_edge(meta, sync);
+
+    auto dr = domain_extractor.extract(graph);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].safety_status, SafetyStatus::VerifiedSafe);
+    EXPECT_NE(findings[0].safety_provenance.find("synchronizer"), std::string::npos);
 }

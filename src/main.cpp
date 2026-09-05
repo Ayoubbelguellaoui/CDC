@@ -288,8 +288,8 @@ int run(int argc, const char* argv[]) {
     }
 
     if (opts.format == "text") {
-        reporter.report_text(findings, *out);
-        reporter.report_summary(findings, std::cerr);
+        reporter.report_text(findings, *out, analysis.analysis_status);
+        reporter.report_summary(findings, std::cerr, analysis.analysis_status);
     } else if (opts.format == "html") {
         report::HtmlReporter html_reporter;
         report::HtmlReportOptions html_opts;
@@ -297,7 +297,7 @@ int run(int argc, const char* argv[]) {
             html_opts.output_dir = opts.html_output_dir;
         }
         try {
-            html_reporter.generate_report(findings, html_opts);
+            html_reporter.generate_report(findings, html_opts, analysis.analysis_status);
         } catch (const std::exception& e) {
             std::cerr << "Error: could not generate HTML report: " << e.what() << "\n";
             return static_cast<int>(ExitCode::INPUT_ERROR);
@@ -306,7 +306,7 @@ int run(int argc, const char* argv[]) {
             std::cerr << "HTML report generated in " << html_opts.output_dir << "/\n";
         }
     } else {
-        reporter.report_json(findings, *out);
+        reporter.report_json(findings, *out, analysis.analysis_status);
     }
 
     return reporter.has_unsuppressed_errors(findings) ? static_cast<int>(ExitCode::FINDINGS)

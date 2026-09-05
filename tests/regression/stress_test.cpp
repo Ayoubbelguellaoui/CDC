@@ -102,7 +102,7 @@ TEST_F(StressTest, Cdc006_NoDirectFeedFalsePositive) {
 }
 
 TEST_F(StressTest, Cdc007_MissingReset) {
-    // Fires when either side of the crossing lacks a reset.
+    // Fires warning when BOTH registers lack reset, info for mixed-reset.
     EXPECT_EQ(count_by_rule("CDC007"), 3);
 }
 

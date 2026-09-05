@@ -29,6 +29,7 @@ struct AnalysisRequest {
 
 struct AnalysisResult {
     bool ok = false;
+    std::string analysis_status = "complete";
     std::vector<std::string> errors;
     std::vector<std::string> warnings;
     ir::Graph graph;

@@ -53,12 +53,14 @@ TEST_F(ReconvergenceTest, SafeSingleBitNoHazard) {
     uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
     uint64_t dst1 = graph.add_register("mod.dst1", "clk_b", 1, {"mod.sv", 8, 5});
     uint64_t dst2 = graph.add_register("mod.dst2", "clk_b", 1, {"mod.sv", 9, 5});
+    uint64_t mux = graph.add_combinational("mod.mux", LogicType::Mux, {dst1, dst2}, 1, {"mod.sv", 11, 1});
     uint64_t consumer = graph.add_register("mod.consumer", "clk_b", 1, {"mod.sv", 10, 5});
 
     graph.add_edge(src, dst1);
     graph.add_edge(src, dst2);
-    graph.add_edge(dst1, consumer);
-    graph.add_edge(dst2, consumer);
+    graph.add_edge(dst1, mux);
+    graph.add_edge(dst2, mux);
+    graph.add_edge(mux, consumer);
 
     auto dr = domain_extractor.extract(graph);
     auto crossings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);

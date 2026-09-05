@@ -66,10 +66,19 @@ TEST_F(AnalyzerTest, ConfigOnlyFalsePathSuppressesCrossing) {
     std::remove(cfg_path.c_str());
     ASSERT_TRUE(result.ok);
 
+    bool has_active_cdc001 = false;
     for (const auto& f : result.findings) {
-        EXPECT_NE(f.rule_id, "CDC001")
-            << "config-only false path did not suppress crossing";
+        if (f.rule_id == "CDC001" && !f.suppressed_by_false_path)
+            has_active_cdc001 = true;
     }
+    EXPECT_FALSE(has_active_cdc001) << "config-only false path did not suppress crossing";
+    // False-path crossings are emitted as suppressed info findings for auditability.
+    bool has_suppressed = false;
+    for (const auto& f : result.findings) {
+        if (f.suppressed_by_false_path)
+            has_suppressed = true;
+    }
+    EXPECT_TRUE(has_suppressed) << "False-path should produce a suppressed finding for audit trail";
 }
 
 TEST_F(AnalyzerTest, CliFalsePathSuppressesCrossing) {
@@ -81,10 +90,12 @@ TEST_F(AnalyzerTest, CliFalsePathSuppressesCrossing) {
     auto result = analyzer.run(req);
     ASSERT_TRUE(result.ok);
 
+    bool has_active_cdc001 = false;
     for (const auto& f : result.findings) {
-        EXPECT_NE(f.rule_id, "CDC001")
-            << "request false path did not suppress crossing";
+        if (f.rule_id == "CDC001" && !f.suppressed_by_false_path)
+            has_active_cdc001 = true;
     }
+    EXPECT_FALSE(has_active_cdc001) << "request false path did not suppress crossing";
 }
 
 TEST_F(AnalyzerTest, UnknownRuleIsInputError) {
@@ -118,4 +129,46 @@ TEST_F(AnalyzerTest, MissingTopModuleIsInputError) {
     auto result = analyzer.run(req);
     EXPECT_FALSE(result.ok);
     ASSERT_FALSE(result.errors.empty());
+}
+
+TEST_F(AnalyzerTest, MissingResetAdversarialFixture) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("missing_reset_adversarial.sv")};
+    req.top_module = "missing_reset_adversarial";
+
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok);
+
+    // Verify CDC007 behavior: both cases are now info severity
+    // (missing reset is advisory, not a CDC error).
+    int cdc007_warnings = 0;
+    int cdc007_info = 0;
+    for (const auto& f : result.findings) {
+        if (f.rule_id == "CDC007" && f.severity == "warning")
+            cdc007_warnings++;
+        if (f.rule_id == "CDC007" && f.severity == "info")
+            cdc007_info++;
+    }
+    EXPECT_EQ(cdc007_warnings, 0) << "CDC007 should not produce warning severity anymore";
+    EXPECT_EQ(cdc007_info, 2) << "Should have 2 CDC007 info (both-unreset + mixed-reset)";
+}
+
+TEST_F(AnalyzerTest, NonexistentFileReportsError) {
+    AnalysisRequest req;
+    req.input_files = {"/tmp/nonexistent_file_12345.sv"};
+    req.top_module = "test";
+
+    auto result = analyzer.run(req);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.analysis_status, "failed");
+}
+
+TEST_F(AnalyzerTest, AnalysisStatusCompleteOnSuccess) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("cdc_crossing.sv")};
+    req.top_module = "simple_cdc_crossing";
+
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok);
+    EXPECT_EQ(result.analysis_status, "complete");
 }

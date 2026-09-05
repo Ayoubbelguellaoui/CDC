@@ -13,8 +13,8 @@ protected:
 TEST_F(WaiverRegexTest, SubstringMatch) {
     Waiver w;
     w.rule_id = "CDC001";
-    w.source_reg_name = "src";
-    w.dest_reg_name = "dst";
+    w.source_reg_name = "module.src_reg";
+    w.dest_reg_name = "module.dst_reg";
     w.match_type = WaiverMatchType::Substring;
     
     engine.add_waiver(w);
@@ -25,6 +25,24 @@ TEST_F(WaiverRegexTest, SubstringMatch) {
     f.dest_reg_name = "top.module.dst_reg";
     
     EXPECT_TRUE(engine.matches(f, engine.waivers()[0]));
+}
+
+TEST_F(WaiverRegexTest, SubstringMatchNoOvermatch) {
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    w.match_type = WaiverMatchType::Substring;
+    
+    engine.add_waiver(w);
+    
+    Finding f;
+    f.rule_id = "CDC001";
+    f.source_reg_name = "other_mod.src_extra";
+    f.dest_reg_name = "other_mod.dst_extra";
+    
+    EXPECT_FALSE(engine.matches(f, engine.waivers()[0]))
+        << "Substring match should not overmatch across hierarchical boundaries";
 }
 
 TEST_F(WaiverRegexTest, WildcardMatchSingle) {

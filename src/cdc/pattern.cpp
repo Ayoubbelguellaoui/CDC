@@ -40,9 +40,6 @@ bool PatternRecognizer::verify_gray_encoder_structure(uint64_t node_id,
     if (!node)
         return false;
 
-    if (node->logic_type == ir::LogicType::GrayEncoder)
-        return true;
-
     if (node->logic_type != ir::LogicType::Xor || node->logic_inputs.size() != 2)
         return false;
 
@@ -187,13 +184,31 @@ std::vector<AsyncFifoPattern> PatternRecognizer::detect_async_fifos(const ir::Gr
                 bool b_gray = b->is_gray_coded || b->logic_type == ir::LogicType::GrayEncoder ||
                               b->logic_type == ir::LogicType::GrayDecoder;
 
+                // Check that each pointer has a register successor in the
+                // other domain (synchronized pointer crossing).
+                auto has_sync_in_other = [&](uint64_t ptr_id,
+                                             const std::string& other_domain) -> bool {
+                    for (uint64_t rsucc : graph.register_successors(ptr_id, false)) {
+                        const ir::Node* succ = graph.find_node(rsucc);
+                        if (succ && succ->kind == ir::NodeKind::Register &&
+                            succ->clock_domain == other_domain) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                bool a_synced = has_sync_in_other(ptrs[i], b->clock_domain);
+                bool b_synced = has_sync_in_other(ptrs[j], a->clock_domain);
+                bool has_sync = a_synced || b_synced;
+
                 AsyncFifoPattern fifo;
                 fifo.read_ptr_id = ptrs[i];
                 fifo.write_ptr_id = ptrs[j];
                 fifo.read_domain = a->clock_domain;
                 fifo.write_domain = b->clock_domain;
                 fifo.has_gray_encoding = a_gray && b_gray;
-                fifo.verified = a_gray && b_gray;
+                fifo.has_synchronized_ptr = has_sync;
+                fifo.verified = a_gray && b_gray && has_sync;
                 fifos.push_back(fifo);
             }
         }
@@ -250,8 +265,35 @@ std::vector<HandshakePattern> PatternRecognizer::detect_handshakes(const ir::Gra
                         hp.ready_id = ready_id;
                         hp.source_domain = valid_node->clock_domain;
                         hp.dest_domain = ready_node->clock_domain;
-                        // B3: Verified only for cross-domain handshake
-                        hp.verified = (valid_node->clock_domain != ready_node->clock_domain);
+
+                        // Data path: valid register must drive a register in the
+                        // destination domain (proves valid+data relationship).
+                        hp.has_data_path = false;
+                        for (uint64_t rsucc : graph.register_successors(valid_id, false)) {
+                            const ir::Node* succ = graph.find_node(rsucc);
+                            if (succ && succ->kind == ir::NodeKind::Register &&
+                                succ->clock_domain == ready_node->clock_domain) {
+                                hp.has_data_path = true;
+                                break;
+                            }
+                        }
+
+                        // Feedback path: ready register must drive a register
+                        // in a different domain from itself (ack back to source).
+                        hp.has_feedback_path = false;
+                        for (uint64_t rsucc : graph.register_successors(ready_id, false)) {
+                            const ir::Node* succ = graph.find_node(rsucc);
+                            if (succ && succ->kind == ir::NodeKind::Register &&
+                                succ->clock_domain != ready_node->clock_domain) {
+                                hp.has_feedback_path = true;
+                                break;
+                            }
+                        }
+
+                        // B3: Verified only for cross-domain handshake with
+                        // both data path and feedback path evidence.
+                        hp.verified = (valid_node->clock_domain != ready_node->clock_domain) &&
+                                      hp.has_data_path && hp.has_feedback_path;
                         patterns.push_back(hp);
                     }
                 }
@@ -272,9 +314,9 @@ std::vector<GrayCodePattern> PatternRecognizer::detect_gray_encoding(const ir::G
 
     for (const auto& node : graph.nodes()) {
         if (node.kind == ir::NodeKind::Combinational) {
-            if (node.logic_type == ir::LogicType::GrayEncoder ||
-                (node.logic_type == ir::LogicType::Xor &&
-                 verify_gray_encoder_structure(node.id, graph))) {
+            bool structural_match = (node.logic_type == ir::LogicType::Xor &&
+                                     verify_gray_encoder_structure(node.id, graph));
+            if (structural_match || node.logic_type == ir::LogicType::GrayEncoder) {
                 GrayCodePattern gp;
                 gp.encoder_id = node.id;
                 gp.decoder_id = 0;
@@ -285,11 +327,20 @@ std::vector<GrayCodePattern> PatternRecognizer::detect_gray_encoding(const ir::G
                 decoder_ids.push_back(node.id);
             }
         } else if (node.kind == ir::NodeKind::Register) {
-            if (node.logic_type == ir::LogicType::GrayEncoder || node.is_gray_coded) {
+            if (node.is_gray_coded) {
                 GrayCodePattern gp;
                 gp.encoder_id = node.id;
                 gp.decoder_id = 0;
                 gp.verified = true;
+                patterns.push_back(std::move(gp));
+            } else if (node.logic_type == ir::LogicType::GrayEncoder) {
+                // Frontend labels this as a gray encoder but the node lacks
+                // the is_gray_coded flag (set by AST analysis of the
+                // gray <= bin ^ (bin >> 1) pattern).  Detected but not verified.
+                GrayCodePattern gp;
+                gp.encoder_id = node.id;
+                gp.decoder_id = 0;
+                gp.verified = false;
                 patterns.push_back(std::move(gp));
             }
             if (node.logic_type == ir::LogicType::GrayDecoder) {
@@ -382,28 +433,38 @@ bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_
         return false;
     };
 
-    // Explicit encoder→decoder logic-type pairs require a real connection.
+    // Explicit encoder→decoder logic-type pairs require a real connection AND
+    // structural verification of the encoder (XOR-of-delayed-register pattern).
     if (src->logic_type == ir::LogicType::GrayEncoder &&
-        dst->logic_type == ir::LogicType::GrayDecoder && connected_to_dst(src_id)) {
+        dst->logic_type == ir::LogicType::GrayDecoder && connected_to_dst(src_id) &&
+        verify_gray_encoder_structure(src_id, graph)) {
         return true;
     }
-    // NOTE: Only GrayEncoder(src)→GrayDecoder(dst) is a valid CDC-safe gray-code
-    // crossing. The reversed direction (Decoder→Encoder) is NOT safe and is removed.
+    // NOTE: Only GrayEncoder(src)→GrayDecoder(dst) with structural proof is a
+    // valid CDC-safe gray-code crossing.  The reversed direction
+    // (Decoder→Encoder) is NOT safe.  Bare LogicType::GrayEncoder without XOR
+    // structure is NOT sufficient.
 
-    // Gray-encoded source: safe when the source is a registered gray pattern
-    // member. A pattern with a known decoder requires that decoder to be the
+    // Gray-encoded source: safe only when the source is a registered gray
+    // pattern member with structural verification (gp.verified == true).  A
+    // pattern with a known decoder requires that decoder to be the
     // destination; a single-ended gray source (no decoder node in the IR —
     // decode happens downstream in the destination domain) is safe from the
-    // encoder side.
+    // encoder side when the encoder has structural proof.
     for (const auto& gp : gray_cache_) {
         if (gp.encoder_id != src_id)
+            continue;
+        if (!gp.verified)
             continue;
         if (gp.decoder_id == 0 || gp.decoder_id == dst_id)
             return true;
     }
     // Structural gray encoder feeding the source register (encoder output
-    // registered before the crossing).
+    // registered before the crossing).  The encoder must be structurally
+    // verified (XOR-of-delayed-register pattern or is_gray_coded flag).
     for (const auto& gp : gray_cache_) {
+        if (!gp.verified)
+            continue;
         if (gp.decoder_id != 0)
             continue;
         for (uint64_t pred : graph.predecessors(src_id)) {
@@ -421,32 +482,12 @@ bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_
         }
     }
 
-    // Verified cross-domain handshake pair.
+    // Verified cross-domain handshake pair with data path and feedback path.
     for (const auto& handshake : handshake_cache_) {
         if ((handshake.valid_id == src_id && handshake.ready_id == dst_id) ||
             (handshake.ready_id == src_id && handshake.valid_id == dst_id)) {
             if (!handshake.verified)
                 continue;
-
-            // B3: Require a feedback path — the ready signal must have a register
-            // successor in a different domain from itself (ack path back to source).
-            // Without this, two cross-domain registers named "valid"/"ready" with
-            // no actual handshake topology would pass verification.
-            const ir::Node* ready_node = graph.find_node(handshake.ready_id);
-            if (!ready_node)
-                continue;
-            bool has_feedback = false;
-            for (uint64_t rsucc : graph.register_successors(handshake.ready_id, false)) {
-                const ir::Node* succ = graph.find_node(rsucc);
-                if (succ && succ->kind == ir::NodeKind::Register &&
-                    succ->clock_domain != ready_node->clock_domain) {
-                    has_feedback = true;
-                    break;
-                }
-            }
-            if (!has_feedback)
-                continue;
-
             return true;
         }
     }

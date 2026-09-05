@@ -21,11 +21,11 @@ This document defines the intent, violation conditions, required evidence, safe 
 |-----------|-------------|
 | **Intent** | Detect multi-bit buses crossing clock domains without gray-code encoding, handshake protocol, or async FIFO pattern. |
 | **Violation** | Source register width > 1, crossing to different domain, and `is_verified_safe_crossing` returns false. |
-| **Required Evidence** | Cross-domain path, width > 1, no structural gray encoder→decoder, handshake valid/ready pair, or async FIFO pointer pair. |
-| **Safe Conditions** | Gray-code verified, handshake protocol verified, async FIFO pointer verified. |
+| **Required Evidence** | Cross-domain path, width > 1, no verified gray-code encoder→decoder pair, registered gray-encoded source, handshake valid/ready pair with feedback path, or async FIFO pointer pair with cross-domain synchronization. |
+| **Safe Conditions** | Gray-code verified (structural XOR-of-delayed-register or frontend `GrayEncoder` logic type), handshake protocol verified (cross-domain + data path + feedback path), async FIFO pointer verified (both gray-coded + synchronized pointer). |
 | **Exemptions** | None. |
 | **Constraint Interaction** | False-path suppresses (no crossing reported at all). |
-| **False-Positive Risk** | Medium. Name-based heuristic flags (`is_gray_coded`, `is_handshake_signal`) do NOT bypass — only structural verification matters. |
+| **False-Positive Risk** | Medium. Bare `is_gray_coded` flag or `is_handshake_signal` flag without structural verification does NOT suppress CDC002. |
 | **False-Negative Risk** | Low. Structural verification is conservative. |
 
 ## CDC003 — Reconvergence Hazard
@@ -90,6 +90,7 @@ This document defines the intent, violation conditions, required evidence, safe 
 | **Safe Conditions** | At least one register has a reset signal. |
 | **Exemptions** | None. |
 | **Constraint Interaction** | False-path suppresses. |
+| **Policy Interaction** | Default severity is `info` (advisory). When `reset_policy.require_cdc_register_reset: true`, severity upgrades to `warning` and `safety_status` becomes `verified_unsafe`. Mixed-reset case (one register has reset) is always `info` regardless of policy. |
 | **False-Positive Risk** | Low. Only fires when both registers truly lack reset. |
 | **False-Negative Risk** | Low. |
 

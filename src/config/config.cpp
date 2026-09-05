@@ -218,11 +218,32 @@ void ConfigParser::parse_false_path_section(const std::string& content, Config& 
     }
 }
 
+void ConfigParser::parse_reset_policy_section(const std::string& content, Config& config) const {
+    std::istringstream iss(content);
+    std::string line;
+
+    while (std::getline(iss, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        size_t colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string key = trim(line.substr(0, colon));
+            std::string value = to_lower(trim(line.substr(colon + 1)));
+
+            if (to_lower(key) == "require_cdc_register_reset") {
+                config.reset_policy.require_cdc_register_reset = (value == "true");
+            }
+        }
+    }
+}
+
 Config ConfigParser::parse_string(const std::string& content, std::string* error) const {
     Config config;
 
     std::string rules_section, waivers_section, output_section, false_paths_section,
-        clock_groups_section;
+        clock_groups_section, reset_policy_section;
     std::string current_section;
 
     std::istringstream iss(content);
@@ -238,7 +259,7 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
 
         std::string lower = to_lower(trimmed);
         if (lower == "rules:" || lower == "waivers:" || lower == "output:" ||
-            lower == "false_paths:" || lower == "clock_groups:") {
+            lower == "false_paths:" || lower == "clock_groups:" || lower == "reset_policy:") {
             current_section = to_lower(trimmed.substr(0, trimmed.size() - 1));
             current_rule.clear();
             continue;
@@ -309,6 +330,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
             false_paths_section += line + "\n";
         } else if (current_section == "clock_groups") {
             clock_groups_section += line + "\n";
+        } else if (current_section == "reset_policy") {
+            reset_policy_section += line + "\n";
         }
     }
 
@@ -354,6 +377,9 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
             }
         }
     }
+
+    if (!reset_policy_section.empty())
+        parse_reset_policy_section(reset_policy_section, config);
 
     return config;
 }

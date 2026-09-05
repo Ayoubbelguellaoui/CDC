@@ -196,6 +196,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // Always attach constraints: config and request false paths must be
     // honored even when no constraints file was provided.
     crossing_analyzer.set_clock_constraints(&constraints);
+    crossing_analyzer.set_reset_policy(&cfg.reset_policy);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 

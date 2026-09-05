@@ -19,6 +19,7 @@ struct AsyncFifoPattern {
     std::string read_domain;
     std::string write_domain;
     bool has_gray_encoding;
+    bool has_synchronized_ptr;
     bool verified;
 };
 
@@ -28,6 +29,8 @@ struct HandshakePattern {
     uint64_t data_id = 0;
     std::string source_domain;
     std::string dest_domain;
+    bool has_data_path;
+    bool has_feedback_path;
     bool verified;
 };
 

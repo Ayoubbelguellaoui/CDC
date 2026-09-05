@@ -10,6 +10,7 @@
 #include "cdc/synchronizer.h"
 #include "clock/constraints.h"
 #include "clock/domain.h"
+#include "config/config.h"
 #include "ir/graph.h"
 
 namespace opencdc::cdc {
@@ -76,6 +77,10 @@ class CrossingAnalyzer {
         clock_constraints_ = constraints;
     }
 
+    void set_reset_policy(const config::ResetPolicyConfig* policy) {
+        reset_policy_ = policy;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -88,6 +93,7 @@ class CrossingAnalyzer {
     SynchronizerMatcher sync_matcher_;
     PatternRecognizer* pattern_recognizer_ = nullptr;
     const clock::ClockConstraints* clock_constraints_ = nullptr;
+    const config::ResetPolicyConfig* reset_policy_ = nullptr;
 };
 
 }  // namespace opencdc::cdc

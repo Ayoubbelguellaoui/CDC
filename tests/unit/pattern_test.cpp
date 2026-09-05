@@ -215,6 +215,7 @@ TEST_F(PatternRecognizerTest, UnrelatedDestNotSafeForEncoderPair) {
     uint64_t other = graph.add_register("top.other", "clk_b", 8, {"test.sv", 12, 5});
 
     graph.find_node_mutable(encoder)->logic_type = LogicType::GrayEncoder;
+    graph.find_node_mutable(encoder)->is_gray_coded = true;
     graph.find_node_mutable(decoder)->logic_type = LogicType::GrayDecoder;
     graph.add_edge(encoder, decoder);
     graph.add_edge(encoder, other);
@@ -240,6 +241,10 @@ TEST_F(PatternRecognizerTest, VerifiedFifoPairSuppressesCrossing) {
     graph.find_node_mutable(wr_ptr)->is_async_fifo_ptr = true;
     graph.find_node_mutable(wr_ptr)->is_gray_coded = true;
     graph.add_edge(wr_ptr, rd_ptr);
+
+    // Add synchronized pointer stage: wr_ptr feeds a register in the read domain.
+    uint64_t wr_sync = graph.add_register("fifo.wr_ptr_sync", "clk_rd", 4, {"test.sv", 12, 5});
+    graph.add_edge(wr_ptr, wr_sync);
 
     EXPECT_TRUE(recognizer.is_verified_safe_crossing(wr_ptr, rd_ptr, graph));
     // Un-gray-coded FIFO pointers are detected but not verified.

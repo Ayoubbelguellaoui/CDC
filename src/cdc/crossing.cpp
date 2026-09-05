@@ -359,10 +359,11 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             }
 
             if (src->reset_signal.empty() && dst->reset_signal.empty()) {
+                bool strict = reset_policy_ && reset_policy_->require_cdc_register_reset;
                 Finding nr;
                 nr.rule_id = "CDC007";
                 nr.rule_name = "missing_reset";
-                nr.severity = "info";
+                nr.severity = strict ? "warning" : "info";
                 nr.source_reg_id = src_id;
                 nr.dest_reg_id = dst_id;
                 nr.source_reg_name = src->hier_name;
@@ -374,13 +375,22 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 nr.bus_width = src->width;
                 nr.source_module_path = src->module_path;
                 nr.dest_module_path = dst->module_path;
-                nr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
-                            dst->hier_name +
-                            "': neither register has a reset signal. "
-                            "This is advisory — many datapath registers intentionally "
-                            "omit reset. Use waivers or methodology rules to manage.";
-                nr.safety_status = SafetyStatus::Candidate;
-                nr.safety_provenance = "Neither register has a reset signal";
+                if (strict) {
+                    nr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
+                                dst->hier_name +
+                                "': neither register has a reset signal. "
+                                "Strict reset policy requires all CDC registers to have reset.";
+                    nr.safety_status = SafetyStatus::VerifiedUnsafe;
+                    nr.safety_provenance = "Neither register has reset — strict reset policy";
+                } else {
+                    nr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
+                                dst->hier_name +
+                                "': neither register has a reset signal. "
+                                "This is advisory — many datapath registers intentionally "
+                                "omit reset. Use waivers or methodology rules to manage.";
+                    nr.safety_status = SafetyStatus::Candidate;
+                    nr.safety_provenance = "Neither register has a reset signal";
+                }
                 local_findings.push_back(std::move(nr));
             } else if (src->reset_signal.empty() != dst->reset_signal.empty()) {
                 Finding mr;

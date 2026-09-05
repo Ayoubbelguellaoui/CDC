@@ -9,11 +9,13 @@
 
 namespace opencdc::cdc {
 
-enum class SyncPattern { None, TwoFF, ThreeFF };
+enum class SyncPattern { None, TwoFF, ThreeFF, FourFF };
 
 struct SynchronizerChain {
     SyncPattern pattern = SyncPattern::None;
+    size_t depth = 0;
     std::vector<uint64_t> stage_ids;
+    std::vector<std::string> warnings;
     uint64_t source_reg_id = 0;
     std::string clock_domain;
 };
@@ -25,10 +27,15 @@ class SynchronizerMatcher {
     SyncPattern find_pattern_for_dest(uint64_t dest_reg_id, const ir::Graph& graph,
                                       bool strict = false) const;
 
-   private:
-    bool validate_2ff(const ir::Graph& graph, uint64_t s1, uint64_t s2) const;
+    bool has_chain_warnings(const ir::Graph& graph, uint64_t dest_reg_id) const;
 
-    bool validate_3ff(const ir::Graph& graph, uint64_t s1, uint64_t s2, uint64_t s3) const;
+   private:
+    std::string validate_stage_reset(const ir::Graph& graph, uint64_t stage_id,
+                                     uint64_t prev_stage_id) const;
+
+    bool validate_stage_fanout(const ir::Graph& graph, uint64_t stage1_id) const;
+
+    void collect_chain_warnings(const ir::Graph& graph, SynchronizerChain& chain) const;
 };
 
 }  // namespace opencdc::cdc

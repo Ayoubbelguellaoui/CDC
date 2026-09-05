@@ -125,11 +125,16 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
                            "' (async reset '" + src.reset_signal + "') feeds '" + dst->hier_name +
                            "' (reset '" + dst->reset_signal +
                            "') across clock domains without reset synchronization.";
+                f.safety_status = SafetyStatus::VerifiedUnsafe;
+                f.safety_provenance = "Async reset domain crossing without reset synchronization";
             } else {
                 f.reason = "Reset domain crossing detected: register '" + src.hier_name +
                            "' uses reset '" + src.reset_signal + "' while register '" +
                            dst->hier_name + "' uses reset '" + dst->reset_signal +
                            "'. Different reset domains may cause metastability issues.";
+                f.safety_status = SafetyStatus::VerifiedUnsafe;
+                f.safety_provenance =
+                    "Reset domain crossing between different reset domains";
             }
 
             findings.push_back(std::move(f));

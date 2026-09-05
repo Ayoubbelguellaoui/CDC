@@ -97,3 +97,52 @@ TEST_F(Cdc006Test, NoFinding_MultiPredNotSyncStage) {
     auto findings = analyzer.analyze(graph, make_domains(), {});
     EXPECT_TRUE(findings.empty());
 }
+
+TEST_F(Cdc006Test, BypassPathAroundSyncDetected) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"", 5, 5});
+    uint64_t meta = graph.add_register("mod.dst_meta", "clk_b", 1, {"", 8, 5});
+    uint64_t sync = graph.add_register("mod.dst_sync", "clk_b", 1, {"", 9, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"", 10, 5});
+    for (uint64_t id : {src, meta, sync, dst}) {
+        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+    }
+    graph.add_edge(src, meta);
+    graph.add_edge(meta, sync);
+    graph.add_edge(src, dst);
+
+    DomainExtractor domain_extractor;
+    CrossingAnalyzer crossing_analyzer;
+    auto dr = domain_extractor.extract(graph);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    bool found_cdc001 = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001") found_cdc001 = true;
+    }
+    EXPECT_TRUE(found_cdc001) << "Bypass path should generate CDC001";
+}
+
+TEST_F(Cdc006Test, CombinationalBetweenStage2AndStage3) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"", 5, 5});
+    uint64_t meta = graph.add_register("mod.dst_meta", "clk_b", 1, {"", 8, 5});
+    uint64_t sync1 = graph.add_register("mod.dst_sync1", "clk_b", 1, {"", 9, 5});
+    uint64_t sync2 = graph.add_register("mod.dst_sync2", "clk_b", 1, {"", 10, 5});
+    uint64_t extra = graph.add_register("mod.extra_reg", "clk_b", 1, {"", 11, 5});
+    uint64_t comb = graph.add_combinational("mod.comb_logic", LogicType::And, {extra, sync1}, 1, {"", 12, 1});
+    for (uint64_t id : {src, meta, sync1, sync2, extra}) {
+        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+    }
+    graph.add_edge(src, meta);
+    graph.add_edge(meta, sync1);
+    graph.add_edge(sync1, sync2);
+    graph.add_edge(comb, sync2);
+
+    auto findings = analyzer.analyze(graph, make_domains(), {});
+
+    bool found_cdc006 = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC006") found_cdc006 = true;
+    }
+    EXPECT_TRUE(found_cdc006)
+        << "Combinational logic between stage2 and stage3 should trigger CDC006";
+}

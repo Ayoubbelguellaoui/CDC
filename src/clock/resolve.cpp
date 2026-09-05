@@ -282,6 +282,7 @@ ResolveResult ClockResolver::resolve(const ir::Graph& graph) {
         result.clock_map[node.clock_domain] = std::move(info);
     }
 
+    std::unordered_set<std::string> warned_muxed;
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register)
             continue;
@@ -294,9 +295,11 @@ ResolveResult ClockResolver::resolve(const ir::Graph& graph) {
 
         const ClockInfo& ci = it->second;
         if (ci.is_muxed) {
-            result.warnings.push_back("Clock '" + node.clock_domain +
-                                      "' is derived from multiple sources: "
-                                      "analysis requires user annotation.");
+            if (warned_muxed.insert(node.clock_domain).second) {
+                result.warnings.push_back("Clock '" + node.clock_domain +
+                                          "' is derived from multiple sources: "
+                                          "analysis requires user annotation.");
+            }
         }
     }
 

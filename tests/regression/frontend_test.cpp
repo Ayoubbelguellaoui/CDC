@@ -285,14 +285,15 @@ TEST(FrontendTest, SyncMisuseExitCode) {
     cdc_ns::CrossingAnalyzer ca;
     auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
 
-    // sync_misuse.sv has a proper 2FF chain: src_ff -> meta -> sync_reg
-    // CDC001 should be downgraded to warning since sync detected
+    // sync_misuse.sv has an 8-bit bus through a 2FF chain.
+    // Width validation rejects this as a valid sync pattern (multi-bit sync is unsafe).
+    // CDC001 should remain error (not downgraded to warning).
     bool has_cdc001 = false;
     for (const auto& f : findings) {
         if (f.rule_id == "CDC001") {
             has_cdc001 = true;
-            EXPECT_EQ(f.severity, "warning")
-                << "CDC001 should be warning when sync chain detected";
+            EXPECT_EQ(f.severity, "error")
+                << "CDC001 should be error for multi-bit bus through 2FF chain";
         }
     }
     EXPECT_TRUE(has_cdc001);
@@ -496,7 +497,7 @@ TEST(FrontendTest, SeverityOverrideChangesOutput) {
     EXPECT_FALSE(reporter.has_unsuppressed_errors(filtered));
 }
 
-TEST(FrontendTest, ReportJsonArrayFormat) {
+TEST(FrontendTest, ReportJsonEnvelopeFormat) {
     opencdc::frontend::SlangAdapter adapter;
     auto fe = adapter.elaborate(
         {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
@@ -513,7 +514,9 @@ TEST(FrontendTest, ReportJsonArrayFormat) {
     reporter.report_json(findings, os);
 
     std::string out = os.str();
-    EXPECT_EQ(out.front(), '[');
+    EXPECT_EQ(out.front(), '{');
+    EXPECT_NE(out.find("\"analysis_status\""), std::string::npos);
+    EXPECT_NE(out.find("\"findings\""), std::string::npos);
     EXPECT_NE(out.find("CDC001"), std::string::npos);
     EXPECT_NE(out.find("simple_cdc_crossing.src_ff"), std::string::npos);
 }
@@ -600,7 +603,7 @@ TEST(FrontendTest, MissingResetDetected) {
     for (const auto& f : findings) {
         if (f.rule_id == "CDC007") {
             found_cdc007 = true;
-            EXPECT_EQ(f.severity, "warning");
+            EXPECT_EQ(f.severity, "info");
         }
     }
     EXPECT_TRUE(found_cdc007);
@@ -621,7 +624,7 @@ TEST(FrontendTest, NewRulesRegisteredInEngine) {
 
     auto cdc007 = engine.find_rule("CDC007");
     EXPECT_EQ(cdc007->name, "missing_reset");
-    EXPECT_EQ(cdc007->severity, "warning");
+    EXPECT_EQ(cdc007->severity, "info");
 }
 
 TEST(FrontendTest, WireCrossingDetected) {

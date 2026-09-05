@@ -108,7 +108,8 @@ void init_cdc_bindings(py::module& m) {
     py::enum_<cdc::SyncPattern>(m, "SyncPattern")
         .value("None", cdc::SyncPattern::None)
         .value("TwoFF", cdc::SyncPattern::TwoFF)
-        .value("ThreeFF", cdc::SyncPattern::ThreeFF);
+        .value("ThreeFF", cdc::SyncPattern::ThreeFF)
+        .value("FourFF", cdc::SyncPattern::FourFF);
 
     py::class_<cdc::Finding>(m, "Finding")
         .def_readwrite("rule_id", &cdc::Finding::rule_id)

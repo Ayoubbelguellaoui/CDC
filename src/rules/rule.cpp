@@ -21,7 +21,7 @@ RuleEngine::RuleEngine() {
     register_rule({"CDC006", "combinational_between_sync",
                    "Combinational logic between synchronizer stages", "error", true, "crossing",
                    "1.0.0"});
-    register_rule({"CDC007", "missing_reset", "CDC register without reset signal", "warning", true,
+    register_rule({"CDC007", "missing_reset", "CDC register without reset signal", "info", true,
                    "crossing", "1.0.0"});
     register_rule({"CDC008", "multi_domain_daisy_chain",
                    "Signal crosses 3+ clock domains in daisy chain", "warning", true, "crossing",

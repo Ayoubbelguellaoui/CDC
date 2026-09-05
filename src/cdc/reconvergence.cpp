@@ -58,8 +58,9 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
     // proper register chain (dest→s1→s2), which could suppress CDC003 incorrectly.
     SynchronizerMatcher sync_matcher;
     auto has_sync_chain = [&](uint64_t dest_id) -> bool {
-        return sync_matcher.find_pattern_for_dest(dest_id, graph, /*strict=*/false) ==
-               SyncPattern::ThreeFF;
+        auto pat = sync_matcher.find_pattern_for_dest(dest_id, graph, /*strict=*/false);
+        return pat == SyncPattern::TwoFF || pat == SyncPattern::ThreeFF ||
+               pat == SyncPattern::FourFF;
     };
 
     for (size_t i = 0; i < src_crossings.size(); ++i) {
@@ -79,6 +80,7 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                 continue;
 
             // Bounded BFS: collect up to 16 register descendants per path (max 3 hops)
+            bool bfs_truncated = false;
             auto collect_descendants = [&](uint64_t start_id) -> std::vector<uint64_t> {
                 std::vector<uint64_t> result;
                 std::queue<std::pair<uint64_t, int>> bfs;
@@ -92,14 +94,18 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                     if (depth > 0 && n && n->kind == ir::NodeKind::Register) {
                         result.push_back(cur);
                     }
-                    if (depth >= 3)
+                    if (depth >= 3) {
+                        bfs_truncated = true;
                         continue;
+                    }
                     for (uint64_t s : graph.register_successors(cur)) {
                         if (visited.insert(s).second) {
                             bfs.push({s, depth + 1});
                         }
                     }
                 }
+                if (result.size() >= 16)
+                    bfs_truncated = true;
                 return result;
             };
 
@@ -139,6 +145,23 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                     }
 
                     f.reason = f.reconvergence.explanation;
+
+                    if (bfs_truncated) {
+                        f.reason +=
+                            " WARNING: Reconvergence analysis truncated at hop limit — "
+                            "some reconvergent paths may be missed.";
+                    }
+
+                    if (src->width > 1) {
+                        f.safety_status = SafetyStatus::VerifiedUnsafe;
+                        f.safety_provenance =
+                            "Multi-bit reconvergence with bit-skew hazard";
+                    } else {
+                        f.safety_status = SafetyStatus::Candidate;
+                        f.safety_provenance =
+                            "Single-bit reconvergence (sync chains may reduce risk)";
+                    }
+
                     findings.push_back(std::move(f));
                     break;  // one reconvergence per pair is enough
                 }

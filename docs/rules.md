@@ -9,7 +9,7 @@
 
 **Detection**: An edge in the IR graph connects two registers in different clock domains, and no 2FF/3FF synchronizer chain is detected on the destination side.
 
-**Sync-chain behavior**: When a 2FF or 3FF synchronizer chain is detected at the destination, CDC001 is downgraded to `warning`. In this case, derived rules (CDC002, CDC004, CDC005, CDC007) are also suppressed since the crossing is properly synchronized.
+**Sync-chain behavior**: When a 2FF or 3FF synchronizer chain is detected at the destination (all stages must be single-bit width), CDC001 is downgraded to `warning`. CDC002, CDC004, CDC005, and CDC007 are NOT suppressed — they fire independently since a synchronized crossing can still be a multi-bit hazard, use gated/muxed clocks, or lack reset.
 
 **Why it matters**: Data sampled by a register in a different clock domain can be metastable or inconsistent, leading to functional failures.
 
@@ -30,7 +30,7 @@ rules:
 | Severity | error |
 | Description | Multi-bit bus crosses domains without gray-code encoding or handshake protocol |
 
-**Detection**: A CDC001 crossing where the source register has width > 1 bit, and the source name does not contain "gray"/"grey" or "handshake"/"valid"/"ready" substrings.
+**Detection**: A CDC001 crossing where the source register has width > 1 bit, and no structural evidence of gray-code encoding, handshake protocol, or async FIFO pattern is detected by the pattern recognizer.
 
 **Why it matters**: Multi-bit buses can arrive at the destination domain with partial updates (e.g., some bits old, some new), causing data corruption.
 
@@ -167,6 +167,65 @@ rules:
     enabled: true
     severity: warning
 ```
+
+---
+
+## CDC009 — Reset Domain Crossing
+
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | Registers in different reset domains share data |
+
+**Detection**: Two registers in different clock domains have different reset signals (or one has a reset and the other does not). After reset, registers may be in different states depending on which reset was asserted.
+
+**Why it matters**: If registers come out of reset at different times or with different polarities, the data sampled during the reset period can be corrupted. This can cause functional failures or excessive power consumption.
+
+**Config**:
+```yaml
+rules:
+  CDC009:
+    enabled: true
+    severity: warning
+```
+
+---
+
+## CDC010 — Path Traversal Truncated
+
+| Property | Value |
+|----------|-------|
+| Severity | warning |
+| Description | Path traversal truncated — some crossings may be missed |
+
+**Detection**: The graph traversal reached the configured path limit (MAX_PATH_DEPTH or max_paths) before exploring all possible register-to-register paths. Some CDC crossings may not be reported.
+
+**Why it matters**: Truncation means the analysis is incomplete. A "no findings" result does not mean the design is clean when this rule fires. The `analysis_status` field in the report will show `incomplete` when CDC010 is present.
+
+**Config**:
+```yaml
+rules:
+  CDC010:
+    enabled: true
+    severity: warning
+```
+
+---
+
+## Rule Interaction Table
+
+| Rule | Requires CDC001? | Fires with sync chain? | Fires independently? |
+|------|-------------------|----------------------|---------------------|
+| CDC001 | — | Yes (downgraded to warning) | — |
+| CDC002 | Yes | Yes (multi-bit sync is unsafe) | Yes |
+| CDC003 | No | Yes | Yes |
+| CDC004 | Yes | Yes (gated clock applies regardless) | Yes |
+| CDC005 | Yes | Yes (muxed clock applies regardless) | Yes |
+| CDC006 | No | Yes (combinational logic between stages) | Yes |
+| CDC007 | Yes | Yes (both must lack reset) | Yes |
+| CDC008 | No | No (daisy chain detection) | Yes |
+| CDC009 | No | No (reset domain analysis) | Yes |
+| CDC010 | No | No (truncation) | Yes |
 
 ---
 

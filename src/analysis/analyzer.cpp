@@ -6,6 +6,7 @@
 #include "cdc/reset_domain.h"
 #include "cdc/waiver.h"
 #include "clock/constraints.h"
+#include "clock/resolve.h"
 #include "config/config.h"
 #include "frontend/slang_adapter.h"
 #include "rules/rule.h"
@@ -20,6 +21,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     frontend::FrontendResult fe_result = adapter.elaborate(request.input_files, request.top_module);
     if (!fe_result.ok) {
         result.errors = std::move(fe_result.errors);
+        result.analysis_status = "failed";
         return result;
     }
     result.graph = std::move(fe_result.graph);
@@ -33,6 +35,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         constraints = constraints_parser.parse_file(request.constraints_path, &constraints_error);
         if (!constraints_error.empty()) {
             result.errors.push_back(std::move(constraints_error));
+            result.analysis_status = "failed";
             return result;
         }
 
@@ -52,6 +55,28 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     result.domains = domain_extractor.extract(result.graph);
     result.warnings = result.domains.warnings;
 
+    // 3b. Clock resolution: trace gated/muxed clocks to root.
+    clock::ClockResolver clock_resolver;
+    auto resolve_result = clock_resolver.resolve(result.graph);
+    for (auto& w : resolve_result.warnings) {
+        result.warnings.push_back(std::move(w));
+    }
+    for (auto& node : result.graph.nodes_mutable()) {
+        if (node.kind != ir::NodeKind::Register)
+            continue;
+        auto it = resolve_result.clock_map.find(node.clock_domain);
+        if (it == resolve_result.clock_map.end())
+            continue;
+        const clock::ClockInfo& ci = it->second;
+        if (!ci.root_clock.empty() && node.root_clock.empty()) {
+            node.root_clock = ci.root_clock;
+        }
+        if (ci.is_gated)
+            node.clock_is_gated = true;
+        if (ci.is_muxed)
+            node.clock_is_muxed = true;
+    }
+
     // 4. Config file: rule overrides, waivers, false paths, reset policy.
     rules::RuleEngine rule_engine;
     config::Config cfg;
@@ -63,6 +88,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         cfg = parser.parse_file(request.config_path, &cfg_error);
         if (!cfg_error.empty()) {
             result.errors.push_back(std::move(cfg_error));
+            result.analysis_status = "failed";
             return result;
         }
     }
@@ -70,6 +96,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     for (const auto& [rule_id, rule_cfg] : cfg.rules) {
         if (!rule_engine.find_rule(rule_id).has_value()) {
             result.errors.push_back("unknown rule in config: " + rule_id);
+            result.analysis_status = "failed";
             return result;
         }
         if (!rule_cfg.enabled) {
@@ -128,6 +155,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     for (const auto& id : request.disable_rules) {
         if (!rule_engine.find_rule(id).has_value()) {
             result.errors.push_back("unknown rule: " + id);
+            result.analysis_status = "failed";
             return result;
         }
         rule_engine.add_override({id, "", true, false});
@@ -137,6 +165,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         if (eq == std::string::npos) {
             result.errors.push_back("invalid severity override '" + s +
                                     "': expected RULE=SEVERITY");
+            result.analysis_status = "failed";
             return result;
         }
         std::string rule_id = s.substr(0, eq);
@@ -144,6 +173,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         if (!rule_engine.find_rule(rule_id).has_value() ||
             (severity != "error" && severity != "warning" && severity != "info")) {
             result.errors.push_back("invalid severity override: " + s);
+            result.analysis_status = "failed";
             return result;
         }
         rule_engine.add_override({rule_id, severity, false, true});
@@ -220,6 +250,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         if (!waiver_engine.load_from_file(request.waiver_path, &waiver_error)) {
             result.errors.push_back("could not load waiver file: " + request.waiver_path +
                                     (waiver_error.empty() ? "" : " (" + waiver_error + ")"));
+            result.analysis_status = "failed";
             return result;
         }
     }
@@ -234,6 +265,14 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 
     result.findings = std::move(findings);
     result.ok = true;
+
+    for (const auto& f : result.findings) {
+        if (f.rule_id == "CDC010") {
+            result.analysis_status = "incomplete";
+            break;
+        }
+    }
+
     return result;
 }
 

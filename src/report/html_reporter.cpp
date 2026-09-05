@@ -63,7 +63,8 @@ std::string HtmlReporter::severity_icon(const std::string& severity) {
     return "&#8505;";
 }
 
-std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Finding>& findings) {
+std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Finding>& findings,
+                                                     const std::string& analysis_status) {
     std::unordered_map<std::string, int> by_severity;
     std::unordered_map<std::string, int> by_rule;
     int waived_count = 0;
@@ -96,6 +97,12 @@ std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Find
     html << "      <div class=\"card-value\">" << waived_count << "</div>\n";
     html << "      <div class=\"card-label\">Waived</div>\n";
     html << "    </div>\n";
+    html << "    <div class=\"card card-status\">\n";
+    html << "      <div class=\"card-value\" style=\"font-size: 1.5em;\">"
+         << escape_html(analysis_status == "complete" ? "COMPLETE" : "INCOMPLETE")
+         << "</div>\n";
+    html << "      <div class=\"card-label\">Analysis Status</div>\n";
+    html << "    </div>\n";
     html << "  </div>\n";
     html << "</div>\n";
 
@@ -114,6 +121,7 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
     html << "      <th>Destination</th>\n";
     html << "      <th>Reason</th>\n";
     html << "      <th>Location</th>\n";
+    html << "      <th>Safety</th>\n";
     html << "      <th>Status</th>\n";
     html << "    </tr>\n";
     html << "  </thead>\n";
@@ -134,6 +142,37 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
         html << "      <td class=\"location-cell\">";
         if (include_source_snippets && !f.source_loc.file.empty()) {
             html << escape_html(f.source_loc.file) << ":" << f.source_loc.line;
+        }
+        html << "</td>\n";
+        html << "      <td class=\"safety-cell\">";
+        if (f.safety_status != cdc::SafetyStatus::Unknown) {
+            const char* badge_class = "";
+            const char* label = "";
+            switch (f.safety_status) {
+                case cdc::SafetyStatus::VerifiedSafe:
+                    badge_class = "safety-verified-safe";
+                    label = "VERIFIED SAFE";
+                    break;
+                case cdc::SafetyStatus::VerifiedUnsafe:
+                    badge_class = "safety-verified-unsafe";
+                    label = "VERIFIED UNSAFE";
+                    break;
+                case cdc::SafetyStatus::Candidate:
+                    badge_class = "safety-candidate";
+                    label = "CANDIDATE";
+                    break;
+                case cdc::SafetyStatus::Ambiguous:
+                    badge_class = "safety-ambiguous";
+                    label = "AMBIGUOUS";
+                    break;
+                default:
+                    break;
+            }
+            html << "<span class=\"safety-badge " << badge_class << "\">" << label << "</span>";
+            if (!f.safety_provenance.empty()) {
+                html << "<br><span class=\"safety-provenance\">"
+                     << escape_html(f.safety_provenance) << "</span>";
+            }
         }
         html << "</td>\n";
         html << "      <td>";
@@ -331,6 +370,7 @@ nav a:hover {
 .card-error .card-value { color: var(--error-color); }
 .card-warning .card-value { color: var(--warning-color); }
 .card-waived .card-value { color: var(--waived-color); }
+.card-status .card-value { color: var(--info-color); }
 
 .charts {
     display: grid;
@@ -485,6 +525,30 @@ nav a:hover {
     font-size: 0.85em;
 }
 
+.safety-cell {
+    max-width: 150px;
+}
+
+.safety-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.75em;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.safety-verified-safe { background: rgba(40, 167, 69, 0.2); color: var(--waived-color); }
+.safety-verified-unsafe { background: rgba(220, 53, 69, 0.2); color: var(--error-color); }
+.safety-candidate { background: rgba(255, 193, 7, 0.2); color: var(--warning-color); }
+.safety-ambiguous { background: rgba(23, 162, 184, 0.2); color: var(--info-color); }
+
+.safety-provenance {
+    font-size: 0.8em;
+    color: var(--text-secondary);
+    font-style: italic;
+}
+
 .reason-cell {
     max-width: 400px;
 }
@@ -551,6 +615,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('search-input');
     const severityFilter = document.getElementById('severity-filter');
     const ruleFilter = document.getElementById('rule-filter');
+    const safetyFilter = document.getElementById('safety-filter');
     const table = document.querySelector('.findings-table tbody');
     
     if (!table) return;
@@ -559,6 +624,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
         const severityValue = severityFilter ? severityFilter.value : '';
         const ruleValue = ruleFilter ? ruleFilter.value : '';
+        const safetyValue = safetyFilter ? safetyFilter.value : '';
         
         const rows = table.querySelectorAll('tr');
         let visibleCount = 0;
@@ -569,12 +635,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             row.classList.contains('severity-warning') ? 'warning' : 'info';
             const ruleCell = row.querySelector('.rule-id');
             const rule = ruleCell ? ruleCell.textContent : '';
+            const safetyCell = row.querySelector('.safety-badge');
+            const safety = safetyCell ? safetyCell.textContent.trim().toLowerCase().replace(/ /g, '_') : '';
             
             const matchesSearch = !searchTerm || text.includes(searchTerm);
             const matchesSeverity = !severityValue || severity === severityValue;
             const matchesRule = !ruleValue || rule === ruleValue;
+            const matchesSafety = !safetyValue || safety === safetyValue;
             
-            if (matchesSearch && matchesSeverity && matchesRule) {
+            if (matchesSearch && matchesSeverity && matchesRule && matchesSafety) {
                 row.style.display = '';
                 visibleCount++;
             } else {
@@ -591,6 +660,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) searchInput.addEventListener('input', filterRows);
     if (severityFilter) severityFilter.addEventListener('change', filterRows);
     if (ruleFilter) ruleFilter.addEventListener('change', filterRows);
+    if (safetyFilter) safetyFilter.addEventListener('change', filterRows);
     
     const rows = table.querySelectorAll('tr');
     rows.forEach(row => {
@@ -609,7 +679,8 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 
 void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
-                                   const HtmlReportOptions& options) {
+                                   const HtmlReportOptions& options,
+                                   const std::string& analysis_status) {
     ensure_directory_exists(options.output_dir);
 
     write_css(options);
@@ -639,7 +710,14 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     index << "    </header>\n";
 
     if (options.include_summary_dashboard) {
-        index << generate_summary_dashboard(findings);
+        index << generate_summary_dashboard(findings, analysis_status);
+    }
+
+    if (analysis_status != "complete") {
+        index << "    <div class=\"card card-warning\" style=\"margin-bottom: 20px;\">\n";
+        index << "      <div style=\"font-weight: bold;\">WARNING: Analysis incomplete — some "
+                 "crossings may be missed due to path traversal truncation.</div>\n";
+        index << "    </div>\n";
     }
 
     index << "    <div class=\"charts\">\n";
@@ -711,6 +789,13 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
         findings_file << "        <option value=\"" << escape_html(rule) << "\">"
                       << escape_html(rule) << "</option>\n";
     }
+    findings_file << "      </select>\n";
+    findings_file << "      <select id=\"safety-filter\">\n";
+    findings_file << "        <option value=\"\">All Safety Statuses</option>\n";
+    findings_file << "        <option value=\"verified_safe\">Verified Safe</option>\n";
+    findings_file << "        <option value=\"verified_unsafe\">Verified Unsafe</option>\n";
+    findings_file << "        <option value=\"candidate\">Candidate</option>\n";
+    findings_file << "        <option value=\"ambiguous\">Ambiguous</option>\n";
     findings_file << "      </select>\n";
     findings_file << "    </div>\n";
 

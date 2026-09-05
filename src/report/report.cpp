@@ -52,6 +52,10 @@ ReportCounts Reporter::count(const std::vector<cdc::Finding>& findings) const {
             c.waived++;
             continue;
         }
+        if (f.suppressed_by_false_path) {
+            c.suppressed++;
+            continue;
+        }
         if (f.severity == "error")
             c.errors++;
         else if (f.severity == "warning")
@@ -68,48 +72,94 @@ bool Reporter::has_unsuppressed_errors(const std::vector<cdc::Finding>& findings
     return false;
 }
 
-void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
+void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostream& os,
+                           const std::string& analysis_status) const {
     auto sorted = sorted_findings(findings);
-    os << "[\n";
+    os << "{\n"
+       << "  \"analysis_status\": \"" << escape_json(analysis_status) << "\",\n"
+       << "  \"finding_count\": " << sorted.size() << ",\n"
+       << "  \"findings\": [\n";
     for (size_t i = 0; i < sorted.size(); ++i) {
         const auto& f = sorted[i];
-        os << "  {\n"
-           << "    \"rule_id\": \"" << escape_json(f.rule_id) << "\",\n"
-           << "    \"rule_name\": \"" << escape_json(f.rule_name) << "\",\n"
-           << "    \"severity\": \"" << escape_json(f.severity) << "\",\n"
-           << "    \"waived\": " << (f.waived ? "true" : "false") << ",\n";
+        os << "    {\n"
+           << "      \"rule_id\": \"" << escape_json(f.rule_id) << "\",\n"
+           << "      \"rule_name\": \"" << escape_json(f.rule_name) << "\",\n"
+           << "      \"severity\": \"" << escape_json(f.severity) << "\",\n"
+           << "      \"waived\": " << (f.waived ? "true" : "false") << ",\n";
 
         if (f.waived) {
-            os << "    \"waiver_justification\": \"" << escape_json(f.waiver_justification)
+            os << "      \"waiver_justification\": \"" << escape_json(f.waiver_justification)
                << "\",\n"
-               << "    \"waiver_owner\": \"" << escape_json(f.waiver_owner) << "\",\n";
+               << "      \"waiver_owner\": \"" << escape_json(f.waiver_owner) << "\",\n";
         }
 
-        os << "    \"source\": \"" << escape_json(f.source_reg_name) << "\",\n"
-           << "    \"source_domain\": \"" << escape_json(f.source_domain) << "\",\n"
-           << "    \"dest\": \"" << escape_json(f.dest_reg_name) << "\",\n"
-           << "    \"dest_domain\": \"" << escape_json(f.dest_domain) << "\",\n"
-           << "    \"bus_width\": " << f.bus_width << ",\n"
-           << "    \"reason\": \"" << escape_json(f.reason) << "\",\n";
+        os << "      \"source\": \"" << escape_json(f.source_reg_name) << "\",\n"
+           << "      \"source_domain\": \"" << escape_json(f.source_domain) << "\",\n"
+           << "      \"dest\": \"" << escape_json(f.dest_reg_name) << "\",\n"
+           << "      \"dest_domain\": \"" << escape_json(f.dest_domain) << "\",\n"
+           << "      \"bus_width\": " << f.bus_width << ",\n"
+           << "      \"reason\": \"" << escape_json(f.reason) << "\",\n"
+           << "      \"is_gray_coded\": " << (f.is_gray_coded ? "true" : "false") << ",\n"
+           << "      \"has_handshake\": " << (f.has_handshake ? "true" : "false") << ",\n"
+           << "      \"source_module_path\": \"" << escape_json(f.source_module_path) << "\",\n"
+           << "      \"dest_module_path\": \"" << escape_json(f.dest_module_path) << "\",\n"
+           << "      \"crosses_module_boundary\": "
+           << (f.crosses_module_boundary ? "true" : "false") << ",\n";
+
+        if (f.safety_status != cdc::SafetyStatus::Unknown) {
+            const char* status_str = "unknown";
+            switch (f.safety_status) {
+                case cdc::SafetyStatus::Candidate:
+                    status_str = "candidate";
+                    break;
+                case cdc::SafetyStatus::VerifiedSafe:
+                    status_str = "verified_safe";
+                    break;
+                case cdc::SafetyStatus::VerifiedUnsafe:
+                    status_str = "verified_unsafe";
+                    break;
+                case cdc::SafetyStatus::Ambiguous:
+                    status_str = "ambiguous";
+                    break;
+                default:
+                    break;
+            }
+            os << "      \"safety_status\": \"" << status_str << "\",\n";
+            if (!f.safety_provenance.empty()) {
+                os << "      \"safety_provenance\": \"" << escape_json(f.safety_provenance)
+                   << "\",\n";
+            }
+        }
 
         if (f.has_multicycle_exception) {
-            os << "    \"multicycle_cycles\": " << f.multicycle_cycles << ",\n"
-               << "    \"constraint_source\": \"" << escape_json(f.constraint_source) << "\",\n";
+            os << "      \"multicycle_cycles\": " << f.multicycle_cycles << ",\n"
+               << "      \"constraint_source\": \"" << escape_json(f.constraint_source)
+               << "\",\n";
         }
 
-        os << "    \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
-           << "    \"line\": " << f.source_loc.line << "\n"
-           << "  }";
+        if (f.suppressed_by_false_path) {
+            os << "      \"suppressed_by_false_path\": true,\n"
+               << "      \"false_path_source\": \"" << escape_json(f.false_path_source)
+               << "\",\n";
+        }
+
+        os << "      \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
+           << "      \"line\": " << f.source_loc.line << "\n"
+           << "    }";
 
         if (i + 1 < sorted.size())
             os << ",";
         os << "\n";
     }
-    os << "]\n";
+    os << "  ]\n"
+       << "}\n";
 }
 
-void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
+void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostream& os,
+                           const std::string& analysis_status) const {
     auto sorted = sorted_findings(findings);
+    os << "Analysis status: " << analysis_status << "\n";
+
     for (const auto& f : sorted) {
         // clang-format off
         os << f.severity << " [" << f.rule_id << "] " << f.source_reg_name << " ("
@@ -119,10 +169,36 @@ void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostre
 
         if (f.waived)
             os << " [WAIVED]";
+        if (f.suppressed_by_false_path)
+            os << " [FALSE_PATH]";
         if (f.has_multicycle_exception)
             os << " [MC:" << f.multicycle_cycles << "x]";
+        if (f.safety_status != cdc::SafetyStatus::Unknown) {
+            const char* tag = "";
+            switch (f.safety_status) {
+                case cdc::SafetyStatus::Candidate:
+                    tag = "CANDIDATE";
+                    break;
+                case cdc::SafetyStatus::VerifiedSafe:
+                    tag = "SAFE";
+                    break;
+                case cdc::SafetyStatus::VerifiedUnsafe:
+                    tag = "UNSAFE";
+                    break;
+                case cdc::SafetyStatus::Ambiguous:
+                    tag = "AMBIGUOUS";
+                    break;
+                default:
+                    break;
+            }
+            os << " [" << tag << "]";
+        }
 
         os << "\n  " << f.reason << "\n";
+
+        if (!f.safety_provenance.empty()) {
+            os << "  provenance: " << f.safety_provenance << "\n";
+        }
 
         if (!f.source_loc.file.empty()) {
             os << "  at " << f.source_loc.file << ":" << f.source_loc.line << "\n";
@@ -135,21 +211,30 @@ void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostre
             os << "\n";
         }
     }
+
+    if (analysis_status == "incomplete") {
+        os << "\nWARNING: Analysis incomplete — some crossings may be missed due to path "
+              "traversal truncation.\n";
+    }
 }
 
-void Reporter::report_summary(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
+void Reporter::report_summary(const std::vector<cdc::Finding>& findings, std::ostream& os,
+                              const std::string& analysis_status) const {
     auto c = count(findings);
+    os << "analysis_status=" << analysis_status << " ";
     if (c.total == 0) {
-        os << "No CDC findings.\n";
+        os << "findings=0\n";
         return;
     }
-    os << c.total << " finding(s)";
+    os << "findings=" << c.total;
     if (c.errors > 0)
-        os << ", " << c.errors << " error(s)";
+        os << " errors=" << c.errors;
     if (c.warnings > 0)
-        os << ", " << c.warnings << " warning(s)";
+        os << " warnings=" << c.warnings;
     if (c.waived > 0)
-        os << ", " << c.waived << " waived";
+        os << " waived=" << c.waived;
+    if (c.suppressed > 0)
+        os << " suppressed=" << c.suppressed;
     os << "\n";
 }
 

@@ -2,29 +2,76 @@
 
 namespace opencdc::cdc {
 
-bool SynchronizerMatcher::validate_2ff(const ir::Graph& graph, uint64_t s1, uint64_t s2) const {
-    const ir::Node* n1 = graph.find_node(s1);
-    const ir::Node* n2 = graph.find_node(s2);
-    if (!n1 || !n2)
-        return false;
-    if (n1->kind != ir::NodeKind::Register || n2->kind != ir::NodeKind::Register)
-        return false;
-    if (n1->clock_domain != n2->clock_domain)
-        return false;
-    if (n1->clock_domain.empty())
-        return false;
+std::string SynchronizerMatcher::validate_stage_reset(const ir::Graph& graph,
+                                                      uint64_t stage_id,
+                                                      uint64_t prev_stage_id) const {
+    const ir::Node* stage = graph.find_node(stage_id);
+    const ir::Node* prev = graph.find_node(prev_stage_id);
+    if (!stage || !prev)
+        return {};
 
-    auto succs = graph.register_successors(s1, false);
-    for (uint64_t s : succs) {
-        if (s == s2)
-            return true;
-    }
-    return false;
+    // Asynchronous reset on a metastability-sensitive stage is a hazard
+    if (stage->is_async_reset && !prev->is_async_reset)
+        return "Asynchronous reset on stage '" + stage->hier_name +
+               "' may cause metastability on deassert";
+
+    // Both stages have async reset but different signals — inconsistent reset domains
+    if (stage->is_async_reset && prev->is_async_reset && !stage->reset_signal.empty() &&
+        !prev->reset_signal.empty() && stage->reset_signal != prev->reset_signal)
+        return "Different async reset signals between synchronizer stages";
+
+    // Synchronous reset after async reset — inconsistent reset strategy
+    if (!stage->is_async_reset && prev->is_async_reset && !stage->reset_signal.empty() &&
+        !prev->reset_signal.empty())
+        return "Synchronous reset on stage '" + stage->hier_name +
+               "' after async reset on '" + prev->hier_name + "'";
+
+    // Reset polarity mismatch between stages
+    if (!stage->reset_signal.empty() && !prev->reset_signal.empty() &&
+        stage->reset_pol != prev->reset_pol)
+        return "Reset polarity mismatch between synchronizer stages";
+
+    return {};
 }
 
-bool SynchronizerMatcher::validate_3ff(const ir::Graph& graph, uint64_t s1, uint64_t s2,
-                                       uint64_t s3) const {
-    return validate_2ff(graph, s1, s2) && validate_2ff(graph, s2, s3);
+bool SynchronizerMatcher::validate_stage_fanout(const ir::Graph& graph,
+                                                  uint64_t stage1_id) const {
+    const ir::Node* stage1 = graph.find_node(stage1_id);
+    if (!stage1)
+        return true;
+
+    size_t same_domain_successors = 0;
+    for (uint64_t succ : graph.register_successors(stage1_id, false)) {
+        const ir::Node* n = graph.find_node(succ);
+        if (n && n->kind == ir::NodeKind::Register && n->clock_domain == stage1->clock_domain) {
+            same_domain_successors++;
+            if (same_domain_successors > 1)
+                return false;
+        }
+    }
+    return true;
+}
+
+void SynchronizerMatcher::collect_chain_warnings(const ir::Graph& graph,
+                                                  SynchronizerChain& chain) const {
+    if (chain.stage_ids.size() < 2)
+        return;
+
+    // Check reset validation for each consecutive stage pair
+    for (size_t i = 0; i + 1 < chain.stage_ids.size(); ++i) {
+        std::string warning =
+            validate_stage_reset(graph, chain.stage_ids[i + 1], chain.stage_ids[i]);
+        if (!warning.empty())
+            chain.warnings.push_back(std::move(warning));
+    }
+
+    // Check fanout from every intermediate stage (not just stage 1)
+    for (size_t i = 0; i + 1 < chain.stage_ids.size(); ++i) {
+        if (!validate_stage_fanout(graph, chain.stage_ids[i])) {
+            chain.warnings.push_back("Stage " + std::to_string(i + 1) +
+                                     " fanout: multiple same-domain successors detected");
+        }
+    }
 }
 
 SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, const ir::Graph& graph,
@@ -33,6 +80,8 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
     if (!dest)
         return SyncPattern::None;
     if (dest->clock_domain.empty())
+        return SyncPattern::None;
+    if (dest->width != 1)
         return SyncPattern::None;
 
     bool has_cross_domain_register_pred = false;
@@ -47,9 +96,6 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
     if (!has_cross_domain_register_pred)
         return SyncPattern::None;
 
-    // In strict mode, reject dest if it has same-domain register predecessors
-    // (other than self) — this means data from the same domain leaks into the
-    // synchronizer entry point, making it ineffective.
     if (strict) {
         for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false)) {
             if (pred_id == dest_reg_id)
@@ -62,66 +108,109 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
         }
     }
 
-    uint64_t s1_id = 0;
-    for (uint64_t s1 : graph.register_successors(dest_reg_id, false)) {
-        const ir::Node* n1 = graph.find_node(s1);
-        if (!n1 || n1->kind != ir::NodeKind::Register)
-            continue;
-        if (n1->clock_domain != dest->clock_domain)
-            continue;
+    // Count actual depth by walking the chain
+    size_t depth = 1;  // dest itself counts as stage 1
+    uint64_t current = dest_reg_id;
 
-        if (strict) {
-            bool has_unexpected_pred = false;
-            for (uint64_t pred : graph.register_predecessors(s1, false)) {
-                const ir::Node* pn = graph.find_node(pred);
-                if (!pn || pn->kind != ir::NodeKind::Register)
-                    continue;
-                if (pred == dest_reg_id)
-                    continue;
-                if (pred == s1)
-                    continue;
-                if (pn->clock_domain == n1->clock_domain) {
-                    has_unexpected_pred = true;
-                    break;
-                }
-            }
-            if (has_unexpected_pred)
+    for (int stage = 0; stage < 10; ++stage) {
+        uint64_t next_id = 0;
+        for (uint64_t succ : graph.register_successors(current, false)) {
+            const ir::Node* n = graph.find_node(succ);
+            if (!n || n->kind != ir::NodeKind::Register)
                 continue;
+            if (n->clock_domain != dest->clock_domain)
+                continue;
+            if (n->width != 1)
+                continue;
+            if (strict && current != dest_reg_id) {
+                bool has_unexpected_pred = false;
+                for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                    const ir::Node* pn = graph.find_node(pred);
+                    if (!pn || pn->kind != ir::NodeKind::Register)
+                        continue;
+                    if (pred == current || pred == succ)
+                        continue;
+                    if (pn->clock_domain == n->clock_domain) {
+                        has_unexpected_pred = true;
+                        break;
+                    }
+                }
+                if (has_unexpected_pred)
+                    continue;
+            }
+            next_id = succ;
+            break;
         }
-
-        s1_id = s1;
-        break;
+        if (!next_id)
+            break;
+        current = next_id;
+        depth++;
     }
-    if (!s1_id)
+
+    if (depth == 1)
         return SyncPattern::None;
-
-    uint64_t s2_id = 0;
-    for (uint64_t s2 : graph.register_successors(s1_id, false)) {
-        const ir::Node* n2 = graph.find_node(s2);
-        if (!n2 || n2->kind != ir::NodeKind::Register)
-            continue;
-        if (n2->clock_domain != dest->clock_domain)
-            continue;
-        s2_id = s2;
-        break;
-    }
-    if (!s2_id)
+    if (depth == 2)
         return SyncPattern::TwoFF;
+    if (depth == 3)
+        return SyncPattern::ThreeFF;
+    if (depth == 4)
+        return SyncPattern::FourFF;
+    return SyncPattern::ThreeFF;  // 5+ stages treated as ThreeFF+
+}
 
-    uint64_t s3_id = 0;
-    for (uint64_t s3 : graph.register_successors(s2_id, false)) {
-        const ir::Node* n3 = graph.find_node(s3);
-        if (!n3 || n3->kind != ir::NodeKind::Register)
-            continue;
-        if (n3->clock_domain != dest->clock_domain)
-            continue;
-        s3_id = s3;
-        break;
+bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph,
+                                              uint64_t dest_reg_id) const {
+    const ir::Node* dest = graph.find_node(dest_reg_id);
+    if (!dest)
+        return false;
+
+    // Check reset validation for stage pairs in the chain
+    uint64_t current = dest_reg_id;
+    for (int stage = 0; stage < 10; ++stage) {
+        uint64_t next_id = 0;
+        for (uint64_t succ : graph.register_successors(current, false)) {
+            const ir::Node* n = graph.find_node(succ);
+            if (!n || n->kind != ir::NodeKind::Register)
+                continue;
+            if (n->clock_domain != dest->clock_domain)
+                continue;
+            if (n->width != 1)
+                continue;
+            // Strict check: reject if successor has an unexpected same-domain predecessor
+            if (current != dest_reg_id) {
+                bool has_unexpected_pred = false;
+                for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                    const ir::Node* pn = graph.find_node(pred);
+                    if (!pn || pn->kind != ir::NodeKind::Register)
+                        continue;
+                    if (pred == current || pred == succ)
+                        continue;
+                    if (pn->clock_domain == n->clock_domain) {
+                        has_unexpected_pred = true;
+                        break;
+                    }
+                }
+                if (has_unexpected_pred)
+                    continue;
+            }
+            next_id = succ;
+            break;
+        }
+        if (!next_id)
+            break;
+
+        // Check reset between current and next
+        std::string warning = validate_stage_reset(graph, next_id, current);
+        if (!warning.empty())
+            return true;
+
+        // Check fanout from every intermediate stage
+        if (!validate_stage_fanout(graph, current))
+            return true;
+
+        current = next_id;
     }
-    if (!s3_id)
-        return SyncPattern::ThreeFF;  // s1 + s2 exist — 3-stage chain (dest + s1 + s2)
-
-    return SyncPattern::ThreeFF;  // s1, s2, and s3 all confirmed — 3+ FF chain
+    return false;
 }
 
 std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph) {
@@ -144,7 +233,8 @@ std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph
 
             bool exists = false;
             for (const auto& c : chains) {
-                if (c.source_reg_id == pred_id && c.clock_domain == node.clock_domain) {
+                if (c.source_reg_id == pred_id && c.clock_domain == node.clock_domain &&
+                    !c.stage_ids.empty() && c.stage_ids[0] == node.id) {
                     exists = true;
                     break;
                 }
@@ -158,27 +248,45 @@ std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph
             chain.clock_domain = node.clock_domain;
             chain.stage_ids.push_back(node.id);
 
-            auto s1_succs = graph.register_successors(node.id, false);
-            for (uint64_t s : s1_succs) {
-                const ir::Node* n = graph.find_node(s);
-                if (n && n->kind == ir::NodeKind::Register &&
-                    n->clock_domain == node.clock_domain) {
-                    chain.stage_ids.push_back(s);
-                    if (pat == SyncPattern::ThreeFF) {
-                        auto s2_succs = graph.register_successors(s, false);
-                        for (uint64_t s2 : s2_succs) {
-                            const ir::Node* n2 = graph.find_node(s2);
-                            if (n2 && n2->kind == ir::NodeKind::Register &&
-                                n2->clock_domain == node.clock_domain) {
-                                chain.stage_ids.push_back(s2);
+            uint64_t current = node.id;
+            for (int stage = 0; stage < 10; ++stage) {
+                uint64_t next_id = 0;
+                for (uint64_t succ : graph.register_successors(current, false)) {
+                    const ir::Node* n = graph.find_node(succ);
+                    if (!n || n->kind != ir::NodeKind::Register)
+                        continue;
+                    if (n->clock_domain != node.clock_domain)
+                        continue;
+                    if (n->width != 1)
+                        continue;
+                    // Strict check: reject if successor has an unexpected same-domain predecessor
+                    if (current != node.id) {
+                        bool has_unexpected_pred = false;
+                        for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                            const ir::Node* pn = graph.find_node(pred);
+                            if (!pn || pn->kind != ir::NodeKind::Register)
+                                continue;
+                            if (pred == current || pred == succ)
+                                continue;
+                            if (pn->clock_domain == n->clock_domain) {
+                                has_unexpected_pred = true;
                                 break;
                             }
                         }
+                        if (has_unexpected_pred)
+                            continue;
                     }
+                    next_id = succ;
                     break;
                 }
+                if (!next_id)
+                    break;
+                chain.stage_ids.push_back(next_id);
+                current = next_id;
             }
 
+            collect_chain_warnings(graph, chain);
+            chain.depth = chain.stage_ids.size();
             chains.push_back(std::move(chain));
         }
     }

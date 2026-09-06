@@ -9,9 +9,9 @@ This document defines the intent, violation conditions, required evidence, safe 
 | **Intent** | Detect register-to-register paths crossing clock domains without a synchronizer chain. |
 | **Violation** | A register in domain A drives a register in domain B with no 2FF/3FF synchronizer chain on the destination side. |
 | **Required Evidence** | Cross-domain register path (verified by `CrossingAnalyzer`), no `SyncPattern::TwoFF` or `SyncPattern::ThreeFF` detected at destination. |
-| **Safe Conditions** | Synchronizer chain present (downgraded to warning), false-path constraint, gray-code/handshake/FIFO crossing, waived. |
+| **Safe Conditions** | Synchronizer chain present (downgraded to warning), false-path constraint, multicycle path constraint (configurable), gray-code/handshake/FIFO crossing, waived. |
 | **Exemptions** | None — always emitted (but severity varies). |
-| **Constraint Interaction** | `false_paths` suppresses. `multi_cycle_path` does not suppress. |
+| **Constraint Interaction** | `false_paths` suppresses. `multi_cycle_path` suppresses when `multicycle_path_policy.suppress_rules` includes CDC001 (default: yes). |
 | **False-Positive Risk** | Low. Only fires on verified cross-domain register paths. |
 | **False-Negative Risk** | Medium. Paths through combinational logic or gated clocks may be missed if not fully traced. |
 

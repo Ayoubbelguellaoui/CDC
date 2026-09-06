@@ -197,6 +197,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // honored even when no constraints file was provided.
     crossing_analyzer.set_clock_constraints(&constraints);
     crossing_analyzer.set_reset_policy(&cfg.reset_policy);
+    crossing_analyzer.set_multicycle_policy(&cfg.multicycle_path_policy);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 

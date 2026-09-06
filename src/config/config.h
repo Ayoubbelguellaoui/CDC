@@ -44,6 +44,11 @@ struct ResetPolicyConfig {
     bool require_cdc_register_reset = false;
 };
 
+struct MulticyclePathPolicy {
+    bool suppress_findings = true;
+    std::vector<std::string> suppress_rules = {"CDC001"};
+};
+
 struct Config {
     std::unordered_map<std::string, RuleConfig> rules;
     std::vector<WaiverConfig> waivers;
@@ -51,6 +56,7 @@ struct Config {
     std::vector<ClockGroupConfig> clock_groups;
     OutputConfig output;
     ResetPolicyConfig reset_policy;
+    MulticyclePathPolicy multicycle_path_policy;
     bool suppress_reset_crossings = false;
 };
 
@@ -65,6 +71,7 @@ class ConfigParser {
     void parse_output_section(const std::string& content, Config& config) const;
     void parse_false_path_section(const std::string& content, Config& config) const;
     void parse_reset_policy_section(const std::string& content, Config& config) const;
+    void parse_multicycle_policy_section(const std::string& content, Config& config) const;
     static std::string trim(const std::string& s);
     static std::string to_lower(const std::string& s);
 };

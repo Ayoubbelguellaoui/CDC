@@ -239,11 +239,62 @@ void ConfigParser::parse_reset_policy_section(const std::string& content, Config
     }
 }
 
+void ConfigParser::parse_multicycle_policy_section(const std::string& content,
+                                                   Config& config) const {
+    std::istringstream iss(content);
+    std::string line;
+    bool in_suppress_rules = false;
+
+    while (std::getline(iss, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        size_t colon = line.find(':');
+        if (colon != std::string::npos) {
+            std::string key = trim(line.substr(0, colon));
+            std::string value = to_lower(trim(line.substr(colon + 1)));
+
+            if (to_lower(key) == "suppress_findings") {
+                config.multicycle_path_policy.suppress_findings = (value == "true");
+                in_suppress_rules = false;
+            } else if (to_lower(key) == "suppress_rules") {
+                in_suppress_rules = true;
+                config.multicycle_path_policy.suppress_rules.clear();
+                // Inline list: suppress_rules: [CDC001, CDC002]
+                if (!value.empty() && value.front() == '[') {
+                    in_suppress_rules = false;
+                    std::string inner = value;
+                    if (inner.front() == '[')
+                        inner = inner.substr(1);
+                    if (!inner.empty() && inner.back() == ']')
+                        inner.pop_back();
+                    std::istringstream vss(inner);
+                    std::string rule;
+                    while (std::getline(vss, rule, ',')) {
+                        rule = trim(rule);
+                        if (!rule.empty())
+                            config.multicycle_path_policy.suppress_rules.push_back(rule);
+                    }
+                }
+            }
+        } else if (in_suppress_rules) {
+            // YAML list item:  - CDC001
+            std::string trimmed_line = trim(line);
+            if (trimmed_line.front() == '-') {
+                trimmed_line = trim(trimmed_line.substr(1));
+            }
+            if (!trimmed_line.empty())
+                config.multicycle_path_policy.suppress_rules.push_back(trimmed_line);
+        }
+    }
+}
+
 Config ConfigParser::parse_string(const std::string& content, std::string* error) const {
     Config config;
 
     std::string rules_section, waivers_section, output_section, false_paths_section,
-        clock_groups_section, reset_policy_section;
+        clock_groups_section, reset_policy_section, multicycle_policy_section;
     std::string current_section;
 
     std::istringstream iss(content);
@@ -259,7 +310,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
 
         std::string lower = to_lower(trimmed);
         if (lower == "rules:" || lower == "waivers:" || lower == "output:" ||
-            lower == "false_paths:" || lower == "clock_groups:" || lower == "reset_policy:") {
+            lower == "false_paths:" || lower == "clock_groups:" || lower == "reset_policy:" ||
+            lower == "multicycle_path_policy:") {
             current_section = to_lower(trimmed.substr(0, trimmed.size() - 1));
             current_rule.clear();
             continue;
@@ -332,6 +384,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
             clock_groups_section += line + "\n";
         } else if (current_section == "reset_policy") {
             reset_policy_section += line + "\n";
+        } else if (current_section == "multicycle_path_policy") {
+            multicycle_policy_section += line + "\n";
         }
     }
 
@@ -380,6 +434,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
 
     if (!reset_policy_section.empty())
         parse_reset_policy_section(reset_policy_section, config);
+    if (!multicycle_policy_section.empty())
+        parse_multicycle_policy_section(multicycle_policy_section, config);
 
     return config;
 }

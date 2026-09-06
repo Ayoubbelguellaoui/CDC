@@ -1,4 +1,5 @@
 #include "cdc/crossing.h"
+#include "config/config.h"
 #include "ir/graph.h"
 #include "clock/domain.h"
 #include <gtest/gtest.h>
@@ -326,6 +327,110 @@ TEST_F(CrossingTest, MulticyclePathAnnotatesCrossing) {
     ASSERT_EQ(findings.size(), 1u);
     EXPECT_TRUE(findings[0].has_multicycle_exception);
     EXPECT_EQ(findings[0].multicycle_cycles, 3);
+}
+
+TEST_F(CrossingTest, MulticycleSuppressionDefault) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"mod.sv", 6, 5});
+    graph.add_edge(src, dst);
+
+    auto dr = domain_extractor.extract(graph);
+    opencdc::clock::ClockConstraints constraints;
+    opencdc::clock::MultiCyclePath mcp;
+    mcp.from_clock = "clk_a";
+    mcp.to_clock = "clk_b";
+    mcp.cycles = 2;
+    constraints.multi_cycle_paths.push_back(mcp);
+    crossing_analyzer.set_clock_constraints(&constraints);
+
+    opencdc::config::MulticyclePathPolicy policy;
+    policy.suppress_findings = true;
+    policy.suppress_rules = {"CDC001"};
+    crossing_analyzer.set_multicycle_policy(&policy);
+
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    bool found_suppressed = false;
+    bool found_error = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.suppressed_by_multicycle)
+            found_suppressed = true;
+        if (f.rule_id == "CDC001" && f.severity == "error")
+            found_error = true;
+    }
+    EXPECT_TRUE(found_suppressed)
+        << "CDC001 should be suppressed by multicycle constraint";
+    EXPECT_FALSE(found_error)
+        << "CDC001 should not fire as error when multicycle suppresses it";
+}
+
+TEST_F(CrossingTest, MulticycleSuppressionOff) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"mod.sv", 6, 5});
+    graph.add_edge(src, dst);
+
+    auto dr = domain_extractor.extract(graph);
+    opencdc::clock::ClockConstraints constraints;
+    opencdc::clock::MultiCyclePath mcp;
+    mcp.from_clock = "clk_a";
+    mcp.to_clock = "clk_b";
+    mcp.cycles = 2;
+    constraints.multi_cycle_paths.push_back(mcp);
+    crossing_analyzer.set_clock_constraints(&constraints);
+
+    opencdc::config::MulticyclePathPolicy policy;
+    policy.suppress_findings = false;
+    crossing_analyzer.set_multicycle_policy(&policy);
+
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    bool found_suppressed = false;
+    bool found_error = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.suppressed_by_multicycle)
+            found_suppressed = true;
+        if (f.rule_id == "CDC001" && f.severity == "error")
+            found_error = true;
+    }
+    EXPECT_FALSE(found_suppressed)
+        << "CDC001 should not be suppressed when suppress_findings=false";
+    EXPECT_TRUE(found_error)
+        << "CDC001 should fire as error when not suppressed";
+}
+
+TEST_F(CrossingTest, MulticyclePartialMatchDoesNotSuppress) {
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"mod.sv", 6, 5});
+    graph.add_edge(src, dst);
+
+    auto dr = domain_extractor.extract(graph);
+    opencdc::clock::ClockConstraints constraints;
+    opencdc::clock::MultiCyclePath mcp;
+    mcp.from_clock = "clk_a";
+    mcp.to_clock = "clk_c";  // doesn't match clk_b
+    mcp.cycles = 2;
+    constraints.multi_cycle_paths.push_back(mcp);
+    crossing_analyzer.set_clock_constraints(&constraints);
+
+    opencdc::config::MulticyclePathPolicy policy;
+    policy.suppress_findings = true;
+    policy.suppress_rules = {"CDC001"};
+    crossing_analyzer.set_multicycle_policy(&policy);
+
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    bool found_suppressed = false;
+    bool found_error = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.suppressed_by_multicycle)
+            found_suppressed = true;
+        if (f.rule_id == "CDC001" && f.severity == "error")
+            found_error = true;
+    }
+    EXPECT_FALSE(found_suppressed)
+        << "CDC001 should not be suppressed when to_clock doesn't match";
+    EXPECT_TRUE(found_error)
+        << "CDC001 should fire as error when multicycle doesn't match";
 }
 
 TEST_F(CrossingTest, SafetyStatusPopulatedOnUnsyncedCdc001) {

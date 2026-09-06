@@ -56,6 +56,10 @@ ReportCounts Reporter::count(const std::vector<cdc::Finding>& findings) const {
             c.suppressed++;
             continue;
         }
+        if (f.suppressed_by_multicycle) {
+            c.multicycle_suppressed++;
+            continue;
+        }
         if (f.severity == "error")
             c.errors++;
         else if (f.severity == "warning")
@@ -141,6 +145,11 @@ void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostre
                << "      \"false_path_source\": \"" << escape_json(f.false_path_source) << "\",\n";
         }
 
+        if (f.suppressed_by_multicycle) {
+            os << "      \"suppressed_by_multicycle\": true,\n"
+               << "      \"multicycle_source\": \"" << escape_json(f.multicycle_source) << "\",\n";
+        }
+
         os << "      \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
            << "      \"line\": " << f.source_loc.line << "\n"
            << "    }";
@@ -169,7 +178,9 @@ void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostre
             os << " [WAIVED]";
         if (f.suppressed_by_false_path)
             os << " [FALSE_PATH]";
-        if (f.has_multicycle_exception)
+        if (f.suppressed_by_multicycle)
+            os << " [MC:" << f.multicycle_cycles << "x suppressed]";
+        else if (f.has_multicycle_exception)
             os << " [MC:" << f.multicycle_cycles << "x]";
         if (f.safety_status != cdc::SafetyStatus::Unknown) {
             const char* tag = "";
@@ -233,6 +244,8 @@ void Reporter::report_summary(const std::vector<cdc::Finding>& findings, std::os
         os << " waived=" << c.waived;
     if (c.suppressed > 0)
         os << " suppressed=" << c.suppressed;
+    if (c.multicycle_suppressed > 0)
+        os << " mc_suppressed=" << c.multicycle_suppressed;
     os << "\n";
 }
 

@@ -16,6 +16,7 @@ struct ReportCounts {
     size_t warnings = 0;
     size_t waived = 0;
     size_t suppressed = 0;
+    size_t multicycle_suppressed = 0;
 };
 
 class Reporter {

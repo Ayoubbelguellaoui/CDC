@@ -60,6 +60,8 @@ struct Finding {
     std::string safety_provenance;
     bool suppressed_by_false_path = false;
     std::string false_path_source;
+    bool suppressed_by_multicycle = false;
+    std::string multicycle_source;
 };
 
 class CrossingAnalyzer {
@@ -81,6 +83,10 @@ class CrossingAnalyzer {
         reset_policy_ = policy;
     }
 
+    void set_multicycle_policy(const config::MulticyclePathPolicy* policy) {
+        multicycle_policy_ = policy;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -94,6 +100,7 @@ class CrossingAnalyzer {
     PatternRecognizer* pattern_recognizer_ = nullptr;
     const clock::ClockConstraints* clock_constraints_ = nullptr;
     const config::ResetPolicyConfig* reset_policy_ = nullptr;
+    const config::MulticyclePathPolicy* multicycle_policy_ = nullptr;
 };
 
 }  // namespace opencdc::cdc

@@ -27,7 +27,7 @@ class BenchmarkTest : public ::testing::Test {
             int clk_idx = clk_dist(rng);
             std::string clk = "clk_" + std::to_string(clk_idx);
             graph.add_register("mod.reg_" + std::to_string(i), clk, 1,
-                               {"bench.sv", static_cast<int>(i + 1), 5});
+                               {"bench.sv", static_cast<uint32_t>(i + 1), 5});
         }
 
         // Create crossings between different clock domains

@@ -51,6 +51,16 @@ struct MulticyclePathPolicy {
     std::vector<std::string> suppress_rules = {"CDC001"};
 };
 
+struct BlackBoxConfig {
+    std::string module_name;
+    std::string vendor;
+    bool is_safe_crossing = true;
+    bool has_synchronizer = false;
+    bool has_gray_encoding = false;
+    bool has_async_fifo = false;
+    bool has_handshake = false;
+};
+
 struct Config {
     std::unordered_map<std::string, RuleConfig> rules;
     std::vector<WaiverConfig> waivers;
@@ -59,6 +69,7 @@ struct Config {
     OutputConfig output;
     ResetPolicyConfig reset_policy;
     MulticyclePathPolicy multicycle_path_policy;
+    std::vector<BlackBoxConfig> blackboxes;
     bool suppress_reset_crossings = false;
     int reconvergence_depth = 8;
 };
@@ -75,6 +86,7 @@ class ConfigParser {
     void parse_false_path_section(const std::string& content, Config& config) const;
     void parse_reset_policy_section(const std::string& content, Config& config) const;
     void parse_multicycle_policy_section(const std::string& content, Config& config) const;
+    void parse_blackbox_section(const std::string& content, Config& config) const;
     static std::string trim(const std::string& s);
     static std::string to_lower(const std::string& s);
 };

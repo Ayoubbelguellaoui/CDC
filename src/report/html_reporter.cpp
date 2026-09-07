@@ -64,6 +64,8 @@ std::string HtmlReporter::severity_icon(const std::string& severity) {
 }
 
 std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Finding>& findings,
+                                                     const analysis::CoverageResult& coverage,
+                                                     const analysis::SignoffResult& signoff,
                                                      const std::string& analysis_status) {
     std::unordered_map<std::string, int> by_severity;
     std::unordered_map<std::string, int> by_rule;
@@ -76,6 +78,31 @@ std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Find
         by_rule[f.rule_id]++;
         if (f.waived)
             waived_count++;
+    }
+
+    std::string signoff_class;
+    std::string signoff_label;
+    switch (signoff.status) {
+        case analysis::SignoffStatus::Pass:
+            signoff_class = "signoff-pass";
+            signoff_label = "PASS";
+            break;
+        case analysis::SignoffStatus::PassWithWaivers:
+            signoff_class = "signoff-pass-waivers";
+            signoff_label = "PASS (WAIVERS)";
+            break;
+        case analysis::SignoffStatus::Fail:
+            signoff_class = "signoff-fail";
+            signoff_label = "FAIL";
+            break;
+        case analysis::SignoffStatus::Incomplete:
+            signoff_class = "signoff-incomplete";
+            signoff_label = "INCOMPLETE";
+            break;
+        default:
+            signoff_class = "signoff-error";
+            signoff_label = "ERROR";
+            break;
     }
 
     std::ostringstream html;
@@ -97,10 +124,11 @@ std::string HtmlReporter::generate_summary_dashboard(const std::vector<cdc::Find
     html << "      <div class=\"card-value\">" << waived_count << "</div>\n";
     html << "      <div class=\"card-label\">Waived</div>\n";
     html << "    </div>\n";
-    html << "    <div class=\"card card-status\">\n";
+    html << "    <div class=\"card signoff-card " << signoff_class << "\">\n";
     html << "      <div class=\"card-value\" style=\"font-size: 1.5em;\">"
-         << escape_html(analysis_status == "complete" ? "COMPLETE" : "INCOMPLETE") << "</div>\n";
-    html << "      <div class=\"card-label\">Analysis Status</div>\n";
+         << escape_html(signoff_label) << "</div>\n";
+    html << "      <div class=\"card-label\">Signoff</div>\n";
+    html << "      <div class=\"signoff-reason\">" << escape_html(signoff.reason) << "</div>\n";
     html << "    </div>\n";
     html << "  </div>\n";
     html << "</div>\n";
@@ -264,6 +292,64 @@ std::string HtmlReporter::generate_rule_chart(const std::vector<cdc::Finding>& f
     html << "  </div>\n";
     html << "</div>\n";
 
+    return html.str();
+}
+
+std::string HtmlReporter::generate_coverage_table(const analysis::CoverageResult& coverage) {
+    const auto& c = coverage.counts;
+    std::ostringstream html;
+    html << "<div class=\"chart-container\">\n";
+    html << "  <h3>Coverage Breakdown</h3>\n";
+    html << "  <table class=\"coverage-table\">\n";
+    html << "    <thead>\n";
+    html << "      <tr><th>Metric</th><th>Count</th></tr>\n";
+    html << "    </thead>\n";
+    html << "    <tbody>\n";
+    html << "      <tr><td>Total</td><td>" << c.total << "</td></tr>\n";
+    html << "      <tr><td>Errors</td><td>" << c.errors << "</td></tr>\n";
+    html << "      <tr><td>Warnings</td><td>" << c.warnings << "</td></tr>\n";
+    html << "      <tr><td>Verified Safe</td><td>" << c.verified_safe << "</td></tr>\n";
+    html << "      <tr><td>Verified Unsafe</td><td>" << c.verified_unsafe << "</td></tr>\n";
+    html << "      <tr><td>Candidate</td><td>" << c.candidate << "</td></tr>\n";
+    html << "      <tr><td>Ambiguous</td><td>" << c.ambiguous << "</td></tr>\n";
+    html << "      <tr><td>Waived</td><td>" << c.waived << "</td></tr>\n";
+    html << "      <tr><td>Suppressed</td><td>" << c.suppressed << "</td></tr>\n";
+    html << "    </tbody>\n";
+    html << "  </table>\n";
+    html << "</div>\n";
+    return html.str();
+}
+
+std::string HtmlReporter::generate_clock_domain_table(const analysis::CoverageResult& coverage) {
+    if (coverage.clock_pairs.empty())
+        return "";
+
+    std::ostringstream html;
+    html << "<div class=\"chart-container\">\n";
+    html << "  <h3>Crossings by Clock Domain Pair</h3>\n";
+    html << "  <table class=\"coverage-table\">\n";
+    html << "    <thead>\n";
+    html << "      "
+            "<tr><th>Source</th><th>Destination</th><th>Total</th><th>Errors</th><th>Warnings</th>"
+            "<th>Safe</th><th>Unsafe</th></tr>\n";
+    html << "    </thead>\n";
+    html << "    <tbody>\n";
+
+    for (const auto& cp : coverage.clock_pairs) {
+        html << "      <tr>\n";
+        html << "        <td>" << escape_html(cp.source_domain) << "</td>\n";
+        html << "        <td>" << escape_html(cp.dest_domain) << "</td>\n";
+        html << "        <td>" << cp.crossing_count << "</td>\n";
+        html << "        <td>" << cp.error_count << "</td>\n";
+        html << "        <td>" << cp.warning_count << "</td>\n";
+        html << "        <td>" << cp.verified_safe << "</td>\n";
+        html << "        <td>" << cp.verified_unsafe << "</td>\n";
+        html << "      </tr>\n";
+    }
+
+    html << "    </tbody>\n";
+    html << "  </table>\n";
+    html << "</div>\n";
     return html.str();
 }
 
@@ -584,6 +670,33 @@ nav a:hover {
     margin-bottom: 10px;
 }
 
+.signoff-card .card-value { font-weight: bold; }
+.signoff-reason { font-size: 0.75em; color: var(--text-secondary); margin-top: 5px; }
+.signoff-pass .card-value { color: var(--waived-color); }
+.signoff-pass-waivers .card-value { color: var(--warning-color); }
+.signoff-fail .card-value { color: var(--error-color); }
+.signoff-incomplete .card-value { color: var(--info-color); }
+.signoff-error .card-value { color: var(--error-color); }
+
+.coverage-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9em;
+}
+.coverage-table th,
+.coverage-table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+.coverage-table th {
+    background: var(--bg-primary);
+    font-weight: 600;
+}
+.coverage-table tr:hover {
+    background: var(--bg-primary);
+}
+
 footer {
     margin-top: 40px;
     padding-top: 20px;
@@ -680,138 +793,138 @@ document.addEventListener('DOMContentLoaded', function() {
 void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
                                    const HtmlReportOptions& options,
                                    const std::string& analysis_status) {
+    analysis::CoverageResult empty_coverage;
+    analysis::SignoffResult empty_signoff;
+    empty_signoff.status = analysis::SignoffStatus::Error;
+    empty_signoff.reason = "No signoff data";
+    generate_report(findings, empty_coverage, empty_signoff, options, analysis_status);
+}
+
+void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
+                                   const analysis::CoverageResult& coverage,
+                                   const analysis::SignoffResult& signoff,
+                                   const HtmlReportOptions& options,
+                                   const std::string& analysis_status) {
     ensure_directory_exists(options.output_dir);
 
     write_css(options);
     write_js(options);
+    write_index_html(findings, coverage, signoff, options);
+    write_findings_html(findings, options);
+}
 
+void HtmlReporter::write_index_html(const std::vector<cdc::Finding>& findings,
+                                    const analysis::CoverageResult& coverage,
+                                    const analysis::SignoffResult& signoff,
+                                    const HtmlReportOptions& options) {
     std::ofstream index(options.output_dir + "/index.html");
     if (!index.is_open()) {
         throw std::runtime_error("Failed to write index.html in " + options.output_dir);
     }
-    index << "<!DOCTYPE html>\n";
-    index << "<html lang=\"en\">\n";
-    index << "<head>\n";
+    index << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n";
     index << "  <meta charset=\"UTF-8\">\n";
     index << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n";
     index << "  <title>" << escape_html(options.title) << "</title>\n";
     index << "  <link rel=\"stylesheet\" href=\"style.css\">\n";
-    index << "</head>\n";
-    index << "<body>\n";
-    index << "  <div class=\"container\">\n";
-    index << "    <header>\n";
-    index << "      <h1>" << escape_html(options.title) << "</h1>\n";
-    index << "      <div class=\"subtitle\">OpenCDC Static Analysis Report</div>\n";
-    index << "      <nav>\n";
-    index << "        <a href=\"index.html\">Dashboard</a>\n";
-    index << "        <a href=\"findings.html\">All Findings</a>\n";
-    index << "      </nav>\n";
-    index << "    </header>\n";
+    index << "</head>\n<body>\n<div class=\"container\">\n";
 
-    if (options.include_summary_dashboard) {
-        index << generate_summary_dashboard(findings, analysis_status);
-    }
+    index << "  <header>\n";
+    index << "    <h1>" << escape_html(options.title) << "</h1>\n";
+    index << "    <div class=\"subtitle\">OpenCDC Static Analysis Report</div>\n";
+    index << "    <nav>\n";
+    index << "      <a href=\"index.html\">Dashboard</a>\n";
+    index << "      <a href=\"findings.html\">All Findings</a>\n";
+    index << "    </nav>\n";
+    index << "  </header>\n";
 
-    if (analysis_status != "complete") {
-        index << "    <div class=\"card card-warning\" style=\"margin-bottom: 20px;\">\n";
-        index << "      <div style=\"font-weight: bold;\">WARNING: Analysis incomplete — some "
-                 "crossings may be missed due to path traversal truncation.</div>\n";
-        index << "    </div>\n";
-    }
+    index << generate_summary_dashboard(findings, coverage, signoff);
 
-    index << "    <div class=\"charts\">\n";
+    index << "  <div class=\"charts\">\n";
+    index << generate_coverage_table(coverage);
+    std::string domain_table = generate_clock_domain_table(coverage);
+    if (!domain_table.empty())
+        index << domain_table;
+    index << "  </div>\n";
+
+    index << "  <div class=\"charts\">\n";
     index << generate_severity_chart(findings);
     index << generate_rule_chart(findings);
-    index << "    </div>\n";
+    index << "  </div>\n";
 
-    index << "    <section class=\"findings-section\">\n";
-    index << "      <h2>Recent Findings</h2>\n";
-
+    index << "  <section class=\"findings-section\">\n";
+    index << "    <h2>Recent Findings</h2>\n";
     size_t recent_count = std::min(findings.size(), size_t(10));
     std::vector<cdc::Finding> recent(findings.begin(), findings.begin() + recent_count);
     index << generate_findings_table(recent, options.include_source_snippets);
+    index << "    <p style=\"text-align: center; margin-top: 20px;\">\n";
+    index << "      <a href=\"findings.html\">View all " << findings.size() << " findings</a>\n";
+    index << "    </p>\n";
+    index << "  </section>\n";
 
-    index << "      <p style=\"text-align: center; margin-top: 20px;\">\n";
-    index << "        <a href=\"findings.html\">View all " << findings.size() << " findings</a>\n";
-    index << "      </p>\n";
-    index << "    </section>\n";
+    index << "  <footer>Generated by OpenCDC v" << OPENCDC_VERSION << "</footer>\n";
+    index << "</div>\n<script src=\"script.js\"></script>\n</body>\n</html>\n";
+}
 
-    index << "    <footer>\n";
-    index << "      Generated by OpenCDC v" << OPENCDC_VERSION << "\n";
-    index << "    </footer>\n";
-    index << "  </div>\n";
-    index << "  <script src=\"script.js\"></script>\n";
-    index << "</body>\n";
-    index << "</html>\n";
-
-    std::ofstream findings_file(options.output_dir + "/findings.html");
-    if (!findings_file.is_open()) {
+void HtmlReporter::write_findings_html(const std::vector<cdc::Finding>& findings,
+                                       const HtmlReportOptions& options) {
+    std::ofstream out(options.output_dir + "/findings.html");
+    if (!out.is_open()) {
         throw std::runtime_error("Failed to write findings.html in " + options.output_dir);
     }
-    findings_file << "<!DOCTYPE html>\n";
-    findings_file << "<html lang=\"en\">\n";
-    findings_file << "<head>\n";
-    findings_file << "  <meta charset=\"UTF-8\">\n";
-    findings_file
-        << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n";
-    findings_file << "  <title>All Findings - " << escape_html(options.title) << "</title>\n";
-    findings_file << "  <link rel=\"stylesheet\" href=\"style.css\">\n";
-    findings_file << "</head>\n";
-    findings_file << "<body>\n";
-    findings_file << "  <div class=\"container\">\n";
-    findings_file << "    <header>\n";
-    findings_file << "      <h1>" << escape_html(options.title) << "</h1>\n";
-    findings_file << "      <div class=\"subtitle\">All Findings</div>\n";
-    findings_file << "      <nav>\n";
-    findings_file << "        <a href=\"index.html\">Dashboard</a>\n";
-    findings_file << "        <a href=\"findings.html\">All Findings</a>\n";
-    findings_file << "      </nav>\n";
-    findings_file << "    </header>\n";
+    out << "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n";
+    out << "  <meta charset=\"UTF-8\">\n";
+    out << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n";
+    out << "  <title>All Findings - " << escape_html(options.title) << "</title>\n";
+    out << "  <link rel=\"stylesheet\" href=\"style.css\">\n";
+    out << "</head>\n<body>\n<div class=\"container\">\n";
 
-    findings_file << "    <div class=\"filter-controls\">\n";
-    findings_file
-        << "      <input type=\"text\" id=\"search-input\" placeholder=\"Search findings...\">\n";
-    findings_file << "      <select id=\"severity-filter\">\n";
-    findings_file << "        <option value=\"\">All Severities</option>\n";
-    findings_file << "        <option value=\"error\">Errors</option>\n";
-    findings_file << "        <option value=\"warning\">Warnings</option>\n";
-    findings_file << "        <option value=\"info\">Info</option>\n";
-    findings_file << "      </select>\n";
+    out << "  <header>\n";
+    out << "    <h1>" << escape_html(options.title) << "</h1>\n";
+    out << "    <div class=\"subtitle\">All Findings</div>\n";
+    out << "    <nav>\n";
+    out << "      <a href=\"index.html\">Dashboard</a>\n";
+    out << "      <a href=\"findings.html\">All Findings</a>\n";
+    out << "    </nav>\n";
+    out << "  </header>\n";
+
+    out << "  <div class=\"filter-controls\">\n";
+    out << "    <input type=\"text\" id=\"search-input\" placeholder=\"Search findings...\">\n";
+    out << "    <select id=\"severity-filter\">\n";
+    out << "      <option value=\"\">All Severities</option>\n";
+    out << "      <option value=\"error\">Errors</option>\n";
+    out << "      <option value=\"warning\">Warnings</option>\n";
+    out << "      <option value=\"info\">Info</option>\n";
+    out << "    </select>\n";
+
     std::vector<std::string> rules;
     for (const auto& f : findings) {
         if (std::find(rules.begin(), rules.end(), f.rule_id) == rules.end())
             rules.push_back(f.rule_id);
     }
-    findings_file
-        << "      <select id=\"rule-filter\">\n        <option value=\"\">All Rules</option>\n";
+    out << "    <select id=\"rule-filter\">\n";
+    out << "      <option value=\"\">All Rules</option>\n";
     for (const auto& rule : rules) {
-        findings_file << "        <option value=\"" << escape_html(rule) << "\">"
-                      << escape_html(rule) << "</option>\n";
+        out << "      <option value=\"" << escape_html(rule) << "\">" << escape_html(rule)
+            << "</option>\n";
     }
-    findings_file << "      </select>\n";
-    findings_file << "      <select id=\"safety-filter\">\n";
-    findings_file << "        <option value=\"\">All Safety Statuses</option>\n";
-    findings_file << "        <option value=\"verified_safe\">Verified Safe</option>\n";
-    findings_file << "        <option value=\"verified_unsafe\">Verified Unsafe</option>\n";
-    findings_file << "        <option value=\"candidate\">Candidate</option>\n";
-    findings_file << "        <option value=\"ambiguous\">Ambiguous</option>\n";
-    findings_file << "      </select>\n";
-    findings_file << "    </div>\n";
+    out << "    </select>\n";
+    out << "    <select id=\"safety-filter\">\n";
+    out << "      <option value=\"\">All Safety Statuses</option>\n";
+    out << "      <option value=\"verified_safe\">Verified Safe</option>\n";
+    out << "      <option value=\"verified_unsafe\">Verified Unsafe</option>\n";
+    out << "      <option value=\"candidate\">Candidate</option>\n";
+    out << "      <option value=\"ambiguous\">Ambiguous</option>\n";
+    out << "    </select>\n";
+    out << "  </div>\n";
 
-    findings_file << "    <section class=\"findings-section\">\n";
-    findings_file << "      <h2>" << findings.size() << " Findings</h2>\n";
-    findings_file << generate_findings_table(findings, options.include_source_snippets);
-    findings_file
-        << "      <p class=\"no-results\" style=\"display:none\">No matching findings.</p>\n";
-    findings_file << "    </section>\n";
+    out << "  <section class=\"findings-section\">\n";
+    out << "    <h2>" << findings.size() << " Findings</h2>\n";
+    out << generate_findings_table(findings, options.include_source_snippets);
+    out << "    <p class=\"no-results\" style=\"display:none\">No matching findings.</p>\n";
+    out << "  </section>\n";
 
-    findings_file << "    <footer>\n";
-    findings_file << "      Generated by OpenCDC v" << OPENCDC_VERSION << "\n";
-    findings_file << "    </footer>\n";
-    findings_file << "  </div>\n";
-    findings_file << "  <script src=\"script.js\"></script>\n";
-    findings_file << "</body>\n";
-    findings_file << "</html>\n";
+    out << "  <footer>Generated by OpenCDC v" << OPENCDC_VERSION << "</footer>\n";
+    out << "</div>\n<script src=\"script.js\"></script>\n</body>\n</html>\n";
 }
 
 }  // namespace opencdc::report

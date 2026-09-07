@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "cdc/blackbox.h"
 #include "cdc/pattern.h"
 #include "cdc/synchronizer.h"
 #include "clock/constraints.h"
@@ -106,6 +107,10 @@ class CrossingAnalyzer {
         resolve_result_ = resolve;
     }
 
+    void set_blackbox_registry(const BlackBoxRegistry* registry) {
+        blackbox_registry_ = registry;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -115,12 +120,16 @@ class CrossingAnalyzer {
 
     bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
 
+    bool is_path_through_safe_blackbox(const ir::Graph& graph,
+                                       const std::vector<uint64_t>& path_node_ids) const;
+
     SynchronizerMatcher sync_matcher_;
     PatternRecognizer* pattern_recognizer_ = nullptr;
     const clock::ClockConstraints* clock_constraints_ = nullptr;
     const config::ResetPolicyConfig* reset_policy_ = nullptr;
     const config::MulticyclePathPolicy* multicycle_policy_ = nullptr;
     const clock::ResolveResult* resolve_result_ = nullptr;
+    const BlackBoxRegistry* blackbox_registry_ = nullptr;
 };
 
 }  // namespace opencdc::cdc

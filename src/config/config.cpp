@@ -302,11 +302,63 @@ void ConfigParser::parse_multicycle_policy_section(const std::string& content,
     }
 }
 
+void ConfigParser::parse_blackbox_section(const std::string& content, Config& config) const {
+    std::istringstream iss(content);
+    std::string line;
+    BlackBoxConfig* cur = nullptr;
+
+    while (std::getline(iss, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        // New entry:  - module_name: xpm_cdc_gray
+        if (line[0] == '-') {
+            std::string rest = trim(line.substr(1));
+            size_t colon = rest.find(':');
+            if (colon != std::string::npos) {
+                std::string key = to_lower(trim(rest.substr(0, colon)));
+                std::string value = strip_quotes(trim(rest.substr(colon + 1)));
+                if (key == "module_name" && !value.empty()) {
+                    config.blackboxes.emplace_back();
+                    cur = &config.blackboxes.back();
+                    cur->module_name = value;
+                    continue;
+                }
+            }
+            cur = nullptr;
+            continue;
+        }
+
+        if (!cur)
+            continue;
+
+        size_t colon = line.find(':');
+        if (colon == std::string::npos)
+            continue;
+        std::string key = to_lower(trim(line.substr(0, colon)));
+        std::string value = to_lower(strip_quotes(trim(line.substr(colon + 1))));
+
+        if (key == "vendor")
+            cur->vendor = value;
+        else if (key == "is_safe_crossing")
+            cur->is_safe_crossing = (value == "true");
+        else if (key == "has_synchronizer")
+            cur->has_synchronizer = (value == "true");
+        else if (key == "has_gray_encoding")
+            cur->has_gray_encoding = (value == "true");
+        else if (key == "has_async_fifo")
+            cur->has_async_fifo = (value == "true");
+        else if (key == "has_handshake")
+            cur->has_handshake = (value == "true");
+    }
+}
+
 Config ConfigParser::parse_string(const std::string& content, std::string* error) const {
     Config config;
 
     std::string rules_section, waivers_section, output_section, false_paths_section,
-        clock_groups_section, reset_policy_section, multicycle_policy_section;
+        clock_groups_section, reset_policy_section, multicycle_policy_section, blackboxes_section;
     std::string current_section;
 
     std::istringstream iss(content);
@@ -323,7 +375,7 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
         std::string lower = to_lower(trimmed);
         if (lower == "rules:" || lower == "waivers:" || lower == "output:" ||
             lower == "false_paths:" || lower == "clock_groups:" || lower == "reset_policy:" ||
-            lower == "multicycle_path_policy:") {
+            lower == "multicycle_path_policy:" || lower == "blackboxes:") {
             current_section = to_lower(trimmed.substr(0, trimmed.size() - 1));
             current_rule.clear();
             continue;
@@ -398,6 +450,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
             reset_policy_section += line + "\n";
         } else if (current_section == "multicycle_path_policy") {
             multicycle_policy_section += line + "\n";
+        } else if (current_section == "blackboxes") {
+            blackboxes_section += line + "\n";
         }
     }
 
@@ -448,6 +502,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
         parse_reset_policy_section(reset_policy_section, config);
     if (!multicycle_policy_section.empty())
         parse_multicycle_policy_section(multicycle_policy_section, config);
+    if (!blackboxes_section.empty())
+        parse_blackbox_section(blackboxes_section, config);
 
     return config;
 }

@@ -318,7 +318,8 @@ int run(int argc, const char* argv[]) {
             html_opts.output_dir = opts.html_output_dir;
         }
         try {
-            html_reporter.generate_report(findings, html_opts, analysis.analysis_status);
+            html_reporter.generate_report(findings, analysis.coverage, analysis.signoff, html_opts,
+                                          analysis.analysis_status);
         } catch (const std::exception& e) {
             std::cerr << "Error: could not generate HTML report: " << e.what() << "\n";
             return static_cast<int>(ExitCode::INPUT_ERROR);

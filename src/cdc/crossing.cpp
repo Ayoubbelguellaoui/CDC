@@ -43,6 +43,35 @@ bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_
     return false;
 }
 
+bool CrossingAnalyzer::is_path_through_safe_blackbox(
+    const ir::Graph& graph, const std::vector<uint64_t>& path_node_ids) const {
+    if (!blackbox_registry_)
+        return false;
+
+    for (uint64_t nid : path_node_ids) {
+        const ir::Node* node = graph.find_node(nid);
+        if (!node)
+            continue;
+        // Check if this node's module_path matches a safe black box.
+        // module_path is e.g. "top.u_fifos/xpm_cdc_gray_inst" — we need
+        // to extract the leaf instance name and check against black box models.
+        std::string mp = node->module_path;
+        // Try exact match first
+        const BlackBoxModel* model = blackbox_registry_->find(mp);
+        if (model && model->properties.is_safe_crossing)
+            return true;
+        // Try leaf name (last segment after '/' or '.')
+        auto slash = mp.find_last_of("/.");
+        if (slash != std::string::npos) {
+            std::string leaf = mp.substr(slash + 1);
+            model = blackbox_registry_->find(leaf);
+            if (model && model->properties.is_safe_crossing)
+                return true;
+        }
+    }
+    return false;
+}
+
 const clock::ClockDomain* CrossingAnalyzer::find_domain_for_node(
     uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
     const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
@@ -287,6 +316,36 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             }
 
             if (!multicycle_suppressed) {
+                // Blackbox suppression: if the path goes through a safe black box
+                // module, suppress CDC001/002 since the black box handles synchronization.
+                bool blackbox_suppressed = is_path_through_safe_blackbox(graph, reg_path.node_ids);
+
+                if (blackbox_suppressed) {
+                    Finding bb;
+                    bb.rule_id = "CDC001";
+                    bb.rule_name = "unsynchronized_crossing";
+                    bb.severity = "info";
+                    bb.source_reg_id = src_id;
+                    bb.dest_reg_id = dst_id;
+                    bb.source_reg_name = src->hier_name;
+                    bb.dest_reg_name = dst->hier_name;
+                    bb.source_domain = src_dom->name;
+                    bb.dest_domain = dst_dom->name;
+                    bb.path.node_ids = reg_path.node_ids;
+                    bb.source_loc = src->loc;
+                    bb.bus_width = src->width;
+                    bb.source_module_path = src->module_path;
+                    bb.dest_module_path = dst->module_path;
+                    bb.clock_relationship = clock_rel;
+                    bb.suppressed_by_false_path = false;
+                    bb.reason =
+                        "Crossing suppressed: path passes through safe black box "
+                        "module with built-in synchronization.";
+                    bb.safety_status = SafetyStatus::VerifiedSafe;
+                    bb.safety_provenance = "Path through safe black box module";
+                    local_findings.push_back(std::move(bb));
+                    continue;
+                }
                 Finding f;
                 f.rule_id = "CDC001";
                 f.rule_name = "unsynchronized_crossing";

@@ -1,5 +1,6 @@
 #include "analysis/analyzer.h"
 
+#include "cdc/blackbox.h"
 #include "cdc/cdc006.h"
 #include "cdc/pattern.h"
 #include "cdc/reconvergence.h"
@@ -198,6 +199,20 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     cdc::PatternRecognizer pattern_recognizer;
     pattern_recognizer.analyze_and_annotate(result.graph);
 
+    // 8b. Blackbox registry: built-in models + user-configured.
+    cdc::BlackBoxRegistry blackbox_registry;
+    for (const auto& bb : cfg.blackboxes) {
+        cdc::BlackBoxModel model;
+        model.module_name = bb.module_name;
+        model.vendor = bb.vendor;
+        model.properties.is_safe_crossing = bb.is_safe_crossing;
+        model.properties.has_synchronizer = bb.has_synchronizer;
+        model.properties.has_gray_encoding = bb.has_gray_encoding;
+        model.properties.has_async_fifo = bb.has_async_fifo;
+        model.properties.has_handshake = bb.has_handshake;
+        blackbox_registry.add_model(model);
+    }
+
     cdc::CrossingAnalyzer crossing_analyzer;
     crossing_analyzer.set_pattern_recognizer(&pattern_recognizer);
     // Always attach constraints: config and request false paths must be
@@ -206,6 +221,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     crossing_analyzer.set_reset_policy(&cfg.reset_policy);
     crossing_analyzer.set_multicycle_policy(&cfg.multicycle_path_policy);
     crossing_analyzer.set_resolve_result(&resolve_result);
+    crossing_analyzer.set_blackbox_registry(&blackbox_registry);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 

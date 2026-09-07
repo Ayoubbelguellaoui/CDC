@@ -1,17 +1,19 @@
 #include "rules/rule.h"
-#include "cdc/crossing.h"
+
 #include <gtest/gtest.h>
+
+#include "cdc/crossing.h"
 
 using namespace opencdc::rules;
 
 class RuleEngineTest : public ::testing::Test {
-protected:
+   protected:
     RuleEngine engine;
 };
 
 TEST_F(RuleEngineTest, DefaultRulesLoaded) {
     auto rules = engine.rules();
-    ASSERT_EQ(rules.size(), 10u);
+    ASSERT_EQ(rules.size(), 12u);
     EXPECT_EQ(rules[0].id, "CDC001");
     EXPECT_EQ(rules[1].id, "CDC002");
     EXPECT_EQ(rules[2].id, "CDC003");
@@ -22,6 +24,8 @@ TEST_F(RuleEngineTest, DefaultRulesLoaded) {
     EXPECT_EQ(rules[7].id, "CDC008");
     EXPECT_EQ(rules[8].id, "CDC009");
     EXPECT_EQ(rules[9].id, "CDC010");
+    EXPECT_EQ(rules[10].id, "CDC011");
+    EXPECT_EQ(rules[11].id, "CDC012");
 }
 
 TEST_F(RuleEngineTest, FindRule) {

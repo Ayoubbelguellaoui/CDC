@@ -1,12 +1,14 @@
 #include "cdc/pattern.h"
-#include "ir/graph.h"
+
 #include <gtest/gtest.h>
+
+#include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::cdc;
 
 class PatternRecognizerTest : public ::testing::Test {
-protected:
+   protected:
     PatternRecognizer recognizer;
     Graph graph;
 };
@@ -183,8 +185,8 @@ TEST_F(PatternRecognizerTest, DetectsStructuralGrayEncoderOnCombNode) {
     // bin_delay is a one-cycle delay of bin: x ^ (x >> 1) structure.
     graph.add_edge(bin, bin_delay);
     std::vector<uint64_t> xor_inputs = {bin, bin_delay};
-    uint64_t comb = graph.add_combinational("top.gray$comb", LogicType::Xor,
-                                            xor_inputs, 8, {"test.sv", 12, 5});
+    uint64_t comb =
+        graph.add_combinational("top.gray$comb", LogicType::Xor, xor_inputs, 8, {"test.sv", 12, 5});
     graph.add_edge(comb, gray_reg);
 
     auto patterns = recognizer.detect_gray_encoding(graph);
@@ -272,4 +274,157 @@ TEST_F(PatternRecognizerTest, AnnotatePropagatesDetectedPatterns) {
     // Flags remain set after annotation (not clobbered).
     EXPECT_TRUE(graph.find_node_mutable(rd_ptr)->is_async_fifo_ptr);
     EXPECT_TRUE(graph.find_node_mutable(rd_ptr)->is_gray_coded);
+}
+
+// === Phase 4: Gray Decoder Verification ===
+
+TEST_F(PatternRecognizerTest, GrayDecoderWithEncoderPairVerified) {
+    uint64_t encoder = graph.add_register("top.enc", "clk_a", 8, {"test.sv", 10, 5});
+    uint64_t decoder = graph.add_register("top.dec", "clk_b", 8, {"test.sv", 11, 5});
+    graph.find_node_mutable(encoder)->logic_type = LogicType::GrayEncoder;
+    graph.find_node_mutable(encoder)->is_gray_coded = true;
+    graph.find_node_mutable(decoder)->logic_type = LogicType::GrayDecoder;
+    graph.add_edge(encoder, decoder);
+
+    auto patterns = recognizer.detect_gray_encoding(graph);
+    ASSERT_EQ(patterns.size(), 1u);
+    EXPECT_EQ(patterns[0].decoder_id, decoder);
+    EXPECT_TRUE(patterns[0].has_structural_proof);
+}
+
+TEST_F(PatternRecognizerTest, GrayEncoderWithoutDecoderStillDetected) {
+    uint64_t encoder = graph.add_register("top.enc", "clk_a", 8, {"test.sv", 10, 5});
+    graph.find_node_mutable(encoder)->logic_type = LogicType::GrayEncoder;
+    graph.find_node_mutable(encoder)->is_gray_coded = true;
+
+    auto patterns = recognizer.detect_gray_encoding(graph);
+    ASSERT_EQ(patterns.size(), 1u);
+    EXPECT_EQ(patterns[0].decoder_id, 0u);
+    EXPECT_FALSE(patterns[0].has_structural_proof);
+}
+
+// === Phase 4: Async FIFO Full/Empty Detection ===
+
+TEST_F(PatternRecognizerTest, AsyncFifoWithFullEmptyDetected) {
+    uint64_t rd_ptr = graph.add_register("fifo.rd_ptr", "clk_rd", 4, {"test.sv", 10, 5});
+    uint64_t wr_ptr = graph.add_register("fifo.wr_ptr", "clk_wr", 4, {"test.sv", 11, 5});
+    graph.find_node_mutable(rd_ptr)->is_async_fifo_ptr = true;
+    graph.find_node_mutable(rd_ptr)->is_gray_coded = true;
+    graph.find_node_mutable(wr_ptr)->is_async_fifo_ptr = true;
+    graph.find_node_mutable(wr_ptr)->is_gray_coded = true;
+    graph.add_edge(wr_ptr, rd_ptr);
+
+    // Add XOR comparison of pointers → full/empty flag
+    std::vector<uint64_t> xor_inputs = {wr_ptr, rd_ptr};
+    uint64_t xor_node =
+        graph.add_combinational("fifo.full_cmp", LogicType::Xor, xor_inputs, 4, {"test.sv", 12, 5});
+    uint64_t full_reg = graph.add_register("fifo.full", "clk_rd", 1, {"test.sv", 13, 5});
+    graph.add_edge(xor_node, full_reg);
+
+    // Add synchronized pointer
+    uint64_t wr_sync = graph.add_register("fifo.wr_ptr_sync", "clk_rd", 4, {"test.sv", 14, 5});
+    graph.add_edge(wr_ptr, wr_sync);
+
+    auto fifos = recognizer.detect_async_fifos(graph);
+    ASSERT_EQ(fifos.size(), 1u);
+    EXPECT_TRUE(fifos[0].has_full_empty);
+    EXPECT_NE(fifos[0].full_flag_id, 0u);
+}
+
+TEST_F(PatternRecognizerTest, AsyncFifoWithMemoryDetected) {
+    uint64_t rd_ptr = graph.add_register("fifo.rd_ptr", "clk_rd", 4, {"test.sv", 10, 5});
+    uint64_t wr_ptr = graph.add_register("fifo.wr_ptr", "clk_wr", 4, {"test.sv", 11, 5});
+    graph.find_node_mutable(rd_ptr)->is_async_fifo_ptr = true;
+    graph.find_node_mutable(rd_ptr)->is_gray_coded = true;
+    graph.find_node_mutable(wr_ptr)->is_async_fifo_ptr = true;
+    graph.find_node_mutable(wr_ptr)->is_gray_coded = true;
+    graph.add_edge(wr_ptr, rd_ptr);
+
+    // Add memory element (wider register)
+    graph.add_register("fifo.ram_data", "clk_wr", 32, {"test.sv", 12, 5});
+
+    // Add synchronized pointer
+    uint64_t wr_sync = graph.add_register("fifo.wr_ptr_sync", "clk_rd", 4, {"test.sv", 13, 5});
+    graph.add_edge(wr_ptr, wr_sync);
+
+    auto fifos = recognizer.detect_async_fifos(graph);
+    ASSERT_EQ(fifos.size(), 1u);
+    EXPECT_TRUE(fifos[0].has_memory);
+}
+
+// === Phase 4: Handshake Data Stability ===
+
+TEST_F(PatternRecognizerTest, HandshakeWithStabilityCheck) {
+    uint64_t valid = graph.add_register("top.u_hs.req", "clk_a", 1, {"test.sv", 10, 5});
+    uint64_t ready = graph.add_register("top.u_hs.ack", "clk_b", 1, {"test.sv", 11, 5});
+    uint64_t data = graph.add_register("top.u_hs.data_reg", "clk_b", 8, {"test.sv", 12, 5});
+    graph.find_node_mutable(valid)->logic_type = LogicType::HandshakeValid;
+    graph.find_node_mutable(ready)->logic_type = LogicType::HandshakeReady;
+    graph.add_edge(valid, data);
+    graph.add_edge(data, ready);
+    // Ready feeds back to source domain
+    uint64_t ack_fb = graph.add_register("top.u_hs.ack_fb", "clk_a", 1, {"test.sv", 13, 5});
+    graph.add_edge(ready, ack_fb);
+
+    auto handshakes = recognizer.detect_handshakes(graph);
+    ASSERT_EQ(handshakes.size(), 1u);
+    EXPECT_TRUE(handshakes[0].has_data_path);
+    EXPECT_TRUE(handshakes[0].has_feedback_path);
+}
+
+TEST_F(PatternRecognizerTest, HandshakeWithoutFeedbackNotVerified) {
+    uint64_t valid = graph.add_register("top.u_hs.req", "clk_a", 1, {"test.sv", 10, 5});
+    uint64_t ready = graph.add_register("top.u_hs.ack", "clk_b", 1, {"test.sv", 11, 5});
+    graph.find_node_mutable(valid)->logic_type = LogicType::HandshakeValid;
+    graph.find_node_mutable(ready)->logic_type = LogicType::HandshakeReady;
+    // No data path, no feedback path
+
+    auto handshakes = recognizer.detect_handshakes(graph);
+    ASSERT_EQ(handshakes.size(), 1u);
+    EXPECT_FALSE(handshakes[0].verified);
+    EXPECT_FALSE(handshakes[0].has_data_path);
+    EXPECT_FALSE(handshakes[0].has_feedback_path);
+}
+
+// === Phase 4: Multi-bit Classification ===
+
+TEST_F(PatternRecognizerTest, MultiBitClassifiedAsRaw) {
+    uint64_t src = graph.add_register("top.bus", "clk_a", 16, {"test.sv", 10, 5});
+    uint64_t dst = graph.add_register("top.dst", "clk_b", 16, {"test.sv", 11, 5});
+    graph.add_edge(src, dst);
+
+    auto crossings = recognizer.detect_async_fifos(graph);
+    EXPECT_TRUE(crossings.empty());  // Not a FIFO pattern
+    // Multi-bit classification is done in crossing analysis, not pattern recognizer
+}
+
+TEST_F(PatternRecognizerTest, VerifiedFifoReportsAllFlags) {
+    uint64_t rd_ptr = graph.add_register("fifo.rd_ptr", "clk_rd", 4, {"test.sv", 10, 5});
+    uint64_t wr_ptr = graph.add_register("fifo.wr_ptr", "clk_wr", 4, {"test.sv", 11, 5});
+    graph.find_node_mutable(rd_ptr)->is_async_fifo_ptr = true;
+    graph.find_node_mutable(rd_ptr)->is_gray_coded = true;
+    graph.find_node_mutable(wr_ptr)->is_async_fifo_ptr = true;
+    graph.find_node_mutable(wr_ptr)->is_gray_coded = true;
+    graph.add_edge(wr_ptr, rd_ptr);
+
+    uint64_t wr_sync = graph.add_register("fifo.wr_ptr_sync", "clk_rd", 4, {"test.sv", 12, 5});
+    graph.add_edge(wr_ptr, wr_sync);
+
+    // Add full/empty
+    std::vector<uint64_t> xor_inputs = {wr_ptr, rd_ptr};
+    uint64_t xor_node =
+        graph.add_combinational("fifo.full_cmp", LogicType::Xor, xor_inputs, 4, {"test.sv", 13, 5});
+    uint64_t full_reg = graph.add_register("fifo.full", "clk_rd", 1, {"test.sv", 14, 5});
+    graph.add_edge(xor_node, full_reg);
+
+    // Add memory
+    graph.add_register("fifo.ram_data", "clk_wr", 32, {"test.sv", 15, 5});
+
+    auto fifos = recognizer.detect_async_fifos(graph);
+    ASSERT_EQ(fifos.size(), 1u);
+    EXPECT_TRUE(fifos[0].has_gray_encoding);
+    EXPECT_TRUE(fifos[0].has_synchronized_ptr);
+    EXPECT_TRUE(fifos[0].has_full_empty);
+    EXPECT_TRUE(fifos[0].has_memory);
+    EXPECT_TRUE(fifos[0].verified);
 }

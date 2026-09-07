@@ -10,12 +10,24 @@
 #include "cdc/synchronizer.h"
 #include "clock/constraints.h"
 #include "clock/domain.h"
+#include "clock/relationship.h"
 #include "config/config.h"
 #include "ir/graph.h"
 
 namespace opencdc::cdc {
 
 enum class SafetyStatus { Unknown, Candidate, VerifiedSafe, VerifiedUnsafe, Ambiguous };
+
+enum class MultiBitCrossingType {
+    None,
+    Raw,
+    Synchronized,
+    StaticData,
+    HandshakeControlled,
+    GrayCoded,
+    AsyncFifo,
+    Unknown
+};
 
 struct CrossingPath {
     std::vector<uint64_t> node_ids;
@@ -47,6 +59,7 @@ struct Finding {
     bool waived = false;
     std::string waiver_justification;
     std::string waiver_owner;
+    std::string waiver_ticket;
     uint32_t bus_width = 1;
     bool is_gray_coded = false;
     bool has_handshake = false;
@@ -62,6 +75,8 @@ struct Finding {
     std::string false_path_source;
     bool suppressed_by_multicycle = false;
     std::string multicycle_source;
+    clock::ClockRelationship clock_relationship = clock::ClockRelationship::Unknown;
+    MultiBitCrossingType multi_bit_type = MultiBitCrossingType::None;
 };
 
 class CrossingAnalyzer {
@@ -87,6 +102,10 @@ class CrossingAnalyzer {
         multicycle_policy_ = policy;
     }
 
+    void set_resolve_result(const clock::ResolveResult* resolve) {
+        resolve_result_ = resolve;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -101,6 +120,7 @@ class CrossingAnalyzer {
     const clock::ClockConstraints* clock_constraints_ = nullptr;
     const config::ResetPolicyConfig* reset_policy_ = nullptr;
     const config::MulticyclePathPolicy* multicycle_policy_ = nullptr;
+    const clock::ResolveResult* resolve_result_ = nullptr;
 };
 
 }  // namespace opencdc::cdc

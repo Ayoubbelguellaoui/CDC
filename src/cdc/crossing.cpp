@@ -4,6 +4,7 @@
 #include <cctype>
 #include <unordered_set>
 
+#include "clock/relationship.h"
 #include "util/parallel.h"
 
 namespace opencdc::cdc {
@@ -13,9 +14,11 @@ static const char* sync_pattern_name(SyncPattern p) {
         case SyncPattern::TwoFF:
             return "2FF synchronizer";
         case SyncPattern::ThreeFF:
-            return "3FF+ synchronizer";
+            return "3FF synchronizer";
         case SyncPattern::FourFF:
             return "4FF synchronizer";
+        case SyncPattern::NStage:
+            return "N-stage synchronizer";
         default:
             return "none";
     }
@@ -122,6 +125,17 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             if (src_dom->id == dst_dom->id)
                 continue;
 
+            // Classify clock relationship between source and destination domains.
+            clock::ClockRelationship clock_rel = clock::ClockRelationship::Unknown;
+            if (resolve_result_) {
+                clock_rel = clock::classify_relationship(src_dom->name, dst_dom->name,
+                                                         *clock_constraints_, *resolve_result_);
+            } else if (clock_constraints_) {
+                clock::ResolveResult empty_resolve;
+                clock_rel = clock::classify_relationship(src_dom->name, dst_dom->name,
+                                                         *clock_constraints_, empty_resolve);
+            }
+
             // Build path identity: src→dst + sorted set of intermediate node IDs.
             // This ensures two materially different paths (different intermediate
             // logic, different sync structure) are not collapsed into one finding.
@@ -137,6 +151,41 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             if (seen.count(path_key))
                 continue;
             seen.insert(path_key);
+
+            // Exclusive clocks: crossing is intentional per constraints.
+            // Record as info-level audit trail, skip CDC001 error.
+            if (clock_rel == clock::ClockRelationship::Exclusive) {
+                Finding exc;
+                exc.rule_id = "CDC001";
+                exc.rule_name = "unsynchronized_crossing";
+                exc.severity = "info";
+                exc.source_reg_id = src_id;
+                exc.dest_reg_id = dst_id;
+                exc.source_reg_name = src->hier_name;
+                exc.dest_reg_name = dst->hier_name;
+                exc.source_domain = src_dom->name;
+                exc.dest_domain = dst_dom->name;
+                exc.path.node_ids = reg_path.node_ids;
+                exc.source_loc = src->loc;
+                exc.bus_width = src->width;
+                exc.source_module_path = src->module_path;
+                exc.dest_module_path = dst->module_path;
+                exc.clock_relationship = clock_rel;
+                exc.suppressed_by_false_path = true;
+                exc.false_path_source = "exclusive clock groups";
+                exc.reason = "Crossing between exclusive clocks '" + src_dom->name + "' and '" +
+                             dst_dom->name + "' — intentional per clock group constraints.";
+                exc.safety_status = SafetyStatus::Ambiguous;
+                exc.safety_provenance = "Crossing between exclusive clock groups";
+                local_findings.push_back(std::move(exc));
+                continue;
+            }
+
+            // Synchronous clocks: known frequency-locked relationship.
+            // CDC001 reduced to warning since synchronizer may not be needed.
+            bool synchronous_clocks = (clock_rel == clock::ClockRelationship::Synchronous ||
+                                       clock_rel == clock::ClockRelationship::Related ||
+                                       clock_rel == clock::ClockRelationship::Generated);
 
             bool is_false_path = false;
             if (clock_constraints_) {
@@ -175,6 +224,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 sup.bus_width = src->width;
                 sup.source_module_path = src->module_path;
                 sup.dest_module_path = dst->module_path;
+                sup.clock_relationship = clock_rel;
                 sup.suppressed_by_false_path = true;
                 sup.false_path_source = "false_path constraint";
                 sup.reason = "Crossing suppressed by false-path constraint from '" +
@@ -217,6 +267,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                             sup.bus_width = src->width;
                             sup.source_module_path = src->module_path;
                             sup.dest_module_path = dst->module_path;
+                            sup.clock_relationship = clock_rel;
                             sup.suppressed_by_multicycle = true;
                             sup.multicycle_source = mc_source;
                             sup.has_multicycle_exception = true;
@@ -253,6 +304,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 f.bus_width = src->width;
                 f.source_module_path = src->module_path;
                 f.dest_module_path = dst->module_path;
+                f.clock_relationship = clock_rel;
                 f.crosses_module_boundary = !src->module_path.empty() &&
                                             !dst->module_path.empty() &&
                                             src->module_path != dst->module_path;
@@ -286,7 +338,18 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     f.safety_provenance = "No synchronizer chain detected on destination side";
                 }
 
+                // Synchronous/related clocks: reduce severity since synchronizer may not be needed.
+                if (synchronous_clocks && f.severity == "error") {
+                    f.severity = "warning";
+                    f.safety_provenance += " (clocks are synchronous/related)";
+                }
+
                 f.reason = build_reason(f);
+
+                if (clock_rel == clock::ClockRelationship::Unknown) {
+                    f.reason +=
+                        " [Unknown clock relationship: analysis may require user annotation]";
+                }
 
                 if (clock_constraints_) {
                     for (const auto& mcp : clock_constraints_->multi_cycle_paths) {
@@ -304,6 +367,62 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 }
 
                 local_findings.push_back(std::move(f));
+
+                // CDC011: pulse crossing without proper 2FF chain
+                if (crossing_sync == SyncPattern::None && pattern_recognizer_) {
+                    if (pattern_recognizer_->is_pulse_sync(src_id, graph) ||
+                        pattern_recognizer_->is_pulse_sync(dst_id, graph)) {
+                        Finding ps;
+                        ps.rule_id = "CDC011";
+                        ps.rule_name = "pulse_crossing";
+                        ps.severity = "warning";
+                        ps.source_reg_id = src_id;
+                        ps.dest_reg_id = dst_id;
+                        ps.source_reg_name = src->hier_name;
+                        ps.dest_reg_name = dst->hier_name;
+                        ps.source_domain = src_dom->name;
+                        ps.dest_domain = dst_dom->name;
+                        ps.path.node_ids = reg_path.node_ids;
+                        ps.source_loc = src->loc;
+                        ps.bus_width = src->width;
+                        ps.source_module_path = src->module_path;
+                        ps.dest_module_path = dst->module_path;
+                        ps.clock_relationship = clock_rel;
+                        ps.reason = "Pulse synchronizer pattern detected crossing from domain '" +
+                                    src_dom->name + "' to '" + dst_dom->name +
+                                    "' but no proper 2FF synchronizer chain on destination side.";
+                        ps.safety_status = SafetyStatus::Candidate;
+                        ps.safety_provenance = "Pulse crossing without proper 2FF chain";
+                        local_findings.push_back(std::move(ps));
+                    }
+
+                    // CDC012: toggle crossing without proper 2FF chain
+                    if (pattern_recognizer_->is_toggle_sync(src_id, graph) ||
+                        pattern_recognizer_->is_toggle_sync(dst_id, graph)) {
+                        Finding ts;
+                        ts.rule_id = "CDC012";
+                        ts.rule_name = "toggle_crossing";
+                        ts.severity = "warning";
+                        ts.source_reg_id = src_id;
+                        ts.dest_reg_id = dst_id;
+                        ts.source_reg_name = src->hier_name;
+                        ts.dest_reg_name = dst->hier_name;
+                        ts.source_domain = src_dom->name;
+                        ts.dest_domain = dst_dom->name;
+                        ts.path.node_ids = reg_path.node_ids;
+                        ts.source_loc = src->loc;
+                        ts.bus_width = src->width;
+                        ts.source_module_path = src->module_path;
+                        ts.dest_module_path = dst->module_path;
+                        ts.clock_relationship = clock_rel;
+                        ts.reason = "Toggle synchronizer pattern detected crossing from domain '" +
+                                    src_dom->name + "' to '" + dst_dom->name +
+                                    "' but no proper 2FF synchronizer chain on destination side.";
+                        ts.safety_status = SafetyStatus::Candidate;
+                        ts.safety_provenance = "Toggle crossing without proper 2FF chain";
+                        local_findings.push_back(std::move(ts));
+                    }
+                }
 
                 // NOTE: no early continue here — CDC002/004/005/007 are
                 // independent of synchronizer presence. A synchronized crossing
@@ -338,7 +457,26 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                         src->is_handshake_signal || dst->is_handshake_signal;
                     mb.source_module_path = src->module_path;
                     mb.dest_module_path = dst->module_path;
+                    mb.clock_relationship = clock_rel;
                     mb.crosses_module_boundary = f.crosses_module_boundary;
+
+                    // 4K: Classify multi-bit crossing type
+                    if (mb.is_gray_coded) {
+                        mb.multi_bit_type = MultiBitCrossingType::GrayCoded;
+                    } else if (mb.has_handshake) {
+                        mb.multi_bit_type = MultiBitCrossingType::HandshakeControlled;
+                    } else if (pattern_recognizer_ &&
+                               pattern_recognizer_->is_async_fifo_ptr(src_id, graph) &&
+                               pattern_recognizer_->is_async_fifo_ptr(dst_id, graph)) {
+                        mb.multi_bit_type = MultiBitCrossingType::AsyncFifo;
+                    } else if (f.detected_sync != SyncPattern::None) {
+                        mb.multi_bit_type = MultiBitCrossingType::Synchronized;
+                    } else if (src->width <= 8) {
+                        mb.multi_bit_type = MultiBitCrossingType::StaticData;
+                    } else {
+                        mb.multi_bit_type = MultiBitCrossingType::Raw;
+                    }
+
                     mb.reason = "Multi-bit bus '" + src->hier_name +
                                 "' (width=" + std::to_string(src->width) +
                                 ") crosses from domain '" + src_dom->name + "' to domain '" +
@@ -368,6 +506,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     gc.bus_width = src->width;
                     gc.source_module_path = src->module_path;
                     gc.dest_module_path = dst->module_path;
+                    gc.clock_relationship = clock_rel;
                     std::string gated_info;
                     if (gated_src && gated_dst) {
                         gated_info = "both source '" + gated_src->hier_name + "' (domain '" +
@@ -406,6 +545,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     mr.bus_width = src->width;
                     mr.source_module_path = src->module_path;
                     mr.dest_module_path = dst->module_path;
+                    mr.clock_relationship = clock_rel;
                     mr.reason = "Register '" + muxed_node->hier_name +
                                 "' is clocked by muxed clock '" + muxed_node->clock_domain +
                                 "' without reset signal.";
@@ -431,6 +571,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     nr.bus_width = src->width;
                     nr.source_module_path = src->module_path;
                     nr.dest_module_path = dst->module_path;
+                    nr.clock_relationship = clock_rel;
                     if (strict) {
                         nr.reason = "CDC crossing between registers '" + src->hier_name +
                                     "' and '" + dst->hier_name +
@@ -464,6 +605,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     mr.bus_width = src->width;
                     mr.source_module_path = src->module_path;
                     mr.dest_module_path = dst->module_path;
+                    mr.clock_relationship = clock_rel;
                     std::string which = src->reset_signal.empty() ? src->hier_name : dst->hier_name;
                     mr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
                                 dst->hier_name + "': '" + which + "' lacks a reset signal.";

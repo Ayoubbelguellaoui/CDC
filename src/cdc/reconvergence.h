@@ -13,7 +13,7 @@ class ReconvergenceAnalyzer {
    public:
     std::vector<Finding> analyze(const ir::Graph& graph,
                                  const std::vector<clock::ClockDomain>& domains,
-                                 const std::vector<Finding>& crossings);
+                                 const std::vector<Finding>& crossings, int max_depth = 8);
 
    private:
     std::vector<uint64_t> find_fanout_sources(const ir::Graph& graph,
@@ -21,8 +21,8 @@ class ReconvergenceAnalyzer {
 
     std::vector<Finding> check_pairs(const ir::Graph& graph,
                                      const std::vector<clock::ClockDomain>& domains,
-                                     const std::vector<Finding>& crossings,
-                                     uint64_t source_id) const;
+                                     const std::vector<Finding>& crossings, uint64_t source_id,
+                                     int max_depth) const;
 };
 
 }  // namespace opencdc::cdc

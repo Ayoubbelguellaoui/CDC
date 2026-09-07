@@ -42,6 +42,8 @@ struct ClockGroupConfig {
 
 struct ResetPolicyConfig {
     bool require_cdc_register_reset = false;
+    bool check_same_clock_reset_crossings = false;
+    bool detect_reset_synchronizer = true;
 };
 
 struct MulticyclePathPolicy {
@@ -58,6 +60,7 @@ struct Config {
     ResetPolicyConfig reset_policy;
     MulticyclePathPolicy multicycle_path_policy;
     bool suppress_reset_crossings = false;
+    int reconvergence_depth = 8;
 };
 
 class ConfigParser {

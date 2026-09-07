@@ -1,9 +1,12 @@
 #include "analysis/analyzer.h"
+#include "analysis/signoff.h"
+#include "analysis/trend.h"
 #include "config/config.h"
 #include "opencdc/opencdc.h"
 #include "opencdc/version.h"
 #include "report/html_reporter.h"
 #include "report/report.h"
+#include "report/sarif_reporter.h"
 #ifdef OPENCDC_ENABLE_LSP
 #include "lsp/server.h"
 #endif
@@ -26,12 +29,17 @@ static void print_usage(const char* prog) {
         << "  --config <file>      Configuration file (YAML)\n"
         << "  --waiver <file>      Waiver file\n"
         << "  --constraints <file> Clock constraints file (SDC or YAML)\n"
-        << "  --format <fmt>       Output format: json, text, html (default: json)\n"
+        << "  --format <fmt>       Output format: json, text, html, sarif (default: json)\n"
         << "  --out <file>         Write report to file (default: stdout)\n"
         << "  --html-dir <dir>     HTML report output directory (default: opencdc_report)\n"
         << "  --disable-rule <id>  Disable a rule (e.g., CDC001). Repeatable.\n"
         << "  --severity <id>=<sev> Override rule severity (e.g., CDC003=error). Repeatable.\n"
         << "  --false-path <s:d>   False path (e.g., top.src:top.dst). Repeatable.\n"
+        << "  --signoff            Print signoff status and use it for exit code\n"
+        << "  --save-baseline <n>  Save current findings as baseline named <n>\n"
+        << "  --compare-baseline <f> Compare findings against baseline file <f>\n"
+        << "  --profile <name>     Use methodology profile "
+           "(default/strict/asic_signoff/fpga/ip_development/soc_integration)\n"
         << "  --verbose            Enable verbose output\n"
         << "\nlsp options:\n"
         << "  --top <module>       Top module name (required by analysis)\n"
@@ -88,6 +96,14 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.html_output_dir = argv[++i];
         } else if (arg == "--verbose") {
             opts.verbose = true;
+        } else if (arg == "--signoff") {
+            opts.signoff_mode = true;
+        } else if (arg == "--save-baseline" && i + 1 < argc) {
+            opts.save_baseline = argv[++i];
+        } else if (arg == "--compare-baseline" && i + 1 < argc) {
+            opts.compare_baseline = argv[++i];
+        } else if (arg == "--profile" && i + 1 < argc) {
+            opts.profile = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -192,7 +208,8 @@ int run(int argc, const char* argv[]) {
                            : static_cast<int>(ExitCode::INPUT_ERROR);
     }
 
-    if (opts.format != "json" && opts.format != "text" && opts.format != "html") {
+    if (opts.format != "json" && opts.format != "text" && opts.format != "html" &&
+        opts.format != "sarif") {
         std::cerr << "Error: unsupported output format: " << opts.format << "\n";
         return static_cast<int>(ExitCode::INPUT_ERROR);
     }
@@ -245,6 +262,7 @@ int run(int argc, const char* argv[]) {
     if (have_parsed_config) {
         request.config = std::move(parsed_cfg);
     }
+    request.profile = opts.profile;
 
     analysis::Analyzer analyzer;
     analysis::AnalysisResult analysis = analyzer.run(request);
@@ -290,6 +308,9 @@ int run(int argc, const char* argv[]) {
     if (opts.format == "text") {
         reporter.report_text(findings, *out, analysis.analysis_status);
         reporter.report_summary(findings, std::cerr, analysis.analysis_status);
+    } else if (opts.format == "sarif") {
+        report::SarifReporter sarif_reporter;
+        sarif_reporter.report(findings, analysis.coverage, analysis.signoff, *out);
     } else if (opts.format == "html") {
         report::HtmlReporter html_reporter;
         report::HtmlReportOptions html_opts;
@@ -306,7 +327,49 @@ int run(int argc, const char* argv[]) {
             std::cerr << "HTML report generated in " << html_opts.output_dir << "/\n";
         }
     } else {
-        reporter.report_json(findings, *out, analysis.analysis_status);
+        reporter.report_json(findings, analysis.coverage, analysis.signoff, *out,
+                             analysis.analysis_status);
+    }
+
+    if (opts.signoff_mode) {
+        std::cerr << "Signoff: " << analysis::signoff_status_name(analysis.signoff.status) << " — "
+                  << analysis.signoff.reason << "\n";
+        std::cerr << "Coverage: " << analysis.coverage.counts.total << " total, "
+                  << analysis.coverage.counts.errors << " errors, "
+                  << analysis.coverage.counts.warnings << " warnings, "
+                  << analysis.coverage.counts.verified_safe << " verified safe, "
+                  << analysis.coverage.counts.waived << " waived\n";
+    }
+
+    // Baseline save
+    if (!opts.save_baseline.empty()) {
+        analysis::TrendAnalyzer trend;
+        trend.save_baseline(opts.save_baseline, findings, opts.save_baseline + ".baseline.json");
+        if (opts.verbose) {
+            std::cerr << "Baseline '" << opts.save_baseline << "' saved.\n";
+        }
+    }
+
+    // Baseline comparison
+    if (!opts.compare_baseline.empty()) {
+        analysis::TrendAnalyzer trend;
+        try {
+            auto trend_result = trend.compare(opts.compare_baseline, findings);
+            std::cerr << "Baseline comparison (" << opts.compare_baseline << "):\n"
+                      << "  baseline=" << trend_result.total_baseline
+                      << " current=" << trend_result.total_current
+                      << " added=" << trend_result.new_findings
+                      << " fixed=" << trend_result.fixed_findings
+                      << " unchanged=" << trend_result.persistent_findings << "\n";
+            if (trend_result.improved())
+                std::cerr << "  Status: IMPROVED\n";
+            else if (trend_result.regressed())
+                std::cerr << "  Status: REGRESSED\n";
+            else
+                std::cerr << "  Status: STABLE\n";
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: could not load baseline: " << e.what() << "\n";
+        }
     }
 
     return reporter.has_unsuppressed_errors(findings) ? static_cast<int>(ExitCode::FINDINGS)

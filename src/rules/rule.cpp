@@ -32,6 +32,12 @@ RuleEngine::RuleEngine() {
     register_rule({"CDC010", "path_traversal_truncated",
                    "Path traversal exceeded limit; some crossings may be missed", "warning", true,
                    "analysis", "1.0.0"});
+    register_rule({"CDC011", "pulse_crossing",
+                   "Pulse synchronizer crossing without proper 2FF chain", "warning", true,
+                   "crossing", "1.0.0"});
+    register_rule({"CDC012", "toggle_crossing",
+                   "Toggle synchronizer crossing without proper 2FF chain", "warning", true,
+                   "crossing", "1.0.0"});
 }
 
 void RuleEngine::register_rule(const Rule& r) {

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "analysis/coverage.h"
+#include "analysis/signoff.h"
 #include "cdc/crossing.h"
 
 namespace opencdc::report {
@@ -22,6 +24,10 @@ struct ReportCounts {
 class Reporter {
    public:
     void report_json(const std::vector<cdc::Finding>& findings, std::ostream& os,
+                     const std::string& analysis_status = "complete") const;
+    void report_json(const std::vector<cdc::Finding>& findings,
+                     const analysis::CoverageResult& coverage,
+                     const analysis::SignoffResult& signoff, std::ostream& os,
                      const std::string& analysis_status = "complete") const;
     void report_text(const std::vector<cdc::Finding>& findings, std::ostream& os,
                      const std::string& analysis_status = "complete") const;

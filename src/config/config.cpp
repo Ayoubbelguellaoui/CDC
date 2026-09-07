@@ -157,6 +157,14 @@ void ConfigParser::parse_output_section(const std::string& content, Config& conf
                 config.output.file = value;
             else if (to_lower(key) == "suppress_reset_crossings")
                 config.suppress_reset_crossings = (to_lower(value) == "true");
+            else if (to_lower(key) == "reconvergence_depth") {
+                try {
+                    int d = std::stoi(value);
+                    if (d >= 1 && d <= 50)
+                        config.reconvergence_depth = d;
+                } catch (...) {
+                }
+            }
         }
     }
 }
@@ -234,6 +242,10 @@ void ConfigParser::parse_reset_policy_section(const std::string& content, Config
 
             if (to_lower(key) == "require_cdc_register_reset") {
                 config.reset_policy.require_cdc_register_reset = (value == "true");
+            } else if (to_lower(key) == "check_same_clock_reset_crossings") {
+                config.reset_policy.check_same_clock_reset_crossings = (value == "true");
+            } else if (to_lower(key) == "detect_reset_synchronizer") {
+                config.reset_policy.detect_reset_synchronizer = (value == "true");
             }
         }
     }

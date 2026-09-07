@@ -1,12 +1,13 @@
+#include <gtest/gtest.h>
+
 #include "cdc/synchronizer.h"
 #include "ir/graph.h"
-#include <gtest/gtest.h>
 
 using namespace opencdc::ir;
 using namespace opencdc::cdc;
 
 class SyncAdversarialTest : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     SynchronizerMatcher matcher;
 };
@@ -51,7 +52,7 @@ TEST_F(SyncAdversarialTest, FourFFChainReportedAsFourFF) {
     EXPECT_EQ(pat, SyncPattern::FourFF);
 }
 
-TEST_F(SyncAdversarialTest, FiveFFChainReportedAsThreeFF) {
+TEST_F(SyncAdversarialTest, FiveFFChainReportedAsNStage) {
     uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
     uint64_t s1 = graph.add_register("mod.s1", "clk_b", 1, {"mod.sv", 8, 5});
     uint64_t s2 = graph.add_register("mod.s2", "clk_b", 1, {"mod.sv", 9, 5});
@@ -66,7 +67,7 @@ TEST_F(SyncAdversarialTest, FiveFFChainReportedAsThreeFF) {
     graph.add_edge(s4, s5);
 
     auto pat = matcher.find_pattern_for_dest(s1, graph);
-    EXPECT_EQ(pat, SyncPattern::ThreeFF);
+    EXPECT_EQ(pat, SyncPattern::NStage);
 }
 
 TEST_F(SyncAdversarialTest, StrictModeRejectsSameDomainPred) {
@@ -164,8 +165,8 @@ TEST_F(SyncAdversarialTest, StrictModeWarningsMatchChain) {
 TEST_F(SyncAdversarialTest, CombBetweenSyncStagesBreaksChainDetection) {
     uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
     uint64_t meta = graph.add_register("mod.meta", "clk_b", 1, {"mod.sv", 8, 5});
-    uint64_t gate = graph.add_combinational("mod.gate", LogicType::And, {meta}, 1,
-                                            {"mod.sv", 9, 5});
+    uint64_t gate =
+        graph.add_combinational("mod.gate", LogicType::And, {meta}, 1, {"mod.sv", 9, 5});
     uint64_t sync = graph.add_register("mod.sync", "clk_b", 1, {"mod.sv", 10, 5});
 
     graph.add_edge(src, meta);
@@ -196,8 +197,7 @@ TEST_F(SyncAdversarialTest, FanoutOnStage2TriggersWarning) {
         if (w.find("fanout") != std::string::npos)
             found_fanout_warning = true;
     }
-    EXPECT_TRUE(found_fanout_warning)
-        << "Expected fanout warning from intermediate sync stage";
+    EXPECT_TRUE(found_fanout_warning) << "Expected fanout warning from intermediate sync stage";
 }
 
 TEST_F(SyncAdversarialTest, DifferentAsyncResetSignalsWarning) {

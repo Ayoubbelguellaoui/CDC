@@ -38,7 +38,7 @@ std::vector<uint64_t> ReconvergenceAnalyzer::find_fanout_sources(
 
 std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
     const ir::Graph& graph, const std::vector<clock::ClockDomain>& domains,
-    const std::vector<Finding>& crossings, uint64_t source_id) const {
+    const std::vector<Finding>& crossings, uint64_t source_id, int max_depth) const {
     std::vector<Finding> findings;
     const ir::Node* src = graph.find_node(source_id);
     if (!src)
@@ -79,7 +79,7 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                 (has_sync_chain(a->dest_reg_id) || has_sync_chain(b->dest_reg_id)))
                 continue;
 
-            // Bounded BFS: collect up to 16 register descendants per path (max 3 hops)
+            // Bounded BFS: collect register descendants per path (configurable depth)
             bool bfs_truncated = false;
             auto collect_descendants = [&](uint64_t start_id) -> std::vector<uint64_t> {
                 std::vector<uint64_t> result;
@@ -87,14 +87,14 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                 std::unordered_set<uint64_t> visited;
                 bfs.push({start_id, 0});
                 visited.insert(start_id);
-                while (!bfs.empty() && result.size() < 16) {
+                while (!bfs.empty() && result.size() < 64) {
                     auto [cur, depth] = bfs.front();
                     bfs.pop();
                     const ir::Node* n = graph.find_node(cur);
                     if (depth > 0 && n && n->kind == ir::NodeKind::Register) {
                         result.push_back(cur);
                     }
-                    if (depth >= 3) {
+                    if (depth >= max_depth) {
                         bfs_truncated = true;
                         continue;
                     }
@@ -104,7 +104,7 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                         }
                     }
                 }
-                if (result.size() >= 16)
+                if (result.size() >= 64)
                     bfs_truncated = true;
                 return result;
             };
@@ -173,12 +173,13 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
 
 std::vector<Finding> ReconvergenceAnalyzer::analyze(const ir::Graph& graph,
                                                     const std::vector<clock::ClockDomain>& domains,
-                                                    const std::vector<Finding>& crossings) {
+                                                    const std::vector<Finding>& crossings,
+                                                    int max_depth) {
     std::vector<Finding> findings;
     auto sources = find_fanout_sources(graph, domains);
 
     for (uint64_t src_id : sources) {
-        auto new_findings = check_pairs(graph, domains, crossings, src_id);
+        auto new_findings = check_pairs(graph, domains, crossings, src_id, max_depth);
         for (auto& f : new_findings) {
             findings.push_back(std::move(f));
         }

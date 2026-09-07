@@ -153,10 +153,11 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
         return SyncPattern::ThreeFF;
     if (depth == 4)
         return SyncPattern::FourFF;
-    return SyncPattern::ThreeFF;  // 5+ stages treated as ThreeFF+
+    return SyncPattern::NStage;  // 5+ stages
 }
 
-bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t dest_reg_id) const {
+bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t dest_reg_id,
+                                             bool strict) const {
     const ir::Node* dest = graph.find_node(dest_reg_id);
     if (!dest)
         return false;
@@ -174,7 +175,7 @@ bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t de
             if (n->width != 1)
                 continue;
             // Strict check: reject if successor has an unexpected same-domain predecessor
-            if (current != dest_reg_id) {
+            if (strict && current != dest_reg_id) {
                 bool has_unexpected_pred = false;
                 for (uint64_t pred : graph.register_predecessors(succ, false)) {
                     const ir::Node* pn = graph.find_node(pred);

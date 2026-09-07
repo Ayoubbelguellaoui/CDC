@@ -8,6 +8,7 @@
 #include "clock/constraints.h"
 #include "clock/resolve.h"
 #include "config/config.h"
+#include "config/profile.h"
 #include "frontend/slang_adapter.h"
 #include "rules/rule.h"
 
@@ -91,6 +92,12 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
             result.analysis_status = "failed";
             return result;
         }
+    }
+
+    // 4b. Apply methodology profile if specified.
+    if (!request.profile.empty()) {
+        config::ProfileSettings profile_settings = config::get_profile_settings(request.profile);
+        config::apply_profile(profile_settings, cfg);
     }
 
     for (const auto& [rule_id, rule_cfg] : cfg.rules) {
@@ -198,13 +205,14 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     crossing_analyzer.set_clock_constraints(&constraints);
     crossing_analyzer.set_reset_policy(&cfg.reset_policy);
     crossing_analyzer.set_multicycle_policy(&cfg.multicycle_path_policy);
+    crossing_analyzer.set_resolve_result(&resolve_result);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 
     // 9. Reconvergence.
     cdc::ReconvergenceAnalyzer reconvergence_analyzer;
-    auto reconv_findings =
-        reconvergence_analyzer.analyze(result.graph, result.domains.domains, findings);
+    auto reconv_findings = reconvergence_analyzer.analyze(result.graph, result.domains.domains,
+                                                          findings, cfg.reconvergence_depth);
     for (auto& f : reconv_findings) {
         findings.push_back(std::move(f));
     }
@@ -220,7 +228,8 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // 11. Reset domain crossings.
     cdc::ResetDomainAnalyzer reset_domain_analyzer;
     auto reset_findings = reset_domain_analyzer.check_reset_crossings(
-        result.graph, {}, result.domains.domains, result.domains.register_to_domain);
+        result.graph, {}, result.domains.domains, result.domains.register_to_domain,
+        &cfg.reset_policy);
     for (auto& f : reset_findings) {
         if (cfg.suppress_reset_crossings && f.rule_id == "CDC009")
             continue;
@@ -274,6 +283,13 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
             break;
         }
     }
+
+    // 14. Compute coverage and signoff.
+    CoverageEngine coverage_engine;
+    result.coverage = coverage_engine.compute(result.findings, result.analysis_status);
+
+    SignoffEngine signoff_engine;
+    result.signoff = signoff_engine.evaluate(result.findings, result.analysis_status);
 
     return result;
 }

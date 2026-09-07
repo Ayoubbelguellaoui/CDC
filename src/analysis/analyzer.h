@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "analysis/coverage.h"
+#include "analysis/signoff.h"
 #include "cdc/crossing.h"
 #include "clock/domain.h"
 #include "config/config.h"
@@ -25,6 +27,8 @@ struct AnalysisRequest {
     std::vector<std::string> severity_overrides;  // "RULE=severity"
     // Pre-parsed config (optional). When set, the analyzer skips re-parsing.
     std::optional<config::Config> config;
+    // Methodology profile name (optional). When set, overrides config settings.
+    std::string profile;
 };
 
 struct AnalysisResult {
@@ -35,6 +39,8 @@ struct AnalysisResult {
     ir::Graph graph;
     clock::DomainResult domains;
     std::vector<cdc::Finding> findings;
+    CoverageResult coverage;
+    SignoffResult signoff;
 };
 
 // Runs the full CDC analysis pipeline. Single entry point shared by the

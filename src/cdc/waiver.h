@@ -21,6 +21,7 @@ struct Waiver {
     std::string justification;
     std::string owner;
     std::string expiry;
+    std::string ticket;
     WaiverMatchType match_type = WaiverMatchType::Substring;
 
     // Pre-compiled regex (populated by WaiverEngine::add_waiver for Regex type).

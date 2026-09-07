@@ -265,6 +265,7 @@ std::vector<Finding> WaiverEngine::apply(const std::vector<Finding>& findings) c
                 f.waived = true;
                 f.waiver_justification = w.justification;
                 f.waiver_owner = w.owner;
+                f.waiver_ticket = w.ticket;
                 break;
             }
         }
@@ -278,10 +279,11 @@ std::vector<std::string> WaiverEngine::check_unused(const std::vector<Finding>& 
     for (size_t i = 0; i < waivers_.size(); ++i) {
         const auto& w = waivers_[i];
         bool used = false;
+        size_t match_count = 0;
         for (const auto& f : findings) {
             if (matches(f, w)) {
                 used = true;
-                break;
+                ++match_count;
             }
         }
         if (is_expired(w.expiry)) {
@@ -294,6 +296,11 @@ std::vector<std::string> WaiverEngine::check_unused(const std::vector<Finding>& 
             warnings.push_back("Waiver #" + std::to_string(i + 1) + " (rule=" + w.rule_id +
                                ", source=" + w.source_reg_name + ", dest=" + w.dest_reg_name +
                                ") did not match any finding");
+        } else if (match_count >= 10) {
+            warnings.push_back("Waiver #" + std::to_string(i + 1) + " (rule=" + w.rule_id +
+                               ", source=" + w.source_reg_name + ", dest=" + w.dest_reg_name +
+                               ") matched " + std::to_string(match_count) +
+                               " findings — may be overly broad");
         }
     }
     return warnings;
@@ -374,6 +381,19 @@ bool WaiverEngine::load_from_file(const std::string& path, std::string* error) {
             if (space != std::string::npos) {
                 rest = trim(rest.substr(space + 1));
             } else {
+                rest.clear();
+            }
+        }
+
+        // Parse optional ticket reference (TICKET-NNN or JIRA-NNN or #NNN pattern).
+        if (!rest.empty() && (rest[0] == 'T' || rest[0] == 't' || rest[0] == 'J' ||
+                              rest[0] == 'j' || rest[0] == '#')) {
+            size_t space = rest.find(' ');
+            if (space != std::string::npos) {
+                w.ticket = rest.substr(0, space);
+                rest = trim(rest.substr(space + 1));
+            } else {
+                w.ticket = rest;
                 rest.clear();
             }
         }

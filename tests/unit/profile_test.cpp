@@ -86,3 +86,67 @@ TEST(ProfileTest, StringOverload) {
     auto s = get_profile_settings("strict");
     EXPECT_EQ(s.profile, MethodologyProfile::Strict);
 }
+
+TEST(ProfileTest, ApplyProfileWiresAllFields) {
+    Config cfg;
+    ProfileSettings asic = get_profile_settings(MethodologyProfile::AsicSignoff);
+    apply_profile(asic, cfg);
+
+    EXPECT_TRUE(cfg.reset_policy.require_cdc_register_reset);
+    EXPECT_TRUE(cfg.reset_policy.check_same_clock_reset_crossings);
+    EXPECT_TRUE(cfg.reset_policy.detect_reset_synchronizer);
+    EXPECT_EQ(cfg.reconvergence_depth, 16);
+    EXPECT_FALSE(cfg.suppress_reset_crossings);
+    EXPECT_EQ(cfg.min_sync_stages, 3);
+    EXPECT_TRUE(cfg.require_structural_proof);
+    EXPECT_FALSE(cfg.allow_user_annotation);
+    EXPECT_FALSE(cfg.multicycle_path_policy.suppress_findings);
+    EXPECT_EQ(cfg.rules["CDC007"].severity, "error");
+    EXPECT_EQ(cfg.rules["CDC003"].severity, "error");
+}
+
+TEST(ProfileTest, FpgaProfileMulticycle) {
+    Config cfg;
+    ProfileSettings fpga = get_profile_settings(MethodologyProfile::Fpga);
+    apply_profile(fpga, cfg);
+
+    EXPECT_TRUE(cfg.multicycle_path_policy.suppress_findings);
+    ASSERT_EQ(cfg.multicycle_path_policy.suppress_rules.size(), 2u);
+    EXPECT_EQ(cfg.multicycle_path_policy.suppress_rules[0], "CDC001");
+    EXPECT_EQ(cfg.multicycle_path_policy.suppress_rules[1], "CDC002");
+}
+
+TEST(ProfileTest, StrictProfileDisablesAnnotation) {
+    Config cfg;
+    ProfileSettings strict = get_profile_settings(MethodologyProfile::Strict);
+    apply_profile(strict, cfg);
+
+    EXPECT_FALSE(cfg.allow_user_annotation);
+    EXPECT_TRUE(cfg.require_structural_proof);
+    EXPECT_TRUE(cfg.reset_policy.check_same_clock_reset_crossings);
+}
+
+TEST(ProfileTest, IsValidProfile) {
+    EXPECT_TRUE(is_valid_profile("default"));
+    EXPECT_TRUE(is_valid_profile("strict"));
+    EXPECT_TRUE(is_valid_profile("asic_signoff"));
+    EXPECT_TRUE(is_valid_profile("fpga"));
+    EXPECT_TRUE(is_valid_profile("ip_development"));
+    EXPECT_TRUE(is_valid_profile("soc_integration"));
+    EXPECT_FALSE(is_valid_profile("unknown"));
+    EXPECT_FALSE(is_valid_profile(""));
+    EXPECT_FALSE(is_valid_profile("ASIC_SIGNOFF"));
+}
+
+TEST(ProfileTest, DefaultProfilePreservesDefaults) {
+    Config cfg;
+    ProfileSettings def = get_profile_settings(MethodologyProfile::Default);
+    apply_profile(def, cfg);
+
+    EXPECT_FALSE(cfg.reset_policy.require_cdc_register_reset);
+    EXPECT_FALSE(cfg.reset_policy.check_same_clock_reset_crossings);
+    EXPECT_EQ(cfg.min_sync_stages, 2);
+    EXPECT_FALSE(cfg.require_structural_proof);
+    EXPECT_TRUE(cfg.allow_user_annotation);
+    EXPECT_TRUE(cfg.multicycle_path_policy.suppress_findings);
+}

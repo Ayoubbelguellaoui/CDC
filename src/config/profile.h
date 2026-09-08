@@ -20,6 +20,7 @@ struct ProfileSettings {
     // Reset policy
     bool require_cdc_register_reset = false;
     bool require_reset_synchronizer = false;
+    bool check_same_clock_reset_crossings = false;
 
     // Annotation policy
     bool allow_annotation = true;
@@ -34,6 +35,10 @@ struct ProfileSettings {
     // Suppression
     bool suppress_reset_crossings = false;
 
+    // Multicycle policy
+    bool multicycle_suppress_findings = true;
+    std::vector<std::string> multicycle_suppress_rules = {"CDC001"};
+
     // Severity overrides: rule_id -> severity
     std::vector<std::pair<std::string, std::string>> severity_overrides;
 
@@ -45,6 +50,8 @@ ProfileSettings get_profile_settings(MethodologyProfile profile);
 ProfileSettings get_profile_settings(const std::string& profile_name);
 
 void apply_profile(ProfileSettings& settings, Config& cfg);
+
+bool is_valid_profile(const std::string& name);
 
 }  // namespace opencdc::config
 

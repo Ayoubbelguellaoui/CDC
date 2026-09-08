@@ -117,4 +117,56 @@ CoverageResult CoverageEngine::compute(const std::vector<cdc::Finding>& findings
     return result;
 }
 
+void CoverageEngine::compute_crossing_coverage(
+    CoverageResult& result, const ir::Graph& graph,
+    const std::vector<clock::ClockDomain>& domains,
+    const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
+    auto& c = result.counts;
+
+    // Count all register-to-register edges in the graph.
+    for (const auto& node : graph.nodes()) {
+        if (node.kind != ir::NodeKind::Register)
+            continue;
+
+        auto src_it = register_to_domain.find(node.id);
+        if (src_it == register_to_domain.end() || src_it->second >= domains.size()) {
+            // Source has no domain — count successors as skipped_no_domain.
+            for (uint64_t succ : graph.register_successors(node.id)) {
+                const ir::Node* sn = graph.find_node(succ);
+                if (sn && sn->kind == ir::NodeKind::Register) {
+                    c.total_crossings++;
+                    c.skipped_no_domain++;
+                }
+            }
+            continue;
+        }
+
+        const clock::ClockDomain& src_dom = domains[src_it->second];
+
+        for (uint64_t succ : graph.register_successors(node.id)) {
+            const ir::Node* sn = graph.find_node(succ);
+            if (!sn || sn->kind != ir::NodeKind::Register)
+                continue;
+
+            c.total_crossings++;
+
+            auto dst_it = register_to_domain.find(succ);
+            if (dst_it == register_to_domain.end() || dst_it->second >= domains.size()) {
+                c.skipped_no_domain++;
+                continue;
+            }
+
+            const clock::ClockDomain& dst_dom = domains[dst_it->second];
+
+            if (src_dom.id == dst_dom.id) {
+                c.skipped_same_domain++;
+                continue;
+            }
+
+            // Cross-domain crossing counted as analyzed (findings vector is the source of truth).
+            c.analyzed_crossings++;
+        }
+    }
+}
+
 }  // namespace opencdc::analysis

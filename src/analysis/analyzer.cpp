@@ -222,6 +222,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     crossing_analyzer.set_multicycle_policy(&cfg.multicycle_path_policy);
     crossing_analyzer.set_resolve_result(&resolve_result);
     crossing_analyzer.set_blackbox_registry(&blackbox_registry);
+    crossing_analyzer.set_min_sync_stages(cfg.min_sync_stages);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 
@@ -303,9 +304,13 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // 14. Compute coverage and signoff.
     CoverageEngine coverage_engine;
     result.coverage = coverage_engine.compute(result.findings, result.analysis_status);
+    coverage_engine.compute_crossing_coverage(result.coverage, result.graph,
+                                              result.domains.domains,
+                                              result.domains.register_to_domain);
 
     SignoffEngine signoff_engine;
-    result.signoff = signoff_engine.evaluate(result.findings, result.analysis_status);
+    result.signoff = signoff_engine.evaluate(result.findings, result.analysis_status, cfg,
+                                              request.profile.empty() ? "default" : request.profile);
 
     return result;
 }

@@ -292,4 +292,51 @@ std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph
     return chains;
 }
 
+size_t SynchronizerMatcher::chain_depth(uint64_t dest_reg_id, const ir::Graph& graph) const {
+    const ir::Node* dest = graph.find_node(dest_reg_id);
+    if (!dest || dest->clock_domain.empty() || dest->width != 1)
+        return 0;
+
+    bool has_cross_domain_pred = false;
+    for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false)) {
+        const ir::Node* pred = graph.find_node(pred_id);
+        if (pred && pred->kind == ir::NodeKind::Register && pred->clock_domain != dest->clock_domain) {
+            has_cross_domain_pred = true;
+            break;
+        }
+    }
+    if (!has_cross_domain_pred)
+        return 0;
+
+    size_t depth = 1;
+    uint64_t current = dest_reg_id;
+    for (int stage = 0; stage < 10; ++stage) {
+        uint64_t next_id = 0;
+        for (uint64_t succ : graph.register_successors(current, false)) {
+            const ir::Node* n = graph.find_node(succ);
+            if (!n || n->kind != ir::NodeKind::Register)
+                continue;
+            if (n->clock_domain != dest->clock_domain)
+                continue;
+            if (n->width != 1)
+                continue;
+            next_id = succ;
+            break;
+        }
+        if (!next_id)
+            break;
+        current = next_id;
+        depth++;
+    }
+    return depth;
+}
+
+bool SynchronizerMatcher::below_min_stages(uint64_t dest_reg_id, const ir::Graph& graph,
+                                            int min_stages) const {
+    if (min_stages <= 1)
+        return false;
+    size_t depth = chain_depth(dest_reg_id, graph);
+    return depth > 0 && static_cast<int>(depth) < min_stages;
+}
+
 }  // namespace opencdc::cdc

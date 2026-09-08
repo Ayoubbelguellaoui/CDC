@@ -368,6 +368,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                             !dst->module_path.empty() &&
                                             src->module_path != dst->module_path;
 
+                // Evidence chain: ordered analysis steps for explainability.
+                f.evidence_chain.push_back("Clock domains: '" + src_dom->name + "' -> '" +
+                                           dst_dom->name + "'");
+                f.evidence_chain.push_back("Clock relationship: " +
+                                           std::string(clock::clock_relationship_name(clock_rel)));
+
                 SyncPattern crossing_sync = f.detected_sync;
 
                 f.is_gray_coded =
@@ -381,6 +387,8 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                   src->is_handshake_signal || dst->is_handshake_signal;
 
                 if (crossing_sync != SyncPattern::None) {
+                    f.evidence_chain.push_back("Sync pattern: " +
+                                               std::string(sync_pattern_name(crossing_sync)));
                     if (sync_matcher_.has_chain_warnings(graph, dst_id)) {
                         f.severity = "warning";
                         f.safety_status = SafetyStatus::Ambiguous;
@@ -393,8 +401,21 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                               " detected at destination";
                     }
                 } else {
+                    f.evidence_chain.push_back("Sync pattern: none detected");
                     f.safety_status = SafetyStatus::VerifiedUnsafe;
                     f.safety_provenance = "No synchronizer chain detected on destination side";
+                }
+
+                // Check minimum sync stages requirement.
+                if (crossing_sync != SyncPattern::None && min_sync_stages_ > 1) {
+                    if (sync_matcher_.below_min_stages(dst_id, graph, min_sync_stages_)) {
+                        f.severity = "error";
+                        f.safety_status = SafetyStatus::VerifiedUnsafe;
+                        f.safety_provenance = std::string(sync_pattern_name(crossing_sync)) +
+                                              " detected but chain depth " +
+                                              std::to_string(sync_matcher_.chain_depth(dst_id, graph)) +
+                                              " < minimum " + std::to_string(min_sync_stages_);
+                    }
                 }
 
                 // Synchronous/related clocks: reduce severity since synchronizer may not be needed.

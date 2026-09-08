@@ -2,6 +2,7 @@
 #include "analysis/signoff.h"
 #include "analysis/trend.h"
 #include "config/config.h"
+#include "config/profile.h"
 #include "opencdc/opencdc.h"
 #include "opencdc/version.h"
 #include "report/html_reporter.h"
@@ -248,6 +249,13 @@ int run(int argc, const char* argv[]) {
         for (const auto& f : opts.input_files)
             std::cerr << " " << f;
         std::cerr << "\n";
+    }
+
+    if (!opts.profile.empty() && !config::is_valid_profile(opts.profile)) {
+        std::cerr << "Error: unknown profile '" << opts.profile << "'\n";
+        std::cerr << "Valid profiles: default, strict, asic_signoff, fpga, ip_development, "
+                     "soc_integration\n";
+        return static_cast<int>(ExitCode::INPUT_ERROR);
     }
 
     analysis::AnalysisRequest request;

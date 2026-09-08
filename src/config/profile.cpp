@@ -57,11 +57,13 @@ ProfileSettings get_profile_settings(MethodologyProfile profile) {
                 "structural proof for safety classifications";
             s.require_cdc_register_reset = true;
             s.require_reset_synchronizer = true;
+            s.check_same_clock_reset_crossings = true;
             s.allow_annotation = false;
             s.require_structural_proof = true;
             s.min_sync_stages = 3;
             s.reconvergence_depth = 12;
             s.suppress_reset_crossings = false;
+            s.multicycle_suppress_findings = false;
             s.severity_overrides.push_back({"CDC007", "error"});
             break;
 
@@ -70,11 +72,13 @@ ProfileSettings get_profile_settings(MethodologyProfile profile) {
             s.description = "ASIC signoff: maximum rigor for tapeout";
             s.require_cdc_register_reset = true;
             s.require_reset_synchronizer = true;
+            s.check_same_clock_reset_crossings = true;
             s.allow_annotation = false;
             s.require_structural_proof = true;
             s.min_sync_stages = 3;
             s.reconvergence_depth = 16;
             s.suppress_reset_crossings = false;
+            s.multicycle_suppress_findings = false;
             s.severity_overrides.push_back({"CDC007", "error"});
             s.severity_overrides.push_back({"CDC003", "error"});
             break;
@@ -89,6 +93,8 @@ ProfileSettings get_profile_settings(MethodologyProfile profile) {
             s.min_sync_stages = 2;
             s.reconvergence_depth = 8;
             s.suppress_reset_crossings = true;
+            s.multicycle_suppress_findings = true;
+            s.multicycle_suppress_rules = {"CDC001", "CDC002"};
             s.disabled_rules.push_back("CDC009");
             break;
 
@@ -129,8 +135,15 @@ ProfileSettings get_profile_settings(const std::string& name) {
 void apply_profile(ProfileSettings& settings, Config& cfg) {
     cfg.reset_policy.require_cdc_register_reset = settings.require_cdc_register_reset;
     cfg.reset_policy.detect_reset_synchronizer = settings.require_reset_synchronizer;
+    cfg.reset_policy.check_same_clock_reset_crossings = settings.check_same_clock_reset_crossings;
     cfg.reconvergence_depth = settings.reconvergence_depth;
     cfg.suppress_reset_crossings = settings.suppress_reset_crossings;
+    cfg.min_sync_stages = settings.min_sync_stages;
+    cfg.require_structural_proof = settings.require_structural_proof;
+    cfg.allow_user_annotation = settings.allow_annotation;
+
+    cfg.multicycle_path_policy.suppress_findings = settings.multicycle_suppress_findings;
+    cfg.multicycle_path_policy.suppress_rules = settings.multicycle_suppress_rules;
 
     for (const auto& [rule_id, severity] : settings.severity_overrides) {
         cfg.rules[rule_id].severity = severity;
@@ -139,6 +152,11 @@ void apply_profile(ProfileSettings& settings, Config& cfg) {
     for (const auto& rule_id : settings.disabled_rules) {
         cfg.rules[rule_id].enabled = false;
     }
+}
+
+bool is_valid_profile(const std::string& name) {
+    return name == "default" || name == "strict" || name == "asic_signoff" || name == "fpga" ||
+           name == "ip_development" || name == "soc_integration";
 }
 
 }  // namespace opencdc::config

@@ -78,6 +78,7 @@ struct Finding {
     std::string multicycle_source;
     clock::ClockRelationship clock_relationship = clock::ClockRelationship::Unknown;
     MultiBitCrossingType multi_bit_type = MultiBitCrossingType::None;
+    std::vector<std::string> evidence_chain;
 };
 
 class CrossingAnalyzer {
@@ -111,6 +112,10 @@ class CrossingAnalyzer {
         blackbox_registry_ = registry;
     }
 
+    void set_min_sync_stages(int stages) {
+        min_sync_stages_ = stages;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -130,6 +135,7 @@ class CrossingAnalyzer {
     const config::MulticyclePathPolicy* multicycle_policy_ = nullptr;
     const clock::ResolveResult* resolve_result_ = nullptr;
     const BlackBoxRegistry* blackbox_registry_ = nullptr;
+    int min_sync_stages_ = 2;
 };
 
 }  // namespace opencdc::cdc

@@ -3,9 +3,11 @@
 #include "analysis/coverage.h"
 #include "analysis/signoff.h"
 #include "cdc/crossing.h"
+#include "config/config.h"
 
 using namespace opencdc::cdc;
 using namespace opencdc::analysis;
+using namespace opencdc::config;
 
 static Finding make_finding(const std::string& rule_id, const std::string& severity,
                             const std::string& src_domain, const std::string& dst_domain,
@@ -194,4 +196,68 @@ TEST_F(SignoffTest, ErrorsButSomeWaivedStillFail) {
 
     auto result = engine.evaluate(findings, "complete");
     EXPECT_EQ(result.status, SignoffStatus::Fail);
+}
+
+TEST_F(SignoffTest, AsicSignoffWarningsFail) {
+    std::vector<Finding> findings;
+    findings.push_back(make_finding("CDC001", "warning", "clk_a", "clk_b"));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");
+    EXPECT_EQ(result.status, SignoffStatus::Fail);
+    EXPECT_GT(result.warnings_as_errors, 0u);
+    EXPECT_EQ(result.methodology, "asic_signoff");
+}
+
+TEST_F(SignoffTest, FpgaWarningsPass) {
+    std::vector<Finding> findings;
+    findings.push_back(make_finding("CDC001", "warning", "clk_a", "clk_b"));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "fpga");
+    EXPECT_EQ(result.status, SignoffStatus::Pass);
+    EXPECT_EQ(result.warnings_as_errors, 0u);
+}
+
+TEST_F(SignoffTest, StrictNonCriticalWarningsPass) {
+    std::vector<Finding> findings;
+    // CDC003 is not in the critical rules list for warnings-as-errors.
+    findings.push_back(make_finding("CDC003", "warning", "clk_a", "clk_b"));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "strict");
+    EXPECT_EQ(result.status, SignoffStatus::Pass);
+}
+
+TEST_F(SignoffTest, AsicSignoffCriticalWarningsFail) {
+    std::vector<Finding> findings;
+    findings.push_back(make_finding("CDC001", "warning", "clk_a", "clk_b"));
+    findings.push_back(make_finding("CDC004", "warning", "clk_a", "clk_b"));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");
+    EXPECT_EQ(result.status, SignoffStatus::Fail);
+    EXPECT_EQ(result.warnings_as_errors, 2u);
+}
+
+TEST_F(SignoffTest, AsicSignoffWaivedWarningsPass) {
+    std::vector<Finding> findings;
+    Finding w1 = make_finding("CDC001", "warning", "clk_a", "clk_b");
+    w1.waived = true;
+    findings.push_back(w1);
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");
+    EXPECT_EQ(result.status, SignoffStatus::PassWithWaivers);
+    EXPECT_EQ(result.warnings_as_errors, 0u);
+}
+
+TEST_F(SignoffTest, DefaultMethodologyNoWarningFail) {
+    std::vector<Finding> findings;
+    findings.push_back(make_finding("CDC001", "warning", "clk_a", "clk_b"));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "default");
+    EXPECT_EQ(result.status, SignoffStatus::Pass);
+    EXPECT_EQ(result.warnings_as_errors, 0u);
 }

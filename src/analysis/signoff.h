@@ -6,6 +6,7 @@
 
 #include "analysis/coverage.h"
 #include "cdc/crossing.h"
+#include "config/config.h"
 
 namespace opencdc::analysis {
 
@@ -16,13 +17,17 @@ std::string signoff_status_name(SignoffStatus s);
 struct SignoffResult {
     SignoffStatus status = SignoffStatus::Error;
     std::string reason;
+    std::string methodology;
+    size_t warnings_as_errors = 0;
     CoverageResult coverage;
 };
 
 class SignoffEngine {
    public:
     SignoffResult evaluate(const std::vector<cdc::Finding>& findings,
-                           const std::string& analysis_status) const;
+                           const std::string& analysis_status,
+                           const config::Config& cfg = {},
+                           const std::string& methodology = "default") const;
 };
 
 }  // namespace opencdc::analysis

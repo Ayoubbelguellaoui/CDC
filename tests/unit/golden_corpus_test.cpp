@@ -235,3 +235,59 @@ TEST_F(GoldenCorpusTest, EmptyGraphNoFindings) {
     auto signoff = se.evaluate(findings, "complete");
     EXPECT_EQ(signoff.status, opencdc::analysis::SignoffStatus::Pass);
 }
+
+TEST_F(GoldenCorpusTest, CrossingCoverageMetrics) {
+    opencdc::ir::Graph graph;
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"cov2.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"cov2.sv", 6, 5});
+    uint64_t same = graph.add_register("mod.same_ff", "clk_a", 1, {"cov2.sv", 7, 5});
+    auto* ns = graph.find_node_mutable(src);
+    ns->reset_signal = "rst_n";
+    auto* nd = graph.find_node_mutable(dst);
+    nd->reset_signal = "rst_n";
+    graph.add_edge(src, dst);
+    graph.add_edge(src, same);
+
+    opencdc::clock::DomainExtractor de;
+    auto dr = de.extract(graph);
+
+    opencdc::cdc::CrossingAnalyzer ca;
+    auto findings = ca.analyze(graph, dr.domains, dr.register_to_domain);
+
+    opencdc::analysis::CoverageEngine ce;
+    auto coverage = ce.compute(findings, "complete");
+    ce.compute_crossing_coverage(coverage, graph, dr.domains, dr.register_to_domain);
+
+    EXPECT_EQ(coverage.counts.total_crossings, 2u);
+    EXPECT_EQ(coverage.counts.skipped_same_domain, 1u);
+    EXPECT_EQ(coverage.counts.analyzed_crossings, 1u);
+}
+
+TEST_F(GoldenCorpusTest, EvidenceChainPopulated) {
+    opencdc::ir::Graph graph;
+    uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"ev.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"ev.sv", 6, 5});
+    auto* ns = graph.find_node_mutable(src);
+    ns->reset_signal = "rst_n";
+    auto* nd = graph.find_node_mutable(dst);
+    nd->reset_signal = "rst_n";
+    graph.add_edge(src, dst);
+
+    opencdc::clock::DomainExtractor de;
+    auto dr = de.extract(graph);
+
+    opencdc::cdc::CrossingAnalyzer ca;
+    auto findings = ca.analyze(graph, dr.domains, dr.register_to_domain);
+
+    ASSERT_FALSE(findings.empty());
+    bool found_cdc001 = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001") {
+            found_cdc001 = true;
+            EXPECT_FALSE(f.evidence_chain.empty());
+            EXPECT_NE(f.evidence_chain[0].find("clk_a"), std::string::npos);
+            EXPECT_NE(f.evidence_chain[0].find("clk_b"), std::string::npos);
+        }
+    }
+    EXPECT_TRUE(found_cdc001);
+}

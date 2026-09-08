@@ -72,6 +72,9 @@ struct Config {
     std::vector<BlackBoxConfig> blackboxes;
     bool suppress_reset_crossings = false;
     int reconvergence_depth = 8;
+    int min_sync_stages = 2;
+    bool require_structural_proof = false;
+    bool allow_user_annotation = true;
 };
 
 class ConfigParser {

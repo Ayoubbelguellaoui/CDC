@@ -973,4 +973,77 @@ void PatternRecognizer::analyze_and_annotate(ir::Graph& graph) {
     }
 }
 
+bool PatternRecognizer::verify_async_fifo(uint64_t src_id, uint64_t dst_id,
+                                           const ir::Graph& graph,
+                                           std::string& failure_reason) const {
+    std::lock_guard<std::mutex> lock(pattern_mutex_);
+    ensure_patterns_locked(graph);
+
+    for (auto& fifo : fifo_cache_) {
+        bool match =
+            (fifo.read_ptr_id == src_id && fifo.write_ptr_id == dst_id) ||
+            (fifo.write_ptr_id == src_id && fifo.read_ptr_id == dst_id) ||
+            (fifo.read_ptr_id == src_id || fifo.write_ptr_id == src_id ||
+             fifo.read_ptr_id == dst_id || fifo.write_ptr_id == dst_id);
+
+        if (!match)
+            continue;
+
+        fifo.gray_encoded_wptr = fifo.has_gray_encoding;
+        fifo.gray_encoded_rptr = fifo.has_gray_encoding;
+
+        // Check sync chain on write pointer side.
+        fifo.sync_chain_on_wptr = false;
+        for (uint64_t succ : graph.register_successors(fifo.write_ptr_id)) {
+            const ir::Node* n = graph.find_node(succ);
+            if (n && n->kind == ir::NodeKind::Register && n->clock_domain == fifo.read_domain) {
+                fifo.sync_chain_on_wptr = true;
+                break;
+            }
+        }
+
+        // Check sync chain on read pointer side.
+        fifo.sync_chain_on_rptr = false;
+        for (uint64_t succ : graph.register_successors(fifo.read_ptr_id)) {
+            const ir::Node* n = graph.find_node(succ);
+            if (n && n->kind == ir::NodeKind::Register && n->clock_domain == fifo.write_domain) {
+                fifo.sync_chain_on_rptr = true;
+                break;
+            }
+        }
+
+        fifo.full_empty_flags_present = fifo.has_full_empty;
+        fifo.memory_between_domains = fifo.has_memory;
+
+        // Build failure reason.
+        std::vector<std::string> failures;
+        if (!fifo.gray_encoded_wptr)
+            failures.push_back("write pointer not gray-encoded");
+        if (!fifo.gray_encoded_rptr)
+            failures.push_back("read pointer not gray-encoded");
+        if (!fifo.sync_chain_on_wptr)
+            failures.push_back("no sync chain on write pointer");
+        if (!fifo.sync_chain_on_rptr)
+            failures.push_back("no sync chain on read pointer");
+        if (!fifo.full_empty_flags_present)
+            failures.push_back("no full/empty flags");
+        if (!fifo.memory_between_domains)
+            failures.push_back("no memory between domains");
+
+        fifo.verified = failures.empty();
+        if (!failures.empty()) {
+            failure_reason = "Async FIFO verification failed: ";
+            for (size_t i = 0; i < failures.size(); ++i) {
+                if (i > 0)
+                    failure_reason += "; ";
+                failure_reason += failures[i];
+            }
+        }
+        return fifo.verified;
+    }
+
+    failure_reason = "No async FIFO pattern found for given source/destination";
+    return false;
+}
+
 }  // namespace opencdc::cdc

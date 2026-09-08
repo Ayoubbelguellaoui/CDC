@@ -26,6 +26,14 @@ struct AsyncFifoPattern {
     bool has_full_empty = false;
     bool has_memory = false;
     bool verified;
+    // Verification details
+    bool gray_encoded_wptr = false;
+    bool gray_encoded_rptr = false;
+    bool sync_chain_on_wptr = false;
+    bool sync_chain_on_rptr = false;
+    bool full_empty_flags_present = false;
+    bool memory_between_domains = false;
+    std::string verification_failure_reason;
 };
 
 struct HandshakePattern {
@@ -39,6 +47,12 @@ struct HandshakePattern {
     bool has_data_stability = false;
     bool has_acceptance_gating = false;
     bool verified;
+    // Verification details
+    bool data_stable_during_handshake = false;
+    bool acceptance_gating_present = false;
+    bool feedback_path_exists = false;
+    int data_width = 0;
+    std::string stability_failure_reason;
 };
 
 struct GrayCodePattern {
@@ -84,6 +98,13 @@ class PatternRecognizer {
     bool is_toggle_sync(uint64_t node_id, const ir::Graph& graph) const;
     bool is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
 
+    bool verify_async_fifo(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+                           std::string& failure_reason) const;
+
+    bool check_data_stability(uint64_t valid_id, uint64_t ready_id, const ir::Graph& graph) const;
+    bool check_acceptance_gating(uint64_t valid_id, uint64_t ready_id,
+                                 const ir::Graph& graph) const;
+
     void analyze_and_annotate(ir::Graph& graph);
 
     // Pre-compute pattern caches on the main thread before parallel analysis.
@@ -102,10 +123,6 @@ class PatternRecognizer {
     bool verify_gray_decoder_structure(uint64_t node_id, const ir::Graph& graph) const;
 
     bool detect_valid_ready_pair(uint64_t valid_id, uint64_t ready_id,
-                                 const ir::Graph& graph) const;
-
-    bool check_data_stability(uint64_t valid_id, uint64_t ready_id, const ir::Graph& graph) const;
-    bool check_acceptance_gating(uint64_t valid_id, uint64_t ready_id,
                                  const ir::Graph& graph) const;
 
     bool detect_fifo_full_empty(uint64_t ptr_id, const ir::Graph& graph, uint64_t& full_id,

@@ -568,6 +568,79 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     local_findings.push_back(std::move(mb));
                 }
 
+                // Async FIFO verification: if an async FIFO pattern is detected,
+                // verify it has proper gray encoding, sync chains, and flags.
+                if (pattern_recognizer_ &&
+                    (src->is_async_fifo_ptr || dst->is_async_fifo_ptr)) {
+                    std::string fifo_failure;
+                    bool fifo_ok = pattern_recognizer_->verify_async_fifo(
+                        src_id, dst_id, graph, fifo_failure);
+                    if (!fifo_ok && !fifo_failure.empty()) {
+                        Finding fv;
+                        fv.rule_id = "CDC002";
+                        fv.rule_name = "multi_bit_crossing";
+                        fv.severity = "warning";
+                        fv.source_reg_id = src_id;
+                        fv.dest_reg_id = dst_id;
+                        fv.source_reg_name = src->hier_name;
+                        fv.dest_reg_name = dst->hier_name;
+                        fv.source_domain = src_dom->name;
+                        fv.dest_domain = dst_dom->name;
+                        fv.path.node_ids = reg_path.node_ids;
+                        fv.source_loc = src->loc;
+                        fv.bus_width = src->width;
+                        fv.source_module_path = src->module_path;
+                        fv.dest_module_path = dst->module_path;
+                        fv.clock_relationship = clock_rel;
+                        fv.multi_bit_type = MultiBitCrossingType::AsyncFifo;
+                        fv.reason = "Async FIFO crossing: " + fifo_failure;
+                        fv.safety_status = SafetyStatus::Candidate;
+                        fv.safety_provenance = "Async FIFO verification failed";
+                        fv.evidence_chain.push_back("Async FIFO pattern detected");
+                        fv.evidence_chain.push_back("Verification: " + fifo_failure);
+                        local_findings.push_back(std::move(fv));
+                    }
+                }
+
+                // Handshake verification: if a handshake pattern is detected,
+                // verify data stability and acceptance gating.
+                if (pattern_recognizer_ && f.has_handshake && src->width > 1) {
+                    bool hs_stable = pattern_recognizer_->check_data_stability(
+                        src_id, dst_id, graph);
+                    bool hs_gated = pattern_recognizer_->check_acceptance_gating(
+                        src_id, dst_id, graph);
+                    if (!hs_stable || !hs_gated) {
+                        Finding hv;
+                        hv.rule_id = "CDC002";
+                        hv.rule_name = "multi_bit_crossing";
+                        hv.severity = "warning";
+                        hv.source_reg_id = src_id;
+                        hv.dest_reg_id = dst_id;
+                        hv.source_reg_name = src->hier_name;
+                        hv.dest_reg_name = dst->hier_name;
+                        hv.source_domain = src_dom->name;
+                        hv.dest_domain = dst_dom->name;
+                        hv.path.node_ids = reg_path.node_ids;
+                        hv.source_loc = src->loc;
+                        hv.bus_width = src->width;
+                        hv.source_module_path = src->module_path;
+                        hv.dest_module_path = dst->module_path;
+                        hv.clock_relationship = clock_rel;
+                        hv.multi_bit_type = MultiBitCrossingType::HandshakeControlled;
+                        std::string reason = "Handshake crossing: ";
+                        if (!hs_stable)
+                            reason += "data may not be stable during handshake; ";
+                        if (!hs_gated)
+                            reason += "acceptance gating may be missing";
+                        hv.reason = reason;
+                        hv.safety_status = SafetyStatus::Candidate;
+                        hv.safety_provenance = "Handshake verification incomplete";
+                        hv.evidence_chain.push_back("Handshake pattern detected");
+                        hv.evidence_chain.push_back("Verification: " + reason);
+                        local_findings.push_back(std::move(hv));
+                    }
+                }
+
                 if (src->clock_is_gated || dst->clock_is_gated) {
                     const ir::Node* gated_src = src->clock_is_gated ? src : nullptr;
                     const ir::Node* gated_dst = dst->clock_is_gated ? dst : nullptr;

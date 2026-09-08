@@ -165,6 +165,26 @@ void Graph::add_edge(uint64_t from_id, uint64_t to_id) {
     ++generation_;
 }
 
+void Graph::add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role) {
+    if (from_id == to_id)
+        return;
+    if (!find_node(from_id) || !find_node(to_id))
+        return;
+    if (edges_.size() >= MAX_GRAPH_EDGES) {
+        truncated_ = true;
+        return;
+    }
+
+    uint64_t edge_key = (from_id << 32) | to_id;
+    if (!edge_set_.insert(edge_key).second)
+        return;
+
+    edges_.push_back({from_id, to_id, role});
+    adj_[from_id].push_back(to_id);
+    radj_[to_id].push_back(from_id);
+    ++generation_;
+}
+
 const Node* Graph::find_node(uint64_t id) const {
     auto it = id_to_idx_.find(id);
     if (it == id_to_idx_.end())

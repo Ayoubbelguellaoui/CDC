@@ -536,6 +536,11 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 // can still be a multi-bit hazard (per-bit skew), and gated /
                 // muxed / reset properties apply regardless of sync chains.
 
+                // Skip CDC002 for control signals (valid/ready/enable) — these are
+                // expected to cross domains and use handshaking protocols.
+                bool is_control_crossing = src->is_control_signal || dst->is_control_signal;
+
+                if (!is_control_crossing) {
                 bool safe_crossing = is_safe_multi_bit_crossing(src_id, dst_id, graph);
 
                 if (src->width > 1 && !safe_crossing) {
@@ -594,6 +599,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     mb.safety_provenance = "Multi-bit crossing without verified safety pattern";
                     local_findings.push_back(std::move(mb));
                 }
+                }  // end if (!is_control_crossing)
 
                 // Async FIFO verification: if an async FIFO pattern is detected,
                 // verify it has proper gray encoding, sync chains, and flags.

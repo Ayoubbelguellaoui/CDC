@@ -908,6 +908,52 @@ void SlangAdapter::resolve_clocks(ir::Graph& graph) {
             }
         }
     }
+
+    // Classify control signals (valid, ready, enable) by naming convention.
+    static const std::vector<std::string> control_suffixes = {"_valid", "_ready", "_enable",
+                                                              "_en",    "_ack",   "_req",
+                                                              "_grant", "_go",    "_done"};
+    for (auto& node : graph.nodes_mutable()) {
+        std::string name = node.short_name;
+        if (name.empty())
+            continue;
+        for (const auto& suffix : control_suffixes) {
+            if (name.size() > suffix.size() &&
+                name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                node.is_control_signal = true;
+                break;
+            }
+        }
+        // Also match exact names.
+        if (!node.is_control_signal) {
+            static const std::vector<std::string> control_names = {
+                "valid", "ready", "enable", "en", "ack", "req", "grant", "go", "done",
+                "valid_i", "ready_i", "enable_i", "valid_o", "ready_o", "enable_o"};
+            for (const auto& cn : control_names) {
+                if (name == cn) {
+                    node.is_control_signal = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Mark edges from control signal nodes as control edges.
+    for (auto& edge : graph.edges_mutable()) {
+        const ir::Node* from_node = graph.find_node(edge.from_id);
+        const ir::Node* to_node = graph.find_node(edge.to_id);
+        if (from_node && from_node->is_control_signal) {
+            edge.role = ir::EdgeRole::Control;
+        } else if (to_node && to_node->is_control_signal) {
+            edge.role = ir::EdgeRole::Control;
+        }
+        // Clock domain nodes get Clock role.
+        if (from_node && from_node->kind == ir::NodeKind::Register && to_node &&
+            to_node->kind == ir::NodeKind::Register &&
+            from_node->clock_domain != to_node->clock_domain) {
+            edge.role = ir::EdgeRole::Data;  // Cross-domain data edges.
+        }
+    }
 }
 
 bool SlangAdapter::is_top_level_input(const std::string& hier_name, const ir::Graph& graph,

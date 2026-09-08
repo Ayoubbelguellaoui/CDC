@@ -65,11 +65,22 @@ struct Node {
     // Uncertainty tracking (set by crossing analysis)
     bool value_uncertain = false;
     std::string uncertainty_source;
+
+    // Control signal classification (set by slang adapter)
+    bool is_control_signal = false;
+};
+
+enum class EdgeRole : uint8_t {
+    Data,
+    Control,
+    Clock,
+    Reset
 };
 
 struct Edge {
     uint64_t from_id;
     uint64_t to_id;
+    EdgeRole role = EdgeRole::Data;
 };
 
 struct ValidationResult {
@@ -108,6 +119,7 @@ class Graph {
                                const SourceLoc& loc, const std::string& module_path = "");
 
     void add_edge(uint64_t from_id, uint64_t to_id);
+    void add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role);
 
     const Node* find_node(uint64_t id) const;
     Node* find_node_mutable(uint64_t id);
@@ -120,6 +132,9 @@ class Graph {
         return nodes_;
     }
     const std::vector<Edge>& edges() const {
+        return edges_;
+    }
+    std::vector<Edge>& edges_mutable() {
         return edges_;
     }
 

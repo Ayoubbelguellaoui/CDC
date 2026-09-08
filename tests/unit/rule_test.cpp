@@ -13,7 +13,7 @@ class RuleEngineTest : public ::testing::Test {
 
 TEST_F(RuleEngineTest, DefaultRulesLoaded) {
     auto rules = engine.rules();
-    ASSERT_EQ(rules.size(), 12u);
+    ASSERT_EQ(rules.size(), 13u);
     EXPECT_EQ(rules[0].id, "CDC001");
     EXPECT_EQ(rules[1].id, "CDC002");
     EXPECT_EQ(rules[2].id, "CDC003");
@@ -26,6 +26,7 @@ TEST_F(RuleEngineTest, DefaultRulesLoaded) {
     EXPECT_EQ(rules[9].id, "CDC010");
     EXPECT_EQ(rules[10].id, "CDC011");
     EXPECT_EQ(rules[11].id, "CDC012");
+    EXPECT_EQ(rules[12].id, "CDC013");
 }
 
 TEST_F(RuleEngineTest, FindRule) {

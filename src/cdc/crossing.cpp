@@ -373,6 +373,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                            dst_dom->name + "'");
                 f.evidence_chain.push_back("Clock relationship: " +
                                            std::string(clock::clock_relationship_name(clock_rel)));
+                f.evidence_chain.push_back("Bus width: " + std::to_string(src->width));
 
                 SyncPattern crossing_sync = f.detected_sync;
 
@@ -447,6 +448,19 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 }
 
                 local_findings.push_back(std::move(f));
+
+                // Mark destination register as value-uncertain after unsynchronized crossing.
+                if (crossing_sync == SyncPattern::None) {
+                    ir::Node* dst_mutable = const_cast<ir::Node*>(dst);
+                    dst_mutable->value_uncertain = true;
+                    dst_mutable->uncertainty_source =
+                        "unsynchronized crossing from '" + src->hier_name + "' in domain '" +
+                        src_dom->name + "'";
+                    f.propagates_uncertainty = true;
+                    f.uncertainty_reason = dst_mutable->uncertainty_source;
+                    f.evidence_chain.push_back(
+                        "Destination register value is uncertain after unsynchronized crossing");
+                }
 
                 // CDC011: pulse crossing without proper 2FF chain
                 if (crossing_sync == SyncPattern::None && pattern_recognizer_) {
@@ -874,6 +888,70 @@ std::vector<Finding> CrossingAnalyzer::analyze(
     }
 
     return findings;
+}
+
+void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
+                                             std::vector<Finding>& findings) const {
+    // Propagate value uncertainty downstream through combinational logic and
+    // registers within the same domain. Cross-domain propagation is already
+    // handled by the crossing detection pass marking destinations.
+    for (ir::Node& node : graph.nodes_mutable()) {
+        if (!node.value_uncertain)
+            continue;
+        for (uint64_t succ : graph.successors(node.id)) {
+            ir::Node* n = graph.find_node_mutable(succ);
+            if (n && !n->value_uncertain &&
+                n->clock_domain == node.clock_domain) {
+                n->value_uncertain = true;
+                n->uncertainty_source = "propagated from '" + node.hier_name + "'";
+            }
+        }
+        for (uint64_t rsucc : graph.register_successors(node.id, false)) {
+            ir::Node* n = graph.find_node_mutable(rsucc);
+            if (n && !n->value_uncertain &&
+                n->clock_domain == node.clock_domain) {
+                n->value_uncertain = true;
+                n->uncertainty_source = "propagated from '" + node.hier_name + "'";
+            }
+        }
+    }
+
+    // Emit CDC013 findings for registers that became uncertain due to
+    // propagation (not from direct crossing detection).
+    for (const ir::Node& node : graph.nodes()) {
+        if (!node.value_uncertain || node.kind != ir::NodeKind::Register)
+            continue;
+        bool already_reported = false;
+        for (const auto& f : findings) {
+            if ((f.source_reg_id == node.id || f.dest_reg_id == node.id) &&
+                f.rule_id != "CDC013") {
+                already_reported = true;
+                break;
+            }
+        }
+        if (already_reported || node.uncertainty_source.find("propagated from") == std::string::npos)
+            continue;
+
+        Finding uf;
+        uf.rule_id = "CDC013";
+        uf.rule_name = "unknown_propagation";
+        uf.severity = "warning";
+        uf.source_reg_id = node.id;
+        uf.source_reg_name = node.hier_name;
+        uf.source_domain = node.clock_domain;
+        uf.path.node_ids.push_back(node.id);
+        uf.source_loc = node.loc;
+        uf.bus_width = node.width;
+        uf.propagates_uncertainty = true;
+        uf.uncertainty_reason = node.uncertainty_source;
+        uf.reason = "Register '" + node.hier_name + "' has uncertain value due to " +
+                    node.uncertainty_source + ".";
+        uf.safety_status = SafetyStatus::Candidate;
+        uf.safety_provenance = "Value uncertainty propagation";
+        uf.evidence_chain.push_back("Source: " + node.uncertainty_source);
+        uf.evidence_chain.push_back("Propagated within domain '" + node.clock_domain + "'");
+        findings.push_back(std::move(uf));
+    }
 }
 
 }  // namespace opencdc::cdc

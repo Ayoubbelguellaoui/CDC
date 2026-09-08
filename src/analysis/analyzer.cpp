@@ -224,7 +224,10 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     crossing_analyzer.set_blackbox_registry(&blackbox_registry);
     crossing_analyzer.set_min_sync_stages(cfg.min_sync_stages);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
-                                              result.domains.register_to_domain);
+                                               result.domains.register_to_domain);
+
+    // Propagate value uncertainty downstream after crossing detection.
+    crossing_analyzer.propagate_uncertainty(result.graph, findings);
 
     // 9. Reconvergence.
     cdc::ReconvergenceAnalyzer reconvergence_analyzer;

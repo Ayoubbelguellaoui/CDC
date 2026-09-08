@@ -61,6 +61,10 @@ struct Node {
     bool is_gray_coded = false;
     bool is_handshake_signal = false;
     bool is_async_fifo_ptr = false;
+
+    // Uncertainty tracking (set by crossing analysis)
+    bool value_uncertain = false;
+    std::string uncertainty_source;
 };
 
 struct Edge {

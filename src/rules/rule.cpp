@@ -38,6 +38,9 @@ RuleEngine::RuleEngine() {
     register_rule({"CDC012", "toggle_crossing",
                    "Toggle synchronizer crossing without proper 2FF chain", "warning", true,
                    "crossing", "1.0.0"});
+    register_rule({"CDC013", "unknown_propagation",
+                   "Value uncertainty propagated through unsynchronized crossing path", "warning",
+                   true, "crossing", "1.0.0"});
 }
 
 void RuleEngine::register_rule(const Rule& r) {

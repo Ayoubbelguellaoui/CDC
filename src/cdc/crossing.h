@@ -79,6 +79,8 @@ struct Finding {
     clock::ClockRelationship clock_relationship = clock::ClockRelationship::Unknown;
     MultiBitCrossingType multi_bit_type = MultiBitCrossingType::None;
     std::vector<std::string> evidence_chain;
+    bool propagates_uncertainty = false;
+    std::string uncertainty_reason;
 };
 
 class CrossingAnalyzer {
@@ -136,6 +138,9 @@ class CrossingAnalyzer {
     const clock::ResolveResult* resolve_result_ = nullptr;
     const BlackBoxRegistry* blackbox_registry_ = nullptr;
     int min_sync_stages_ = 2;
+
+public:
+    void propagate_uncertainty(ir::Graph& graph, std::vector<Finding>& findings) const;
 };
 
 }  // namespace opencdc::cdc

@@ -369,11 +369,18 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                             src->module_path != dst->module_path;
 
                 // Evidence chain: ordered analysis steps for explainability.
-                f.evidence_chain.push_back("Clock domains: '" + src_dom->name + "' -> '" +
-                                           dst_dom->name + "'");
-                f.evidence_chain.push_back("Clock relationship: " +
-                                           std::string(clock::clock_relationship_name(clock_rel)));
-                f.evidence_chain.push_back("Bus width: " + std::to_string(src->width));
+                f.evidence_chain.push_back(
+                    EvidenceStep{"clock_domains",
+                                 "Clock domains: '" + src_dom->name + "' -> '" + dst_dom->name + "'",
+                                 "identified", src->loc.file});
+                f.evidence_chain.push_back(
+                    EvidenceStep{"clock_relationship",
+                                 "Clock relationship: " +
+                                     std::string(clock::clock_relationship_name(clock_rel)),
+                                 "classified", src->loc.file});
+                f.evidence_chain.push_back(
+                    EvidenceStep{"bus_width", "Bus width: " + std::to_string(src->width), "measured",
+                                 src->loc.file});
 
                 SyncPattern crossing_sync = f.detected_sync;
 
@@ -388,8 +395,10 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                   src->is_handshake_signal || dst->is_handshake_signal;
 
                 if (crossing_sync != SyncPattern::None) {
-                    f.evidence_chain.push_back("Sync pattern: " +
-                                               std::string(sync_pattern_name(crossing_sync)));
+                    f.evidence_chain.push_back(
+                        EvidenceStep{"sync_pattern",
+                                     "Sync pattern: " + std::string(sync_pattern_name(crossing_sync)),
+                                     "detected", src->loc.file});
                     if (sync_matcher_.has_chain_warnings(graph, dst_id)) {
                         f.severity = "warning";
                         f.safety_status = SafetyStatus::Ambiguous;
@@ -402,7 +411,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                               " detected at destination";
                     }
                 } else {
-                    f.evidence_chain.push_back("Sync pattern: none detected");
+                    f.evidence_chain.push_back(
+                        EvidenceStep{"sync_pattern", "Sync pattern: none detected", "missing",
+                                     src->loc.file});
                     f.safety_status = SafetyStatus::VerifiedUnsafe;
                     f.safety_provenance = "No synchronizer chain detected on destination side";
                 }
@@ -459,7 +470,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     f.propagates_uncertainty = true;
                     f.uncertainty_reason = dst_mutable->uncertainty_source;
                     f.evidence_chain.push_back(
-                        "Destination register value is uncertain after unsynchronized crossing");
+                        EvidenceStep{"uncertainty",
+                                     "Destination register value is uncertain after unsynchronized crossing",
+                                     "flagged", src->loc.file});
                 }
 
                 // CDC011: pulse crossing without proper 2FF chain
@@ -610,8 +623,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                         fv.reason = "Async FIFO crossing: " + fifo_failure;
                         fv.safety_status = SafetyStatus::Candidate;
                         fv.safety_provenance = "Async FIFO verification failed";
-                        fv.evidence_chain.push_back("Async FIFO pattern detected");
-                        fv.evidence_chain.push_back("Verification: " + fifo_failure);
+                        fv.evidence_chain.push_back(
+                            EvidenceStep{"async_fifo", "Async FIFO pattern detected", "found",
+                                         src->loc.file});
+                        fv.evidence_chain.push_back(
+                            EvidenceStep{"fifo_verification", "Verification: " + fifo_failure, "failed",
+                                         src->loc.file});
                         local_findings.push_back(std::move(fv));
                     }
                 }
@@ -649,8 +666,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                         hv.reason = reason;
                         hv.safety_status = SafetyStatus::Candidate;
                         hv.safety_provenance = "Handshake verification incomplete";
-                        hv.evidence_chain.push_back("Handshake pattern detected");
-                        hv.evidence_chain.push_back("Verification: " + reason);
+                        hv.evidence_chain.push_back(
+                            EvidenceStep{"handshake", "Handshake pattern detected", "found",
+                                         src->loc.file});
+                        hv.evidence_chain.push_back(
+                            EvidenceStep{"handshake_verification", "Verification: " + reason, "failed",
+                                         src->loc.file});
                         local_findings.push_back(std::move(hv));
                     }
                 }
@@ -948,8 +969,11 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
                     node.uncertainty_source + ".";
         uf.safety_status = SafetyStatus::Candidate;
         uf.safety_provenance = "Value uncertainty propagation";
-        uf.evidence_chain.push_back("Source: " + node.uncertainty_source);
-        uf.evidence_chain.push_back("Propagated within domain '" + node.clock_domain + "'");
+        uf.evidence_chain.push_back(
+            EvidenceStep{"source", "Source: " + node.uncertainty_source, "identified", node.loc.file});
+        uf.evidence_chain.push_back(
+            EvidenceStep{"propagation", "Propagated within domain '" + node.clock_domain + "'", "propagated",
+                         node.loc.file});
         findings.push_back(std::move(uf));
     }
 }

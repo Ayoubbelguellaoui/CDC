@@ -214,6 +214,27 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
         }
         html << "</td>\n";
         html << "    </tr>\n";
+        if (!f.evidence_chain.empty()) {
+            html << "    <tr class=\"evidence-row\">\n";
+            html << "      <td colspan=\"8\">\n";
+            html << "        <div class=\"evidence-chain\">\n";
+            html << "          <strong>Evidence Chain:</strong>\n";
+            html << "          <ol>\n";
+            for (const auto& step : f.evidence_chain) {
+                html << "            <li>\n";
+                html << "              <span class=\"evidence-step-type\">" << escape_html(step.step_type)
+                     << "</span>: " << escape_html(step.description);
+                if (!step.result.empty()) {
+                    html << " <span class=\"evidence-result\">[" << escape_html(step.result)
+                         << "]</span>";
+                }
+                html << "\n            </li>\n";
+            }
+            html << "          </ol>\n";
+            html << "        </div>\n";
+            html << "      </td>\n";
+            html << "    </tr>\n";
+        }
     }
 
     html << "  </tbody>\n";

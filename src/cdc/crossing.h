@@ -42,6 +42,13 @@ struct ReconvergenceInfo {
     std::string explanation;
 };
 
+struct EvidenceStep {
+    std::string step_type;
+    std::string description;
+    std::string result;
+    std::string source_file;
+};
+
 struct Finding {
     std::string rule_id;
     std::string rule_name;
@@ -78,7 +85,7 @@ struct Finding {
     std::string multicycle_source;
     clock::ClockRelationship clock_relationship = clock::ClockRelationship::Unknown;
     MultiBitCrossingType multi_bit_type = MultiBitCrossingType::None;
-    std::vector<std::string> evidence_chain;
+    std::vector<EvidenceStep> evidence_chain;
     bool propagates_uncertainty = false;
     std::string uncertainty_reason;
 };

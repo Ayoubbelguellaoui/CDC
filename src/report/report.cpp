@@ -203,6 +203,22 @@ void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostre
             os << "      \"multi_bit_type\": \"" << mbt << "\",\n";
         }
 
+        if (!f.evidence_chain.empty()) {
+            os << "      \"evidence_chain\": [\n";
+            for (size_t j = 0; j < f.evidence_chain.size(); ++j) {
+                const auto& step = f.evidence_chain[j];
+                os << "        {\n"
+                   << "          \"step_type\": \"" << escape_json(step.step_type) << "\",\n"
+                   << "          \"description\": \"" << escape_json(step.description) << "\",\n"
+                   << "          \"result\": \"" << escape_json(step.result) << "\"\n"
+                   << "        }";
+                if (j + 1 < f.evidence_chain.size())
+                    os << ",";
+                os << "\n";
+            }
+            os << "      ],\n";
+        }
+
         os << "      \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
            << "      \"line\": " << f.source_loc.line << "\n"
            << "    }";
@@ -453,6 +469,22 @@ void Reporter::report_json(const std::vector<cdc::Finding>& findings,
                     break;
             }
             os << "      \"multi_bit_type\": \"" << mbt << "\",\n";
+        }
+
+        if (!f.evidence_chain.empty()) {
+            os << "      \"evidence_chain\": [\n";
+            for (size_t j = 0; j < f.evidence_chain.size(); ++j) {
+                const auto& step = f.evidence_chain[j];
+                os << "        {\n"
+                   << "          \"step_type\": \"" << escape_json(step.step_type) << "\",\n"
+                   << "          \"description\": \"" << escape_json(step.description) << "\",\n"
+                   << "          \"result\": \"" << escape_json(step.result) << "\"\n"
+                   << "        }";
+                if (j + 1 < f.evidence_chain.size())
+                    os << ",";
+                os << "\n";
+            }
+            os << "      ],\n";
         }
 
         os << "      \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"

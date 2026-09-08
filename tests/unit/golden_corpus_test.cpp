@@ -285,8 +285,8 @@ TEST_F(GoldenCorpusTest, EvidenceChainPopulated) {
         if (f.rule_id == "CDC001") {
             found_cdc001 = true;
             EXPECT_FALSE(f.evidence_chain.empty());
-            EXPECT_NE(f.evidence_chain[0].find("clk_a"), std::string::npos);
-            EXPECT_NE(f.evidence_chain[0].find("clk_b"), std::string::npos);
+            EXPECT_NE(f.evidence_chain[0].description.find("clk_a"), std::string::npos);
+            EXPECT_NE(f.evidence_chain[0].description.find("clk_b"), std::string::npos);
         }
     }
     EXPECT_TRUE(found_cdc001);

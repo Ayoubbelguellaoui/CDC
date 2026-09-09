@@ -32,6 +32,7 @@ add_executable(opencdc_unit_tests
     golden_corpus_test.cpp
     benchmark_test.cpp
     ${CMAKE_SOURCE_DIR}/src/ir/graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/ir/module_tree.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/domain.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/resolve.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/constraints.cpp

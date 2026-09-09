@@ -13,6 +13,7 @@
 #include "clock/domain.h"
 #include "clock/relationship.h"
 #include "config/config.h"
+#include "ir/module_tree.h"
 #include "ir/graph.h"
 
 namespace opencdc::cdc {
@@ -125,6 +126,10 @@ class CrossingAnalyzer {
         min_sync_stages_ = stages;
     }
 
+    void set_module_tree(const ir::ModuleTree* tree) {
+        module_tree_ = tree;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -144,6 +149,7 @@ class CrossingAnalyzer {
     const config::MulticyclePathPolicy* multicycle_policy_ = nullptr;
     const clock::ResolveResult* resolve_result_ = nullptr;
     const BlackBoxRegistry* blackbox_registry_ = nullptr;
+    const ir::ModuleTree* module_tree_ = nullptr;
     int min_sync_stages_ = 2;
 
 public:

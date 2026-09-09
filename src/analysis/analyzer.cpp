@@ -213,6 +213,10 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         blackbox_registry.add_model(model);
     }
 
+    // 8c. Module tree: build hierarchy for boundary crossing analysis.
+    ir::ModuleTree module_tree;
+    module_tree.build(result.graph);
+
     cdc::CrossingAnalyzer crossing_analyzer;
     crossing_analyzer.set_pattern_recognizer(&pattern_recognizer);
     // Always attach constraints: config and request false paths must be
@@ -223,6 +227,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     crossing_analyzer.set_resolve_result(&resolve_result);
     crossing_analyzer.set_blackbox_registry(&blackbox_registry);
     crossing_analyzer.set_min_sync_stages(cfg.min_sync_stages);
+    crossing_analyzer.set_module_tree(&module_tree);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
                                                result.domains.register_to_domain);
 

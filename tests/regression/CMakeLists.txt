@@ -3,6 +3,7 @@ add_executable(opencdc_regression_tests
     stress_test.cpp
     lsp_test.cpp
     ${CMAKE_SOURCE_DIR}/src/ir/graph.cpp
+    ${CMAKE_SOURCE_DIR}/src/ir/module_tree.cpp
     ${CMAKE_SOURCE_DIR}/src/frontend/slang_adapter.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/domain.cpp
     ${CMAKE_SOURCE_DIR}/src/clock/resolve.cpp

@@ -382,6 +382,20 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     EvidenceStep{"bus_width", "Bus width: " + std::to_string(src->width), "measured",
                                  src->loc.file});
 
+                // Module hierarchy evidence.
+                if (module_tree_ && !src->module_path.empty() && !dst->module_path.empty()) {
+                    std::string ancestor =
+                        module_tree_->common_ancestor(src->module_path, dst->module_path);
+                    bool boundary = module_tree_->crosses_boundary(src_id, dst_id, graph);
+                    if (boundary) {
+                        f.evidence_chain.push_back(
+                            EvidenceStep{"module_boundary",
+                                         "Crosses module boundary: '" + src->module_path + "' -> '" +
+                                             dst->module_path + "' (common ancestor: '" + ancestor + "')",
+                                         "boundary_crossing", src->loc.file});
+                    }
+                }
+
                 SyncPattern crossing_sync = f.detected_sync;
 
                 f.is_gray_coded =

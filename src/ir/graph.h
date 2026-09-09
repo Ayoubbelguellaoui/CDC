@@ -180,6 +180,18 @@ class Graph {
         return generation_;
     }
 
+    // Dirty tracking for incremental analysis.
+    bool dirty() const {
+        return dirty_;
+    }
+    void clear_dirty() {
+        dirty_ = false;
+    }
+    void mark_dirty() {
+        dirty_ = true;
+        ++generation_;
+    }
+
    private:
     std::vector<Node> nodes_;
     std::vector<Edge> edges_;
@@ -191,6 +203,7 @@ class Graph {
     uint64_t next_id_ = 1;
     uint64_t generation_ = 0;
     bool truncated_ = false;
+    bool dirty_ = false;
 };
 
 }  // namespace opencdc::ir

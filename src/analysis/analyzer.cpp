@@ -323,4 +323,19 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     return result;
 }
 
+AnalysisResult Analyzer::run_incremental(AnalysisResult& previous,
+                                          const AnalysisRequest& request) {
+    if (!previous.graph.dirty()) {
+        AnalysisResult empty;
+        empty.ok = true;
+        empty.analysis_status = "no_changes";
+        return empty;
+    }
+
+    // Re-run full analysis on the modified graph.
+    AnalysisResult result = run(request);
+    previous.graph.clear_dirty();
+    return result;
+}
+
 }  // namespace opencdc::analysis

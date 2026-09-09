@@ -37,6 +37,7 @@ uint64_t Graph::add_register(const std::string& hier_name, const std::string& cl
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
+    dirty_ = true;
     return id;
 }
 
@@ -69,6 +70,7 @@ uint64_t Graph::add_port(const std::string& hier_name, uint32_t width, const Sou
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
+    dirty_ = true;
     return id;
 }
 
@@ -101,6 +103,7 @@ uint64_t Graph::add_net(const std::string& hier_name, uint32_t width, const Sour
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
+    dirty_ = true;
     return id;
 }
 
@@ -136,6 +139,7 @@ uint64_t Graph::add_combinational(const std::string& hier_name, LogicType logic_
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
+    dirty_ = true;
 
     for (uint64_t input_id : inputs) {
         add_edge(input_id, id);
@@ -163,6 +167,7 @@ void Graph::add_edge(uint64_t from_id, uint64_t to_id) {
     adj_[from_id].push_back(to_id);
     radj_[to_id].push_back(from_id);
     ++generation_;
+    dirty_ = true;
 }
 
 void Graph::add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role) {
@@ -183,6 +188,7 @@ void Graph::add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role) {
     adj_[from_id].push_back(to_id);
     radj_[to_id].push_back(from_id);
     ++generation_;
+    dirty_ = true;
 }
 
 const Node* Graph::find_node(uint64_t id) const {

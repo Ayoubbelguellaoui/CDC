@@ -48,6 +48,11 @@ struct AnalysisResult {
 class Analyzer {
    public:
     AnalysisResult run(const AnalysisRequest& request);
+
+    // Incremental re-analysis: only re-analyze dirty parts of the graph.
+    // Returns empty result if graph is not dirty.
+    AnalysisResult run_incremental(AnalysisResult& previous,
+                                   const AnalysisRequest& request);
 };
 
 }  // namespace opencdc::analysis

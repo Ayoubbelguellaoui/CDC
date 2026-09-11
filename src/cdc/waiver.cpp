@@ -189,7 +189,7 @@ bool WaiverEngine::matches(const Finding& f, const Waiver& w) const {
     if (w.rule_id.empty())
         return false;
 
-    if (!fields_match(w.rule_id, f.rule_id))
+    if (w.rule_id != "*" && !fields_match(w.rule_id, f.rule_id))
         return false;
 
     if (w.match_type == WaiverMatchType::Substring) {

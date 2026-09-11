@@ -123,3 +123,17 @@ TEST_F(NamingAdversarialTest, HandshakeWithFeedbackPathIsSafe) {
     EXPECT_TRUE(recognizer.is_verified_safe_crossing(valid, ready, graph))
         << "Handshake with feedback path should be verified safe";
 }
+
+TEST_F(NamingAdversarialTest, StructuralProofIgnoresNameSeededHandshake) {
+    uint64_t valid = graph.add_register("top.valid_reg", "clk_a", 1, {"test.sv", 10, 5});
+    uint64_t ready = graph.add_register("top.ready_reg", "clk_b", 1, {"test.sv", 11, 5});
+    uint64_t ack = graph.add_register("top.ack_reg", "clk_a", 1, {"test.sv", 12, 5});
+    graph.find_node_mutable(valid)->is_handshake_signal = true;
+    graph.find_node_mutable(ready)->is_handshake_signal = true;
+    graph.add_edge(valid, ready);
+    graph.add_edge(ready, ack);
+
+    recognizer.set_require_structural_proof(true);
+    recognizer.analyze_and_annotate(graph);
+    EXPECT_FALSE(recognizer.is_verified_safe_crossing(valid, ready, graph));
+}

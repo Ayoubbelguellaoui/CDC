@@ -51,7 +51,58 @@ bool pattern_matches(const std::string& pattern, const std::string& value) {
         pattern.find('*') != std::string::npos || pattern.find('?') != std::string::npos;
 
     if (!has_wildcard) {
-        return value.find(pattern) != std::string::npos;
+        auto starts_with_ci = [](const std::string& s, const std::string& p) {
+            if (s.size() < p.size())
+                return false;
+            for (size_t i = 0; i < p.size(); ++i) {
+                if (std::tolower(static_cast<unsigned char>(s[i])) !=
+                    std::tolower(static_cast<unsigned char>(p[i])))
+                    return false;
+            }
+            return true;
+        };
+        auto contains_ci = [](const std::string& s, const std::string& p) {
+            if (p.size() > s.size())
+                return false;
+            for (size_t i = 0; i + p.size() <= s.size(); ++i) {
+                bool ok = true;
+                for (size_t j = 0; j < p.size(); ++j) {
+                    if (std::tolower(static_cast<unsigned char>(s[i + j])) !=
+                        std::tolower(static_cast<unsigned char>(p[j]))) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok)
+                    return true;
+            }
+            return false;
+        };
+        if (pattern.find('.') != std::string::npos) {
+            if (iequals(pattern, value))
+                return true;
+            if (value.size() > pattern.size() + 1) {
+                std::string suffix = value.substr(value.size() - pattern.size() - 1);
+                if (suffix[0] == '.' && iequals(suffix.substr(1), pattern))
+                    return true;
+            }
+            return contains_ci(value, "." + pattern + ".") || contains_ci(value, "." + pattern);
+        }
+        size_t pos = 0;
+        while (pos <= value.size()) {
+            size_t next = value.find('.', pos);
+            std::string segment =
+                value.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+            if (iequals(pattern, segment))
+                return true;
+            if (starts_with_ci(segment, pattern) && segment.size() > pattern.size() &&
+                (segment[pattern.size()] == '_' || segment[pattern.size()] == '-'))
+                return true;
+            if (next == std::string::npos)
+                break;
+            pos = next + 1;
+        }
+        return false;
     }
 
     if (wildcard_match(pattern, value))

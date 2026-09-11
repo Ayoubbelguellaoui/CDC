@@ -1,4 +1,6 @@
 #include "clock/constraints.h"
+#include "clock/relationship.h"
+#include "clock/resolve.h"
 #include <gtest/gtest.h>
 
 using namespace opencdc::clock;
@@ -321,6 +323,9 @@ TEST_F(ConstraintsTest, PatternMatchesSegment) {
 TEST_F(ConstraintsTest, PatternMatchesSubstring) {
     EXPECT_TRUE(pattern_matches("clk", "mod.clk_core_ff"));
     EXPECT_FALSE(pattern_matches("jtag", "mod.clk_core_ff"));
+    EXPECT_FALSE(pattern_matches("clk", "nclk"));
+    EXPECT_FALSE(pattern_matches("clk", "myclk"));
+    EXPECT_TRUE(pattern_matches("clk", "mod.clk"));
 }
 
 TEST_F(ConstraintsTest, PathMatchContextClockOnly) {
@@ -496,6 +501,40 @@ TEST_F(SdcReaderTest, ParseFalsePathThroughPin) {
     EXPECT_EQ(constraints.false_paths[0].to_clock, "clk_b");
     ASSERT_EQ(constraints.false_paths[0].through.size(), 1u);
     EXPECT_EQ(constraints.false_paths[0].through[0], "u_mux/Y");
+}
+
+TEST(RelationshipTest, IntegerFrequencyRatioIsNotSynchronous) {
+    ClockConstraints c;
+    ClockDefinition a;
+    a.name = "clk_fast";
+    a.frequency_mhz = 100;
+    ClockDefinition b;
+    b.name = "clk_slow";
+    b.frequency_mhz = 50;
+    c.clocks.push_back(a);
+    c.clocks.push_back(b);
+    c.clock_map["clk_fast"] = a;
+    c.clock_map["clk_slow"] = b;
+    ResolveResult empty;
+    EXPECT_EQ(classify_relationship("clk_fast", "clk_slow", c, empty),
+              ClockRelationship::Unknown);
+}
+
+TEST(RelationshipTest, GeneratedClockIsGenerated) {
+    ClockConstraints c;
+    ClockDefinition master;
+    master.name = "clk_a";
+    ClockDefinition gen;
+    gen.name = "clk_div";
+    gen.is_generated = true;
+    gen.master_clock = "clk_a";
+    c.clocks.push_back(master);
+    c.clocks.push_back(gen);
+    c.clock_map["clk_a"] = master;
+    c.clock_map["clk_div"] = gen;
+    ResolveResult empty;
+    EXPECT_EQ(classify_relationship("clk_div", "clk_a", c, empty),
+              ClockRelationship::Generated);
 }
 
 TEST_F(SdcReaderTest, ParseFalsePathMultipleThrough) {

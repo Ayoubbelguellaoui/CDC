@@ -18,9 +18,33 @@ namespace opencdc::analysis {
 AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     AnalysisResult result;
 
+    rules::RuleEngine rule_engine;
+    config::Config cfg;
+    if (request.config.has_value()) {
+        cfg = *request.config;
+    } else if (!request.config_path.empty()) {
+        config::ConfigParser parser;
+        std::string cfg_error;
+        cfg = parser.parse_file(request.config_path, &cfg_error);
+        if (!cfg_error.empty()) {
+            result.errors.push_back(std::move(cfg_error));
+            result.analysis_status = "failed";
+            return result;
+        }
+    }
+    if (!request.profile.empty()) {
+        config::ProfileSettings profile_settings = config::get_profile_settings(request.profile);
+        config::apply_profile(profile_settings, cfg);
+    }
+
     // 1. Frontend: parse and elaborate to IR graph.
     frontend::SlangAdapter adapter;
-    frontend::FrontendResult fe_result = adapter.elaborate(request.input_files, request.top_module);
+    frontend::FrontendOptions fe_opts;
+    fe_opts.include_dirs = request.include_dirs;
+    fe_opts.defines = request.defines;
+    fe_opts.allow_user_annotation = cfg.allow_user_annotation;
+    frontend::FrontendResult fe_result =
+        adapter.elaborate(request.input_files, request.top_module, fe_opts);
     if (!fe_result.ok) {
         result.errors = std::move(fe_result.errors);
         result.analysis_status = "failed";
@@ -79,28 +103,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
             node.clock_is_muxed = true;
     }
 
-    // 4. Config file: rule overrides, waivers, false paths, reset policy.
-    rules::RuleEngine rule_engine;
-    config::Config cfg;
-    if (request.config.has_value()) {
-        cfg = *request.config;
-    } else if (!request.config_path.empty()) {
-        config::ConfigParser parser;
-        std::string cfg_error;
-        cfg = parser.parse_file(request.config_path, &cfg_error);
-        if (!cfg_error.empty()) {
-            result.errors.push_back(std::move(cfg_error));
-            result.analysis_status = "failed";
-            return result;
-        }
-    }
-
-    // 4b. Apply methodology profile if specified.
-    if (!request.profile.empty()) {
-        config::ProfileSettings profile_settings = config::get_profile_settings(request.profile);
-        config::apply_profile(profile_settings, cfg);
-    }
-
+    // 4. Config already parsed (needed before frontend for annotation policy).
     for (const auto& [rule_id, rule_cfg] : cfg.rules) {
         if (!rule_engine.find_rule(rule_id).has_value()) {
             result.errors.push_back("unknown rule in config: " + rule_id);
@@ -197,6 +200,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 
     // 8. Pattern recognition, then crossing analysis.
     cdc::PatternRecognizer pattern_recognizer;
+    pattern_recognizer.set_require_structural_proof(cfg.require_structural_proof);
     pattern_recognizer.analyze_and_annotate(result.graph);
 
     // 8b. Blackbox registry: built-in models + user-configured.
@@ -326,10 +330,10 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 AnalysisResult Analyzer::run_incremental(AnalysisResult& previous,
                                           const AnalysisRequest& request) {
     if (!previous.graph.dirty()) {
-        AnalysisResult empty;
-        empty.ok = true;
-        empty.analysis_status = "no_changes";
-        return empty;
+        AnalysisResult keep = previous;
+        keep.ok = true;
+        keep.analysis_status = "no_changes";
+        return keep;
     }
 
     // Re-run full analysis on the modified graph.

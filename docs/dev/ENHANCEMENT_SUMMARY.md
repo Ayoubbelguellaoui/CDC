@@ -1,4 +1,4 @@
-# OpenCDC v0.3.0 — Enhancement Summary
+# OpenCDC v0.5.0 — Enhancement Summary
 
 ## Overview
 

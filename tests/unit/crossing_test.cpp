@@ -117,11 +117,10 @@ TEST_F(CrossingTest, SyncChainDowngradesCdc001) {
     auto findings =
         crossing_analyzer.analyze(graph, dom_result.domains, dom_result.register_to_domain);
 
-    // CDC001 fires but downgraded to warning when sync detected
-    // Derived rules (002/004/005/007) are suppressed
     ASSERT_EQ(findings.size(), 1u);
     EXPECT_EQ(findings[0].rule_id, "CDC001");
-    EXPECT_EQ(findings[0].severity, "warning");
+    EXPECT_EQ(findings[0].severity, "info");
+    EXPECT_EQ(findings[0].safety_status, SafetyStatus::VerifiedSafe);
     EXPECT_NE(findings[0].detected_sync, SyncPattern::None);
 }
 
@@ -143,6 +142,35 @@ TEST_F(CrossingTest, UnsyncedCrossingIsError) {
     EXPECT_EQ(findings[0].rule_id, "CDC001");
     EXPECT_EQ(findings[0].severity, "error");
     EXPECT_EQ(findings[0].detected_sync, SyncPattern::None);
+    EXPECT_TRUE(findings[0].propagates_uncertainty);
+    EXPECT_FALSE(findings[0].uncertainty_reason.empty());
+}
+
+TEST_F(CrossingTest, UncertaintyPropagatesSameDomainClosure) {
+    uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t dst = graph.add_register("mod.dst", "clk_b", 8, {"mod.sv", 6, 5});
+    uint64_t mid = graph.add_register("mod.mid", "clk_b", 8, {"mod.sv", 7, 5});
+    uint64_t tail = graph.add_register("mod.tail", "clk_b", 8, {"mod.sv", 8, 5});
+    for (uint64_t id : {src, dst, mid, tail})
+        graph.find_node_mutable(id)->reset_signal = "rst_n";
+    graph.add_edge(src, dst);
+    graph.add_edge(dst, mid);
+    graph.add_edge(mid, tail);
+
+    auto dr = domain_extractor.extract(graph);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+    crossing_analyzer.propagate_uncertainty(graph, findings);
+
+    EXPECT_TRUE(graph.find_node(dst)->value_uncertain);
+    EXPECT_TRUE(graph.find_node(mid)->value_uncertain);
+    EXPECT_TRUE(graph.find_node(tail)->value_uncertain);
+
+    bool found_013 = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC013" && f.source_reg_name == "mod.tail")
+            found_013 = true;
+    }
+    EXPECT_TRUE(found_013);
 }
 
 TEST_F(CrossingTest, TwoCrossingsDetected) {
@@ -486,6 +514,7 @@ TEST_F(CrossingTest, SafetyStatusVerifiedSafeWithSyncChain) {
 
     ASSERT_EQ(findings.size(), 1u);
     EXPECT_EQ(findings[0].safety_status, SafetyStatus::VerifiedSafe);
+    EXPECT_EQ(findings[0].severity, "info");
     EXPECT_NE(findings[0].safety_provenance.find("synchronizer"), std::string::npos);
 }
 
@@ -571,6 +600,52 @@ TEST_F(CrossingTest, NoBlackboxRegistryNoSuppression) {
     auto dom_result = domain_extractor.extract(graph);
     auto findings =
         crossing_analyzer.analyze(graph, dom_result.domains, dom_result.register_to_domain);
+
+    bool found_error = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.severity == "error")
+            found_error = true;
+    }
+    EXPECT_TRUE(found_error);
+}
+
+TEST_F(CrossingTest, BlackboxMatchesModuleTypeNotInstanceName) {
+    uint64_t ff_src = graph.add_register("top.src_ff", "clk_a", 1, {"mod.sv", 5, 5}, "top", "top");
+    uint64_t ff_mid = graph.add_register("top.u_sync0.q", "clk_b", 1, {"mod.sv", 10, 5},
+                                         "top.u_sync0", "xpm_cdc_gray");
+    uint64_t ff_dst = graph.add_register("top.dst_ff", "clk_b", 1, {"mod.sv", 15, 5}, "top", "top");
+    graph.find_node_mutable(ff_src)->reset_signal = "rst_n";
+    graph.find_node_mutable(ff_dst)->reset_signal = "rst_n";
+    graph.add_edge(ff_src, ff_mid);
+    graph.add_edge(ff_mid, ff_dst);
+
+    BlackBoxRegistry registry;
+    crossing_analyzer.set_blackbox_registry(&registry);
+    auto dr = domain_extractor.extract(graph);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+
+    bool found_bb = false;
+    for (const auto& f : findings) {
+        if (f.safety_provenance.find("black box") != std::string::npos) {
+            found_bb = true;
+            EXPECT_EQ(f.severity, "info");
+        }
+    }
+    EXPECT_TRUE(found_bb);
+}
+
+TEST_F(CrossingTest, BlackboxDoesNotMatchDatapathNamedLikePrimitive) {
+    uint64_t ff_src = graph.add_register("top.src_ff", "clk_a", 1, {"mod.sv", 5, 5}, "top", "top");
+    uint64_t ff_dst = graph.add_register("top.xpm_cdc_gray.q", "clk_b", 1, {"mod.sv", 15, 5},
+                                         "top.xpm_cdc_gray", "some_datapath");
+    graph.find_node_mutable(ff_src)->reset_signal = "rst_n";
+    graph.find_node_mutable(ff_dst)->reset_signal = "rst_n";
+    graph.add_edge(ff_src, ff_dst);
+
+    BlackBoxRegistry registry;
+    crossing_analyzer.set_blackbox_registry(&registry);
+    auto dr = domain_extractor.extract(graph);
+    auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
 
     bool found_error = false;
     for (const auto& f : findings) {

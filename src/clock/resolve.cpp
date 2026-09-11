@@ -4,7 +4,20 @@
 
 namespace opencdc::clock {
 
+void ClockResolver::invalidate_if_stale(const ir::Graph& graph) const {
+    if (cached_generation_ == graph.generation())
+        return;
+    port_names_.clear();
+    short_port_names_.clear();
+    port_names_built_ = false;
+    port_by_name_.clear();
+    short_to_hier_.clear();
+    port_index_built_ = false;
+    cached_generation_ = graph.generation();
+}
+
 void ClockResolver::ensure_port_names(const ir::Graph& graph) const {
+    invalidate_if_stale(graph);
     if (port_names_built_)
         return;
     for (const auto& node : graph.nodes()) {
@@ -20,6 +33,7 @@ void ClockResolver::ensure_port_names(const ir::Graph& graph) const {
 }
 
 void ClockResolver::ensure_port_index(const ir::Graph& graph) const {
+    invalidate_if_stale(graph);
     if (port_index_built_)
         return;
     for (const auto& node : graph.nodes()) {

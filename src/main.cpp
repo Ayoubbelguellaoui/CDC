@@ -36,11 +36,13 @@ static void print_usage(const char* prog) {
         << "  --disable-rule <id>  Disable a rule (e.g., CDC001). Repeatable.\n"
         << "  --severity <id>=<sev> Override rule severity (e.g., CDC003=error). Repeatable.\n"
         << "  --false-path <s:d>   False path (e.g., top.src:top.dst). Repeatable.\n"
-        << "  --signoff            Print signoff status and use it for exit code\n"
+        << "  --signoff            Print signoff status; exit 1 on Fail/Incomplete/Error\n"
         << "  --save-baseline <n>  Save current findings as baseline named <n>\n"
         << "  --compare-baseline <f> Compare findings against baseline file <f>\n"
         << "  --profile <name>     Use methodology profile "
            "(default/strict/asic_signoff/fpga/ip_development/soc_integration)\n"
+        << "  --incdir <dir>       Add Verilog include directory. Repeatable.\n"
+        << "  --define <NAME[=V]>  Predefine a macro (value defaults to 1). Repeatable.\n"
         << "  --verbose            Enable verbose output\n"
         << "\nlsp options:\n"
         << "  --top <module>       Top module name (required by analysis)\n"
@@ -105,6 +107,14 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.compare_baseline = argv[++i];
         } else if (arg == "--profile" && i + 1 < argc) {
             opts.profile = argv[++i];
+        } else if ((arg == "--incdir" || arg == "+incdir") && i + 1 < argc) {
+            opts.include_dirs.push_back(argv[++i]);
+        } else if ((arg == "--define" || arg == "+define") && i + 1 < argc) {
+            opts.defines.push_back(argv[++i]);
+        } else if (arg.rfind("+incdir+", 0) == 0) {
+            opts.include_dirs.push_back(arg.substr(8));
+        } else if (arg.rfind("+define+", 0) == 0) {
+            opts.defines.push_back(arg.substr(8));
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -271,6 +281,8 @@ int run(int argc, const char* argv[]) {
         request.config = std::move(parsed_cfg);
     }
     request.profile = opts.profile;
+    request.include_dirs = opts.include_dirs;
+    request.defines = opts.defines;
 
     analysis::Analyzer analyzer;
     analysis::AnalysisResult analysis = analyzer.run(request);
@@ -379,6 +391,15 @@ int run(int argc, const char* argv[]) {
         } catch (const std::exception& e) {
             std::cerr << "Warning: could not load baseline: " << e.what() << "\n";
         }
+    }
+
+    if (opts.signoff_mode) {
+        using analysis::SignoffStatus;
+        if (analysis.signoff.status == SignoffStatus::Pass ||
+            analysis.signoff.status == SignoffStatus::PassWithWaivers) {
+            return static_cast<int>(ExitCode::OK);
+        }
+        return static_cast<int>(ExitCode::FINDINGS);
     }
 
     return reporter.has_unsuppressed_errors(findings) ? static_cast<int>(ExitCode::FINDINGS)

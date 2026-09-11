@@ -107,6 +107,10 @@ class PatternRecognizer {
 
     void analyze_and_annotate(ir::Graph& graph);
 
+    void set_require_structural_proof(bool require) {
+        require_structural_proof_ = require;
+    }
+
     // Pre-compute pattern caches on the main thread before parallel analysis.
     void ensure_patterns(const ir::Graph& graph) const;
 
@@ -143,6 +147,7 @@ class PatternRecognizer {
     mutable std::vector<ToggleSyncPattern> toggle_cache_;
     mutable uint64_t cached_graph_generation_ = 0;
     mutable std::mutex pattern_mutex_;
+    bool require_structural_proof_ = false;
 };
 
 }  // namespace opencdc::cdc

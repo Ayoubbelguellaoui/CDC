@@ -1,6 +1,32 @@
 **Changelog**
 All notable changes to OpenCDC will be documented in this file.
 
+**[0.5.0] — 2026-09-11**
+
+**Fixed**
+- **CDC001 VerifiedSafe is info**: A clean 2FF/3FF chain is `info` + `VerifiedSafe`, not a warning. `asic_signoff`/`strict` no longer fail a correctly synchronized design.
+- **`--signoff` exit code**: Pass/PassWithWaivers → 0; Fail/Incomplete/Error → 1.
+- **Use-after-move**: Uncertainty metadata is written on the CDC001 finding before it is moved.
+- **Blackboxes match module type**: IR nodes store `module_type`; vendor primitives match the definition name, not a coincidental instance path.
+- **Toggle `t <= ~t`**: Unary Not creates a combinational IR node so CDC012 can fire.
+- **Waiver `*`**: `rule_id: *` waives all rules for the matching registers/domains.
+- **Clock pattern matching**: `"clk"` no longer matches `nclk` / `myclk`. Hierarchical suffix match still works for `mod.src`.
+- **Reset names**: Token match (`rst`, `rst_n`, `reset`) — `first` is not a reset.
+- **Frequency ratio**: Integer MHz ratios are not treated as synchronous.
+- **ClockResolver cache**: Invalidated when the graph generation changes.
+- **Config `format: sarif`**: Accepted.
+- **LSP**: `OPENCDC_ENABLE_LSP` is defined on UNIX; `opencdc lsp` works. `LspServer::wait()` added.
+- **Incremental stub**: `run_incremental` with a clean graph returns previous findings (`no_changes`), not an empty result.
+- **CDC013**: Same-domain worklist propagation, not a single hop.
+- **CDC008**: One finding per unique domain-id set, from chain heads only.
+- **Control `short_name`**: Leaf of the hierarchy (`valid`, not `top.u.valid`).
+
+**Added**
+- IR `module_type` on nodes.
+- `--incdir` / `--define` (also `+incdir+` / `+define+`) passed through to slang.
+- `allow_user_annotation` gates frontend name tags; `require_structural_proof` ignores name-seeded handshake/FIFO.
+- Tests for signoff VerifiedSafe, waiver `*`, blackbox type match, toggle unary, pattern `nclk`, incremental preserve, define/incdir.
+
 **[0.4.0] — 2026-09-05**
 
 **Fixed**

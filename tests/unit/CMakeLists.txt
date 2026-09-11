@@ -31,44 +31,12 @@ add_executable(opencdc_unit_tests
     profile_test.cpp
     golden_corpus_test.cpp
     benchmark_test.cpp
-    ${CMAKE_SOURCE_DIR}/src/ir/graph.cpp
-    ${CMAKE_SOURCE_DIR}/src/ir/module_tree.cpp
-    ${CMAKE_SOURCE_DIR}/src/clock/domain.cpp
-    ${CMAKE_SOURCE_DIR}/src/clock/resolve.cpp
-    ${CMAKE_SOURCE_DIR}/src/clock/constraints.cpp
-    ${CMAKE_SOURCE_DIR}/src/clock/relationship.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/crossing.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/synchronizer.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/reconvergence.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/cdc006.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/waiver.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/pattern.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/blackbox.cpp
-    ${CMAKE_SOURCE_DIR}/src/cdc/reset_domain.cpp
-    ${CMAKE_SOURCE_DIR}/src/rules/rule.cpp
-    ${CMAKE_SOURCE_DIR}/src/report/report.cpp
-    ${CMAKE_SOURCE_DIR}/src/report/html_reporter.cpp
-    ${CMAKE_SOURCE_DIR}/src/report/sarif_reporter.cpp
-    ${CMAKE_SOURCE_DIR}/src/config/config.cpp
-    ${CMAKE_SOURCE_DIR}/src/config/profile.cpp
-    ${CMAKE_SOURCE_DIR}/src/analysis/trend.cpp
-    ${CMAKE_SOURCE_DIR}/src/analysis/analyzer.cpp
-    ${CMAKE_SOURCE_DIR}/src/analysis/coverage.cpp
-    ${CMAKE_SOURCE_DIR}/src/analysis/signoff.cpp
-    ${CMAKE_SOURCE_DIR}/src/frontend/slang_adapter.cpp
 )
 
 target_include_directories(opencdc_unit_tests
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_BINARY_DIR}/generated
-        ${CMAKE_SOURCE_DIR}/src/ir
-        ${CMAKE_SOURCE_DIR}/src/clock
-        ${CMAKE_SOURCE_DIR}/src/cdc
-        ${CMAKE_SOURCE_DIR}/src/rules
-        ${CMAKE_SOURCE_DIR}/src/report
-        ${CMAKE_SOURCE_DIR}/src/analysis
-        ${CMAKE_SOURCE_DIR}/src/util
 )
 
 target_compile_definitions(opencdc_unit_tests
@@ -79,8 +47,8 @@ target_compile_definitions(opencdc_unit_tests
 
 target_link_libraries(opencdc_unit_tests
     PRIVATE
+        opencdc_core
         GTest::gtest_main
-        slang::slang
 )
 
 gtest_discover_tests(opencdc_unit_tests)

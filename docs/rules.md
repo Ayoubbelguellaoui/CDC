@@ -4,12 +4,12 @@
 
 | Property | Value |
 |----------|-------|
-| Severity | error (warning when synchronizer detected) |
+| Severity | error (info when a clean 2FF/3FF chain is verified; warning if the chain has structural warnings) |
 | Description | Register drives register across clock domains without synchronization |
 
 **Detection**: An edge in the IR graph connects two registers in different clock domains, and no 2FF/3FF synchronizer chain is detected on the destination side.
 
-**Sync-chain behavior**: When a 2FF or 3FF synchronizer chain is detected at the destination (all stages must be single-bit width), CDC001 is downgraded to `warning`. CDC002, CDC004, CDC005, and CDC007 are NOT suppressed — they fire independently since a synchronized crossing can still be a multi-bit hazard, use gated/muxed clocks, or lack reset.
+**Sync-chain behavior**: When a clean 2FF or 3FF synchronizer chain is detected at the destination (all stages must be single-bit width), CDC001 is `info` with `VerifiedSafe`. Chains with structural warnings (reset/fanout) stay `warning` + `Ambiguous`. CDC002, CDC004, CDC005, and CDC007 are NOT suppressed — they fire independently since a synchronized crossing can still be a multi-bit hazard, use gated/muxed clocks, or lack reset. `asic_signoff` / `strict` treat unwaived CDC001 **warnings** as errors, but ignore `VerifiedSafe` and `info`.
 
 **Why it matters**: Data sampled by a register in a different clock domain can be metastable or inconsistent, leading to functional failures.
 
@@ -132,7 +132,7 @@ rules:
 
 | Property | Value |
 |----------|-------|
-| Severity | warning |
+| Severity | info (warning under strict reset policy) |
 | Description | CDC register without reset signal |
 
 **Detection**: A CDC001 crossing where both source and destination registers have empty reset signals.
@@ -212,11 +212,25 @@ rules:
 
 ---
 
+## CDC011 — Pulse Crossing
+
+Pulse synchronizer pattern without a proper destination 2FF chain. Severity: warning.
+
+## CDC012 — Toggle Crossing
+
+Toggle synchronizer pattern without a proper destination 2FF chain. Severity: warning.
+
+## CDC013 — Unknown Propagation
+
+A register's value is uncertain because it is downstream (same domain) of an unsynchronized CDC destination. Severity: warning.
+
+---
+
 ## Rule Interaction Table
 
 | Rule | Requires CDC001? | Fires with sync chain? | Fires independently? |
 |------|-------------------|----------------------|---------------------|
-| CDC001 | — | Yes (downgraded to warning) | — |
+| CDC001 | — | Yes (info if VerifiedSafe) | — |
 | CDC002 | Yes | Yes (multi-bit sync is unsafe) | Yes |
 | CDC003 | No | Yes | Yes |
 | CDC004 | Yes | Yes (gated clock applies regardless) | Yes |
@@ -226,6 +240,9 @@ rules:
 | CDC008 | No | No (daisy chain detection) | Yes |
 | CDC009 | No | No (reset domain analysis) | Yes |
 | CDC010 | No | No (truncation) | Yes |
+| CDC011 | Yes | Yes | Yes |
+| CDC012 | Yes | Yes | Yes |
+| CDC013 | No | No (propagation) | Yes |
 
 ---
 

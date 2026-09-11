@@ -315,7 +315,11 @@ std::vector<AsyncFifoPattern> PatternRecognizer::detect_async_fifos(const ir::Gr
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register)
             continue;
-        if (!node.is_async_fifo_ptr && node.logic_type != ir::LogicType::AsyncFifoPtr)
+        if (node.logic_type == ir::LogicType::AsyncFifoPtr)
+            ;
+        else if (node.is_async_fifo_ptr && !require_structural_proof_)
+            ;
+        else
             continue;
         std::string base = extract_module_name(node.hier_name);
         if (base.empty())
@@ -430,9 +434,7 @@ std::vector<HandshakePattern> PatternRecognizer::detect_handshakes(const ir::Gra
             valid_signals[base].push_back(node.id);
         } else if (node.logic_type == ir::LogicType::HandshakeReady) {
             ready_signals[base].push_back(node.id);
-        } else if (node.is_handshake_signal) {
-            // Flag without a LogicType role: classify by signal name. Names
-            // that suggest neither role are ambiguous and skipped.
+        } else if (node.is_handshake_signal && !require_structural_proof_) {
             std::string base_name = extract_base_name(node.hier_name);
             if (name_suggests_valid(base_name)) {
                 valid_signals[base].push_back(node.id);
@@ -534,7 +536,7 @@ std::vector<GrayCodePattern> PatternRecognizer::detect_gray_encoding(const ir::G
                 GrayCodePattern gp;
                 gp.encoder_id = node.id;
                 gp.decoder_id = 0;
-                gp.verified = true;
+                gp.verified = !require_structural_proof_;
                 patterns.push_back(std::move(gp));
             } else if (node.logic_type == ir::LogicType::GrayEncoder) {
                 // Frontend labels this as a gray encoder but the node lacks

@@ -427,7 +427,8 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
                             "Invalid value at line " + std::to_string(line_number) + ": " + trimmed;
                     return Config();
                 }
-                if (key == "format" && value != "text" && value != "json" && value != "html") {
+                if (key == "format" && value != "text" && value != "json" && value != "html" &&
+                    value != "sarif") {
                     if (error)
                         *error = "Invalid output format at line " + std::to_string(line_number) +
                                  ": " + value;

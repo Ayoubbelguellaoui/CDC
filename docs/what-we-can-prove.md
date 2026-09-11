@@ -70,7 +70,8 @@ OpenCDC classifies the relationship between any two clock domains:
 
 ### Safety Status
 - **VerifiedSafe**: A synchronizer chain is detected and has no structural
-  warnings. This is high confidence but not a timing guarantee.
+  warnings. CDC001 is reported at `info` (audit trail), not as a warning.
+  This is high confidence but not a timing guarantee.
 - **VerifiedUnsafe**: No synchronizer detected, or structural issue found
   (missing reset, gated clock, muxed clock without reset).
 - **Ambiguous**: Suppressed by constraint (false path, multicycle), or

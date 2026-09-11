@@ -57,6 +57,8 @@ void init_graph_bindings(py::module& m) {
         .def_readonly("id", &ir::Node::id)
         .def_readwrite("hier_name", &ir::Node::hier_name)
         .def_readwrite("short_name", &ir::Node::short_name)
+        .def_readwrite("module_path", &ir::Node::module_path)
+        .def_readwrite("module_type", &ir::Node::module_type)
         .def_readonly("kind", &ir::Node::kind)
         .def_readwrite("width", &ir::Node::width)
         .def_readwrite("clock_domain", &ir::Node::clock_domain)

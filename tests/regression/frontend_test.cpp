@@ -905,3 +905,25 @@ TEST(FrontendTest, TaskCallCrossingDetected) {
 
     EXPECT_TRUE(found) << "Task call crossing should be detected";
 }
+
+TEST(FrontendTest, NestedInstanceHasModuleType) {
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("hier_crossing.sv")}, "hier_crossing");
+    ASSERT_TRUE(fe.ok);
+    const auto* child = fe.graph.find_node_by_name("hier_crossing.u_sync.meta_ff");
+    ASSERT_NE(child, nullptr);
+    EXPECT_EQ(child->short_name, "meta_ff");
+    EXPECT_EQ(child->module_type, "child_sync");
+}
+
+TEST(FrontendTest, ToggleUnaryCreatesNotNode) {
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("toggle_sync.sv")}, "toggle_sync");
+    ASSERT_TRUE(fe.ok);
+    bool found_not = false;
+    for (const auto& n : fe.graph.nodes()) {
+        if (n.kind == NodeKind::Combinational && n.logic_type == opencdc::ir::LogicType::Not)
+            found_not = true;
+    }
+    EXPECT_TRUE(found_not);
+}

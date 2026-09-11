@@ -163,6 +163,39 @@ TEST_F(AnalyzerTest, NonexistentFileReportsError) {
     EXPECT_EQ(result.analysis_status, "failed");
 }
 
+TEST_F(AnalyzerTest, IncrementalNoChangesKeepsFindings) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("cdc_crossing.sv")};
+    req.top_module = "simple_cdc_crossing";
+
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok);
+    ASSERT_FALSE(result.findings.empty());
+    result.graph.clear_dirty();
+
+    auto again = analyzer.run_incremental(result, req);
+    EXPECT_TRUE(again.ok);
+    EXPECT_EQ(again.analysis_status, "no_changes");
+    EXPECT_EQ(again.findings.size(), result.findings.size());
+}
+
+TEST_F(AnalyzerTest, DefineAndIncdirEnableCrossing) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("ifdef_crossing.sv")};
+    req.top_module = "ifdef_crossing";
+    req.include_dirs = {std::string(FIXTURES_DIR) + "/sv/inc"};
+    req.defines = {"ENABLE_CDC"};
+
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors[0]);
+    bool has_cdc001 = false;
+    for (const auto& f : result.findings) {
+        if (f.rule_id == "CDC001")
+            has_cdc001 = true;
+    }
+    EXPECT_TRUE(has_cdc001);
+}
+
 TEST_F(AnalyzerTest, AnalysisStatusCompleteOnSuccess) {
     AnalysisRequest req;
     req.input_files = {fixture_path("cdc_crossing.sv")};

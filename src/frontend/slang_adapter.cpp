@@ -20,6 +20,7 @@
 #include "slang/ast/statements/LoopStatements.h"
 #include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
@@ -28,8 +29,10 @@
 #include "slang/ast/types/AllTypes.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
+#include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
+#include "slang/util/Bag.h"
 
 using namespace slang;
 using namespace slang::ast;
@@ -104,9 +107,8 @@ static void apply_pattern_name_tags(ir::Node& node) {
 
     bool valid_named = l.rfind("valid", 0) == 0 || l.find("_valid") != std::string::npos;
     bool ready_named = l.rfind("ready", 0) == 0 || l.find("_ready") != std::string::npos;
-    if (valid_named || ready_named) {
+    if (valid_named || ready_named)
         node.is_handshake_signal = true;
-    }
 
     bool fifo_ptr_named =
         l.find("wr_ptr") != std::string::npos || l.find("write_ptr") != std::string::npos ||
@@ -275,6 +277,18 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                         logic_type = ir::LogicType::Mux;
                         is_multi_operand = true;
                     } else if (assign.right().kind == ExpressionKind::UnaryOp) {
+                        auto& unary = static_cast<const UnaryExpression&>(assign.right());
+                        if (unary.op == UnaryOperator::BitwiseNot ||
+                            unary.op == UnaryOperator::LogicalNot) {
+                            logic_type = ir::LogicType::Not;
+                        } else if (unary.op == UnaryOperator::BitwiseAnd) {
+                            logic_type = ir::LogicType::And;
+                        } else if (unary.op == UnaryOperator::BitwiseOr) {
+                            logic_type = ir::LogicType::Or;
+                        } else if (unary.op == UnaryOperator::BitwiseXor ||
+                                   unary.op == UnaryOperator::BitwiseXnor) {
+                            logic_type = ir::LogicType::Xor;
+                        }
                         is_multi_operand = true;
                     }
 
@@ -392,15 +406,27 @@ static bool is_reset_name(const std::string& name) {
     std::string lower = name;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    // Strip bus suffixes like [0] for robustness.
     size_t bracket = lower.find('[');
     if (bracket != std::string::npos)
         lower = lower.substr(0, bracket);
-    return lower.find("rst") != std::string::npos || lower.find("reset") != std::string::npos ||
-           lower.find("arst") != std::string::npos || lower.find("clr") != std::string::npos ||
-           lower.find("clear") != std::string::npos || lower.find("preset") != std::string::npos;
-    // NOTE: "set" prefix heuristic removed — it is too broad and falsely matches
-    // set_valid, set_data, set_enable etc. "preset" is already caught above.
+    static const char* kResetTokens[] = {"rst", "reset", "arst", "clr", "clear", "preset",
+                                         "rstn", "resetn"};
+    size_t start = 0;
+    while (start <= lower.size()) {
+        size_t end = lower.find_first_of("._", start);
+        std::string tok =
+            lower.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!tok.empty()) {
+            for (const char* rt : kResetTokens) {
+                if (tok == rt)
+                    return true;
+            }
+        }
+        if (end == std::string::npos)
+            break;
+        start = end + 1;
+    }
+    return false;
 }
 
 // Extract a readable signal name from an arbitrary event expression. Named
@@ -511,12 +537,33 @@ SlangAdapter::SlangAdapter() : source_manager_(std::make_unique<SourceManager>()
 SlangAdapter::~SlangAdapter() = default;
 
 FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
-                                       const std::string& top_module) {
+                                       const std::string& top_module,
+                                       const FrontendOptions& options) {
     FrontendResult result;
     Compilation compilation;
+    allow_user_annotation_ = options.allow_user_annotation;
+
+    slang::parsing::PreprocessorOptions pp;
+    for (const auto& dir : options.include_dirs) {
+        auto ec = source_manager_->addUserDirectories(dir);
+        if (ec) {
+            result.errors.push_back("Invalid include directory: " + dir);
+            result.ok = false;
+            return result;
+        }
+        pp.additionalIncludePaths.emplace_back(dir);
+    }
+    for (const auto& def : options.defines) {
+        if (def.find('=') != std::string::npos)
+            pp.predefines.push_back(def);
+        else
+            pp.predefines.push_back(def + "=1");
+    }
+    slang::Bag bag;
+    bag.set(pp);
 
     for (const auto& file : files) {
-        auto treeOrErr = SyntaxTree::fromFile(file, *source_manager_);
+        auto treeOrErr = SyntaxTree::fromFile(file, *source_manager_, bag);
         if (!treeOrErr) {
             result.errors.push_back("Failed to read: " + file);
             result.ok = false;
@@ -582,11 +629,12 @@ void SlangAdapter::walk_instance(const InstanceSymbol& inst, ir::Graph& graph,
                                  const std::string& prefix) {
     std::string p =
         prefix.empty() ? sv_to_string(inst.name) : prefix + "." + sv_to_string(inst.name);
-    walk_scope(inst.body, graph, p);
+    std::string type = sv_to_string(inst.getDefinition().name);
+    walk_scope(inst.body, graph, p, type);
 }
 
 void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
-                              const std::string& p) {
+                              const std::string& p, const std::string& module_type) {
     for (auto& member : scope.members()) {
         switch (member.kind) {
             case SymbolKind::Port: {
@@ -602,13 +650,14 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         if (port_width == 0)
                             port_width = 1;
                     }
-                    graph.add_port(port_name, port_width, ir_loc, p);
+                    graph.add_port(port_name, port_width, ir_loc, p, module_type);
                 }
                 break;
             }
             case SymbolKind::Instance: {
                 auto& child = static_cast<const InstanceSymbol&>(member);
-                walk_scope(child.body, graph, p + "." + sv_to_string(child.name));
+                std::string child_type = sv_to_string(child.getDefinition().name);
+                walk_scope(child.body, graph, p + "." + sv_to_string(child.name), child_type);
 
                 const std::string child_prefix = p + "." + sv_to_string(child.name);
                 for (const auto* connection : child.getPortConnections()) {
@@ -635,7 +684,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         const ir::Node* parent_node = graph.find_node_by_name(parent_name);
                         uint64_t parent_id = parent_node
                                                  ? parent_node->id
-                                                 : graph.add_net(parent_name, parent_width, {}, p);
+                                                  : graph.add_net(parent_name, parent_width, {}, p,
+                                                                  module_type);
 
                         if (child_port.direction == ArgumentDirection::Out) {
                             graph.add_edge(child_node->id, parent_id);
@@ -652,7 +702,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             case SymbolKind::GenerateBlock: {
                 auto& block = static_cast<const GenerateBlockSymbol&>(member);
                 if (!block.isUninstantiated) {
-                    walk_scope(block, graph, p + "." + sv_to_string(block.name));
+                    walk_scope(block, graph, p + "." + sv_to_string(block.name), module_type);
                 }
                 break;
             }
@@ -661,7 +711,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 std::string array_prefix = p + "." + sv_to_string(array.name);
                 for (const auto* entry : array.entries) {
                     if (entry && !entry->isUninstantiated) {
-                        walk_scope(*entry, graph, array_prefix + "." + sv_to_string(entry->name));
+                        walk_scope(*entry, graph, array_prefix + "." + sv_to_string(entry->name),
+                                   module_type);
                     }
                 }
                 break;
@@ -702,9 +753,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         const ir::Node* dst = graph.find_node_by_name(a.lhs);
                         uint64_t dst_id =
                             dst ? dst->id
-                                : (cr.clock == "comb" ? graph.add_net(a.lhs, a.lhs_width, ir_loc, p)
-                                                      : graph.add_register(a.lhs, cr.clock,
-                                                                           a.lhs_width, ir_loc, p));
+                                : (cr.clock == "comb"
+                                       ? graph.add_net(a.lhs, a.lhs_width, ir_loc, p, module_type)
+                                       : graph.add_register(a.lhs, cr.clock, a.lhs_width, ir_loc, p,
+                                                            module_type));
                         if (dst && cr.clock != "comb" && dst->kind != ir::NodeKind::Register) {
                             auto* mutable_dst = graph.find_node_mutable(dst_id);
                             if (mutable_dst) {
@@ -716,7 +768,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 mutable_dst->reset_pol = cr.reset_pol;
                                 mutable_dst->is_async_reset = cr.is_async_reset;
                                 mutable_dst->is_gray_coded = a.is_gray_transform;
-                                apply_pattern_name_tags(*mutable_dst);
+                                if (mutable_dst->module_type.empty())
+                                    mutable_dst->module_type = module_type;
+                                if (allow_user_annotation_)
+                                    apply_pattern_name_tags(*mutable_dst);
                             }
                         }
                         if (!dst && cr.clock != "comb") {
@@ -726,7 +781,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 mutable_dst->reset_pol = cr.reset_pol;
                                 mutable_dst->is_async_reset = cr.is_async_reset;
                                 mutable_dst->is_gray_coded = a.is_gray_transform;
-                                apply_pattern_name_tags(*mutable_dst);
+                                if (mutable_dst->module_type.empty())
+                                    mutable_dst->module_type = module_type;
+                                if (allow_user_annotation_)
+                                    apply_pattern_name_tags(*mutable_dst);
                             }
                         }
 
@@ -738,7 +796,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         if (a.is_multi_operand && a.logic_type != ir::LogicType::Unknown) {
                             const ir::Node* src = graph.find_node_by_name(a.rhs);
                             uint64_t src_id =
-                                src ? src->id : graph.add_net(a.rhs, a.rhs_width, {}, p);
+                                src ? src->id : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
                             auto it = comb_nodes.find(a.lhs);
                             if (it == comb_nodes.end()) {
                                 std::string comb_name = a.lhs + "$comb";
@@ -746,7 +804,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 ir::LogicType comb_type =
                                     a.is_gray_transform ? ir::LogicType::GrayEncoder : a.logic_type;
                                 uint64_t comb_id = graph.add_combinational(
-                                    comb_name, comb_type, comb_inputs, a.lhs_width, {}, p);
+                                    comb_name, comb_type, comb_inputs, a.lhs_width, {}, p,
+                                    module_type);
                                 if (comb_id) {
                                     comb_nodes[a.lhs] = comb_id;
                                     graph.add_edge(comb_id, dst_id);
@@ -761,7 +820,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         } else {
                             const ir::Node* src = graph.find_node_by_name(a.rhs);
                             uint64_t src_id =
-                                src ? src->id : graph.add_net(a.rhs, a.rhs_width, {}, p);
+                                src ? src->id
+                                    : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
                             if (src_id && dst_id)
                                 graph.add_edge(src_id, dst_id);
                         }
@@ -810,7 +870,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 lhs_width = existing_lhs->width;
             }
             uint64_t lhs_id =
-                existing_lhs ? existing_lhs->id : graph.add_net(lhs_name, lhs_width, {}, p);
+                existing_lhs ? existing_lhs->id
+                             : graph.add_net(lhs_name, lhs_width, {}, p, module_type);
             if (!existing_lhs) {
                 auto* mutable_lhs = graph.find_node_mutable(lhs_id);
                 if (mutable_lhs) {
@@ -822,18 +883,20 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 std::vector<uint64_t> input_ids;
                 for (const auto& [rhs_name, rhs_width] : rhs_ops) {
                     const ir::Node* src = graph.find_node_by_name(rhs_name);
-                    uint64_t src_id = src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p);
+                    uint64_t src_id =
+                        src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p, module_type);
                     input_ids.push_back(src_id);
                 }
                 std::string comb_name = lhs_name + "$comb";
-                uint64_t comb_id =
-                    graph.add_combinational(comb_name, logic_type, input_ids, lhs_width, {}, p);
+                uint64_t comb_id = graph.add_combinational(comb_name, logic_type, input_ids,
+                                                           lhs_width, {}, p, module_type);
                 if (comb_id)
                     graph.add_edge(comb_id, lhs_id);
             } else {
                 for (const auto& [rhs_name, rhs_width] : rhs_ops) {
                     const ir::Node* src = graph.find_node_by_name(rhs_name);
-                    uint64_t src_id = src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p);
+                    uint64_t src_id =
+                        src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p, module_type);
                     if (src_id && lhs_id)
                         graph.add_edge(src_id, lhs_id);
                 }

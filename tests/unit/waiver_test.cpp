@@ -277,6 +277,23 @@ TEST_F(WaiverTest, LoadFromFileEmptyFileFails) {
     std::remove(path.c_str());
 }
 
+TEST_F(WaiverTest, StarRuleIdWaivesAllRules) {
+    Waiver w;
+    w.rule_id = "*";
+    w.source_reg_name = "mod.src";
+    w.dest_reg_name = "mod.dst";
+    ASSERT_TRUE(engine.add_waiver(w));
+
+    auto f1 = make_finding("CDC001", "mod.src", "mod.dst", "clk_a", "clk_b");
+    auto f2 = make_finding("CDC002", "mod.src", "mod.dst", "clk_a", "clk_b");
+    auto f3 = make_finding("CDC001", "mod.src", "mod.other", "clk_a", "clk_b");
+    auto result = engine.apply({f1, f2, f3});
+    ASSERT_EQ(result.size(), 3u);
+    EXPECT_TRUE(result[0].waived);
+    EXPECT_TRUE(result[1].waived);
+    EXPECT_FALSE(result[2].waived);
+}
+
 TEST_F(WaiverTest, ExpiryDateIsValidThroughEndOfDay) {
     Waiver w;
     w.rule_id = "CDC001";

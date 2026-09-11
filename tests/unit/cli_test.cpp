@@ -26,3 +26,22 @@ TEST(CliTest, CheckWithoutFilesFails) {
     int rc = std::system((bin_path() + " check --top mod").c_str());
     EXPECT_NE(rc, 0);
 }
+
+TEST(CliTest, SignoffClean2ffExitsZero) {
+    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
+                      "/sv/sync_2ff.sv --top sync_2ff --signoff --profile asic_signoff";
+    int rc = std::system(cmd.c_str());
+    EXPECT_EQ(rc, 0);
+}
+
+TEST(CliTest, SignoffUnsyncExitsOne) {
+    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv --top simple_cdc_crossing --signoff";
+    int rc = std::system(cmd.c_str());
+    EXPECT_NE(rc, 0);
+}
+
+TEST(CliTest, LspHelpExitsZero) {
+    int rc = std::system((bin_path() + " lsp --help").c_str());
+    EXPECT_EQ(rc, 0);
+}

@@ -59,8 +59,9 @@ class LspServer {
     LspServer();
     ~LspServer();
 
-    void start(int port = 0);
-    void stop();
+     void start(int port = 0);
+     void stop();
+     void wait();
 
     void set_publish_diagnostics_callback(PublishDiagnosticsCallback callback);
 

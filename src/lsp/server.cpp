@@ -121,6 +121,11 @@ void LspServer::start(int port) {
     }
 }
 
+void LspServer::wait() {
+    if (server_thread_.joinable())
+        server_thread_.join();
+}
+
 void LspServer::stop() {
     running_ = false;
     cv_.notify_all();

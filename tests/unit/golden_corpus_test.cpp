@@ -87,12 +87,12 @@ TEST_F(GoldenCorpusTest, SynchronizedCrossingWarning) {
     ca.set_pattern_recognizer(&pr);
     auto findings = ca.analyze(graph, dr.domains, dr.register_to_domain);
 
-    // With 2FF sync chain, CDC001 should be warning (not error).
     bool found_cdc001 = false;
     for (const auto& f : findings) {
         if (f.rule_id == "CDC001") {
             found_cdc001 = true;
-            EXPECT_EQ(f.severity, "warning");
+            EXPECT_EQ(f.severity, "info");
+            EXPECT_EQ(f.safety_status, opencdc::cdc::SafetyStatus::VerifiedSafe);
         }
     }
     EXPECT_TRUE(found_cdc001);

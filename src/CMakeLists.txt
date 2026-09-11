@@ -28,7 +28,17 @@ set(OPENCDC_CORE_SOURCES
     lsp/server.cpp
 )
 
-add_library(opencdc_core STATIC ${OPENCDC_CORE_SOURCES})
+option(OPENCDC_ENABLE_LSP "Enable LSP server" ${UNIX})
+
+set(OPENCDC_CORE_SOURCES_NO_LSP ${OPENCDC_CORE_SOURCES})
+list(REMOVE_ITEM OPENCDC_CORE_SOURCES_NO_LSP lsp/server.cpp)
+
+if(OPENCDC_ENABLE_LSP)
+    add_library(opencdc_core STATIC ${OPENCDC_CORE_SOURCES})
+    target_compile_definitions(opencdc_core PUBLIC OPENCDC_ENABLE_LSP)
+else()
+    add_library(opencdc_core STATIC ${OPENCDC_CORE_SOURCES_NO_LSP})
+endif()
 set_target_properties(opencdc_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(opencdc_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

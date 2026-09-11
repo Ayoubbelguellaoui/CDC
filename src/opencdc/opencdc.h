@@ -24,6 +24,8 @@ struct CheckOptions {
     std::string save_baseline;
     std::string compare_baseline;
     std::string profile;
+    std::vector<std::string> include_dirs;
+    std::vector<std::string> defines;
 };
 
 enum class ExitCode : int {

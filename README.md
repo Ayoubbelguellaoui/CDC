@@ -15,12 +15,13 @@ Open-source static analysis tool for detecting Clock Domain Crossing (CDC) issue
 - Semantic pattern recognition (gray-code, async FIFO pointers, handshakes)
 - Reset domain analysis (CDC009)
 - Daisy-chain multi-domain tracking (CDC008)
-- 10 configurable rules (CDC001-CDC010)
+- 13 configurable rules (CDC001-CDC013)
 - False-path support (CLI, config, and SDC/YAML clock constraints)
 - Waiver workflow with substring/wildcard/regex matching, auditable trail and expiry dates
 - Baseline trend analysis (save/compare findings across runs)
-- JSON, text, and interactive HTML reports
-- LSP server for IDE integration (`opencdc lsp`)
+- JSON, text, SARIF, and interactive HTML reports
+- LSP server for IDE integration (`opencdc lsp`, UNIX)
+- Methodology profiles (`--profile asic_signoff|strict|fpga|...`) and `--signoff` exit codes
 - Python bindings (`BUILD_PYTHON_BINDINGS=ON`)
 - Machine-readable output and CI-friendly exit codes
 
@@ -60,6 +61,9 @@ opencdc check design.sv --top top --config opencdc.yaml
 # With waivers
 opencdc check design.sv --top top --waiver waivers.txt
 
+# Include dirs and macros
+opencdc check design.sv --top top --incdir rtl/include --define ENABLE_CDC
+
 # Disable a rule
 opencdc check design.sv --top top --disable-rule CDC001
 
@@ -74,16 +78,19 @@ opencdc check design.sv --top top --false-path src_reg:meta_reg
 
 | ID | Name | Severity | Description |
 |---|---|---|---|
-| CDC001 | unsynchronized_crossing | error | Register drives register across domains without synchronization |
+| CDC001 | unsynchronized_crossing | error (info if verified 2FF/3FF) | Register drives register across domains without synchronization |
 | CDC002 | multi_bit_crossing | error | Multi-bit bus crosses domains without gray-code or handshake |
 | CDC003 | reconvergence_hazard | warning | Multiple paths from same source reconverge in destination domain |
 | CDC004 | gated_clock_crossing | warning | Register clocked by gated clock crosses to another domain |
 | CDC005 | muxed_clock_no_reset | warning | Register clocked by muxed clock without reset |
 | CDC006 | combinational_between_sync | error | Combinational logic between synchronizer stages |
-| CDC007 | missing_reset | warning | CDC register without reset signal |
+| CDC007 | missing_reset | info | CDC register without reset signal |
 | CDC008 | multi_domain_daisy_chain | warning | Signal crosses 3+ clock domains in daisy chain |
 | CDC009 | reset_domain_crossing | warning | Register crosses between asynchronous reset domains |
 | CDC010 | path_traversal_truncated | warning | Analysis limits may have hidden additional crossings |
+| CDC011 | pulse_crossing | warning | Pulse synchronizer without a proper 2FF chain |
+| CDC012 | toggle_crossing | warning | Toggle synchronizer without a proper 2FF chain |
+| CDC013 | unknown_propagation | warning | Uncertain value propagated through an unsynchronized path |
 
 See [docs/rules.md](docs/rules.md) for detailed documentation.
 
@@ -113,8 +120,8 @@ output:
 
 | Code | Meaning |
 |------|---------|
-| 0 | No unsuppressed error findings |
-| 1 | One or more unsuppressed error findings |
+| 0 | No unsuppressed error findings (or `--signoff` Pass / PassWithWaivers) |
+| 1 | Unsuppressed error findings (or `--signoff` Fail / Incomplete / Error) |
 | 2 | User/configuration/input error |
 | 3 | Internal tool failure |
 

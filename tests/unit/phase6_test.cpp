@@ -252,6 +252,38 @@ TEST_F(SignoffTest, AsicSignoffWaivedWarningsPass) {
     EXPECT_EQ(result.warnings_as_errors, 0u);
 }
 
+TEST_F(SignoffTest, AsicSignoffVerifiedSafeInfoPasses) {
+    std::vector<Finding> findings;
+    findings.push_back(make_finding("CDC001", "info", "clk_a", "clk_b", SafetyStatus::VerifiedSafe));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");
+    EXPECT_EQ(result.status, SignoffStatus::Pass);
+    EXPECT_EQ(result.warnings_as_errors, 0u);
+}
+
+TEST_F(SignoffTest, AsicSignoffVerifiedSafeWarningSkipped) {
+    std::vector<Finding> findings;
+    findings.push_back(
+        make_finding("CDC001", "warning", "clk_a", "clk_b", SafetyStatus::VerifiedSafe));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");
+    EXPECT_EQ(result.status, SignoffStatus::Pass);
+    EXPECT_EQ(result.warnings_as_errors, 0u);
+}
+
+TEST_F(SignoffTest, AsicSignoffAmbiguousWarningFails) {
+    std::vector<Finding> findings;
+    findings.push_back(
+        make_finding("CDC001", "warning", "clk_a", "clk_b", SafetyStatus::Ambiguous));
+
+    Config cfg;
+    auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");
+    EXPECT_EQ(result.status, SignoffStatus::Fail);
+    EXPECT_GT(result.warnings_as_errors, 0u);
+}
+
 TEST_F(SignoffTest, DefaultMethodologyNoWarningFail) {
     std::vector<Finding> findings;
     findings.push_back(make_finding("CDC001", "warning", "clk_a", "clk_b"));

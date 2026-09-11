@@ -10,8 +10,25 @@ TEST(GraphTest, AddRegister) {
     const Node* n = g.find_node(id);
     ASSERT_NE(n, nullptr);
     EXPECT_EQ(n->hier_name, "mod.ff1");
+    EXPECT_EQ(n->short_name, "ff1");
     EXPECT_EQ(n->clock_domain, "clk");
     EXPECT_EQ(n->kind, NodeKind::Register);
+}
+
+TEST(GraphTest, ShortNameIsLeaf) {
+    Graph g;
+    uint64_t id = g.add_register("top.u_mod.valid", "clk", 1, {}, "top.u_mod", "child_mod");
+    const Node* n = g.find_node(id);
+    ASSERT_NE(n, nullptr);
+    EXPECT_EQ(n->short_name, "valid");
+    EXPECT_EQ(n->module_path, "top.u_mod");
+    EXPECT_EQ(n->module_type, "child_mod");
+}
+
+TEST(GraphTest, ShortNameWithoutDot) {
+    Graph g;
+    uint64_t id = g.add_register("ff1", "clk", 1, {});
+    EXPECT_EQ(g.find_node(id)->short_name, "ff1");
 }
 
 TEST(GraphTest, AddPort) {

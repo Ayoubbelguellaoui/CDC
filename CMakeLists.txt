@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(opencdc VERSION 0.4.0 LANGUAGES CXX)
+project(opencdc VERSION 0.5.0 LANGUAGES CXX)
 
 # Generate version.h from the project version — single source of truth.
 configure_file(cmake/version.h.in ${CMAKE_BINARY_DIR}/generated/opencdc/version.h @ONLY)

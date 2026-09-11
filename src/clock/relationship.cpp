@@ -1,7 +1,5 @@
 #include "clock/relationship.h"
 
-#include <cmath>
-
 namespace opencdc::clock {
 
 const char* clock_relationship_name(ClockRelationship r) {
@@ -101,14 +99,6 @@ ClockRelationship classify_relationship(const std::string& clk_a, const std::str
             return ClockRelationship::Gated;
         if (it_a->second.is_muxed || it_b->second.is_muxed)
             return ClockRelationship::Muxed;
-    }
-
-    if (def_a && def_b && def_a->frequency_mhz > 0 && def_b->frequency_mhz > 0) {
-        double ratio = def_a->frequency_mhz / def_b->frequency_mhz;
-        double rounded = std::round(ratio);
-        if (std::abs(ratio - rounded) < 0.001 && rounded >= 1) {
-            return ClockRelationship::Synchronous;
-        }
     }
 
     return ClockRelationship::Unknown;

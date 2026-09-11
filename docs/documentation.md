@@ -1,4 +1,4 @@
-# OpenCDC v0.3.0 Documentation
+# OpenCDC v0.5.0 Documentation
 
 ## Table of Contents
 
@@ -100,14 +100,19 @@ OpenCDC uses semantic analysis instead of substring matching for:
 
 | ID | Name | Severity | Description |
 |---|---|---|---|
-| CDC001 | unsynchronized_crossing | error | Register drives register across domains without synchronization |
+| CDC001 | unsynchronized_crossing | error (info if verified 2FF/3FF) | Register drives register across domains without synchronization |
 | CDC002 | multi_bit_crossing | error | Multi-bit bus crosses domains without gray-code or handshake |
 | CDC003 | reconvergence_hazard | warning | Multiple paths from same source reconverge in destination domain |
 | CDC004 | gated_clock_crossing | warning | Register clocked by gated clock crosses to another domain |
 | CDC005 | muxed_clock_no_reset | warning | Register clocked by muxed clock without reset |
 | CDC006 | combinational_between_sync | error | Combinational logic between synchronizer stages |
-| CDC007 | missing_reset | warning | CDC register without reset signal |
+| CDC007 | missing_reset | info | CDC register without reset signal |
 | CDC008 | multi_domain_daisy_chain | warning | Signal crosses 3+ clock domains in daisy chain |
+| CDC009 | reset_domain_crossing | warning | Register crosses between asynchronous reset domains |
+| CDC010 | path_traversal_truncated | warning | Analysis limits may have hidden additional crossings |
+| CDC011 | pulse_crossing | warning | Pulse synchronizer without a proper 2FF chain |
+| CDC012 | toggle_crossing | warning | Toggle synchronizer without a proper 2FF chain |
+| CDC013 | unknown_propagation | warning | Uncertain value propagated through an unsynchronized path |
 
 ## CLI Reference
 
@@ -119,7 +124,9 @@ Options:
   --config <file>          Configuration file (YAML)
   --waiver <file>           Waiver file
   --constraints <file>      Clock constraints file (SDC or YAML)
-  --format <fmt>           Output format: json, text, html (default: json)
+  --format <fmt>           Output format: json, text, html, sarif (default: json)
+  --incdir <dir>           Add Verilog include directory
+  --define <NAME[=V]>      Predefine a macro
   --out <file>              Write report to file (default: stdout)
   --html-dir <dir>          HTML report output directory (default: opencdc_report)
   --disable-rule <id>       Disable a rule (e.g., CDC001). Repeatable.

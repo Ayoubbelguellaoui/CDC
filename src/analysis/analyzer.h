@@ -29,6 +29,8 @@ struct AnalysisRequest {
     std::optional<config::Config> config;
     // Methodology profile name (optional). When set, overrides config settings.
     std::string profile;
+    std::vector<std::string> include_dirs;
+    std::vector<std::string> defines;
 };
 
 struct AnalysisResult {
@@ -49,8 +51,8 @@ class Analyzer {
    public:
     AnalysisResult run(const AnalysisRequest& request);
 
-    // Incremental re-analysis: only re-analyze dirty parts of the graph.
-    // Returns empty result if graph is not dirty.
+    // Incremental re-analysis: returns previous findings if the graph is clean;
+    // otherwise re-runs the full pipeline.
     AnalysisResult run_incremental(AnalysisResult& previous,
                                    const AnalysisRequest& request);
 };

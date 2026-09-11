@@ -1,4 +1,4 @@
-# Bug Fixes Applied — OpenCDC v0.3.0
+# Bug Fixes Applied — OpenCDC v0.5.0
 
 ## Critical Fix Round — Pattern Recognition, Waivers, Frontend Classification
 

@@ -51,7 +51,8 @@ SignoffResult SignoffEngine::evaluate(const std::vector<cdc::Finding>& findings,
         static const std::vector<std::string> critical_rules = {"CDC001", "CDC002", "CDC004",
                                                                "CDC005", "CDC007"};
         for (const auto& f : findings) {
-            if (f.severity == "warning" && !f.waived) {
+            if (f.severity == "warning" && !f.waived &&
+                f.safety_status != cdc::SafetyStatus::VerifiedSafe) {
                 bool is_critical = std::find(critical_rules.begin(), critical_rules.end(),
                                              f.rule_id) != critical_rules.end();
                 if (is_critical)

@@ -234,6 +234,14 @@ TEST(ConfigTest, ResetPolicyParsed) {
     EXPECT_FALSE(config.reset_policy.detect_reset_synchronizer);
 }
 
+TEST(ConfigTest, OutputFormatSarifAccepted) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    auto config = parser.parse_string("output:\n  format: sarif\n", &error);
+    EXPECT_TRUE(error.empty());
+    EXPECT_EQ(config.output.format, "sarif");
+}
+
 TEST(TrendTest, BaselineRoundTripsDelimitersNewlinesAndDuplicates) {
     opencdc::cdc::Finding finding;
     finding.rule_id = "CDC:001";

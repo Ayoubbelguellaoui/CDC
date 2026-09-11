@@ -129,7 +129,7 @@ The IR graph is a directed graph where:
 
 2. **Structural pattern matching**: Pattern recognition uses graph shape and explicit logic annotations (via `PatternRecognizer`); naming alone is not sufficient evidence for safety.
 
-3. **Configurable rules**: CDC001-CDC010 can be enabled/disabled and have adjustable severity levels.
+3. **Configurable rules**: CDC001-CDC013 can be enabled/disabled and have adjustable severity levels.
 
 4. **False-path support**: Users can specify false paths via CLI or config to suppress intentional crossings.
 
@@ -166,7 +166,7 @@ Provenance is a human-readable description of the evidence chain:
 
 ### Population Rules
 
-1. **CDC001**: Safety status is `VerifiedSafe` when a sync chain exists (provenance: `"synchronizer:TwoFF"` or `"synchronizer:ThreeFF"`). Severity is downgraded to warning. Otherwise `VerifiedUnsafe` with severity error.
+1. **CDC001**: Safety status is `VerifiedSafe` when a clean sync chain exists; severity is `info`. Structural chain warnings → `Ambiguous` + `warning`. Otherwise `VerifiedUnsafe` with severity error.
 2. **CDC002**: Safety status is `VerifiedSafe` when structural gray code, handshake, or async FIFO is verified. Otherwise `VerifiedUnsafe`.
 3. **CDC003**: Safety status is always `Candidate` (heuristic).
 4. **CDC004/005**: Safety status is `VerifiedUnsafe` (clock property makes crossing unsafe).
@@ -175,3 +175,5 @@ Provenance is a human-readable description of the evidence chain:
 7. **CDC008**: Safety status is `Candidate` (multi-domain chain).
 8. **CDC009**: Safety status is `Ambiguous` (reset domain conflict). Severity suppressed to info when `suppress_reset_crossings` is enabled.
 9. **CDC010**: Safety status is `Unknown` (diagnostic only).
+10. **CDC011/012**: Pulse/toggle crossing without a proper 2FF chain → `Candidate` + `warning`.
+11. **CDC013**: Same-domain uncertainty propagation after an unsynchronized crossing → `Candidate` + `warning`.

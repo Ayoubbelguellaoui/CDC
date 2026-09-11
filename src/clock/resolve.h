@@ -1,6 +1,7 @@
 #ifndef OPENCDC_CLOCK_RESOLVE_H
 #define OPENCDC_CLOCK_RESOLVE_H
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -42,6 +43,9 @@ class ClockResolver {
     mutable std::unordered_map<std::string, const ir::Node*> port_by_name_;
     mutable std::unordered_map<std::string, std::vector<std::string>> short_to_hier_;
     mutable bool port_index_built_ = false;
+    mutable uint64_t cached_generation_ = UINT64_MAX;
+
+    void invalidate_if_stale(const ir::Graph& graph) const;
 
     void ensure_port_names(const ir::Graph& graph) const;
     void ensure_port_index(const ir::Graph& graph) const;

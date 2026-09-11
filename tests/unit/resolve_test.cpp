@@ -80,6 +80,21 @@ TEST_F(ClockResolverTest, EmptyGraphReturnsEmpty) {
     EXPECT_TRUE(result.clock_map.empty());
 }
 
+TEST_F(ClockResolverTest, CacheInvalidatesAcrossGraphs) {
+    Graph g1;
+    g1.add_port("top.clk_a", 1, {});
+    g1.add_register("top.ff_a", "top.clk_a", 1, {});
+    auto r1 = resolver.resolve(g1);
+    ASSERT_TRUE(r1.clock_map.count("top.clk_a"));
+
+    Graph g2;
+    g2.add_port("top.clk_b", 1, {});
+    g2.add_register("top.ff_b", "top.clk_b", 1, {});
+    auto r2 = resolver.resolve(g2);
+    EXPECT_FALSE(r2.clock_map.count("top.clk_a"));
+    ASSERT_TRUE(r2.clock_map.count("top.clk_b"));
+}
+
 TEST_F(ClockResolverTest, RegisterWithoutClockPortFallsBack) {
     // Register with root_clock already set, no Port node in graph.
     uint64_t ff = graph.add_register("top.ff", "top.clk", 1, {"top.sv", 1, 1});

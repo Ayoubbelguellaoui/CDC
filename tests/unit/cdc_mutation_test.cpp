@@ -242,11 +242,12 @@ TEST_F(CdcMutationTest, MultiDomainDaisyChainTriggersCdc008) {
     auto dr = domain_extractor.extract(graph);
     auto findings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
 
-    bool found_cdc008 = false;
+    int cdc008 = 0;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC008") found_cdc008 = true;
+        if (f.rule_id == "CDC008")
+            ++cdc008;
     }
-    EXPECT_TRUE(found_cdc008) << "Register chain crossing 3+ domains should trigger CDC008";
+    EXPECT_EQ(cdc008, 1) << "One unique daisy-chain finding for a 3-domain line";
 }
 
 TEST_F(CdcMutationTest, ResetDomainCrossingTriggersCdc009) {

@@ -1,4 +1,4 @@
-# Bug Report — OpenCDC v0.3.0 Implementation Review
+# Bug Report — OpenCDC v0.5.0 Implementation Review
 
 ## Critical Issues
 

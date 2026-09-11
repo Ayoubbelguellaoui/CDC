@@ -52,15 +52,16 @@ bool CrossingAnalyzer::is_path_through_safe_blackbox(
         const ir::Node* node = graph.find_node(nid);
         if (!node)
             continue;
-        // Check if this node's module_path matches a safe black box.
-        // module_path is e.g. "top.u_fifos/xpm_cdc_gray_inst" — we need
-        // to extract the leaf instance name and check against black box models.
+        if (!node->module_type.empty()) {
+            const BlackBoxModel* by_type = blackbox_registry_->find(node->module_type);
+            if (by_type && by_type->properties.is_safe_crossing)
+                return true;
+            continue;
+        }
         std::string mp = node->module_path;
-        // Try exact match first
         const BlackBoxModel* model = blackbox_registry_->find(mp);
         if (model && model->properties.is_safe_crossing)
             return true;
-        // Try leaf name (last segment after '/' or '.')
         auto slash = mp.find_last_of("/.");
         if (slash != std::string::npos) {
             std::string leaf = mp.substr(slash + 1);
@@ -419,7 +420,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                         f.safety_provenance = std::string(sync_pattern_name(crossing_sync)) +
                                               " detected but chain has structural warnings";
                     } else {
-                        f.severity = "warning";
+                        f.severity = "info";
                         f.safety_status = SafetyStatus::VerifiedSafe;
                         f.safety_provenance = std::string(sync_pattern_name(crossing_sync)) +
                                               " detected at destination";
@@ -472,22 +473,20 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     }
                 }
 
-                local_findings.push_back(std::move(f));
-
-                // Mark destination register as value-uncertain after unsynchronized crossing.
                 if (crossing_sync == SyncPattern::None) {
-                    ir::Node* dst_mutable = const_cast<ir::Node*>(dst);
-                    dst_mutable->value_uncertain = true;
-                    dst_mutable->uncertainty_source =
-                        "unsynchronized crossing from '" + src->hier_name + "' in domain '" +
-                        src_dom->name + "'";
                     f.propagates_uncertainty = true;
-                    f.uncertainty_reason = dst_mutable->uncertainty_source;
-                    f.evidence_chain.push_back(
-                        EvidenceStep{"uncertainty",
-                                     "Destination register value is uncertain after unsynchronized crossing",
-                                     "flagged", src->loc.file});
+                    f.uncertainty_reason = "unsynchronized crossing from '" + src->hier_name +
+                                           "' in domain '" + src_dom->name + "'";
+                    f.evidence_chain.push_back(EvidenceStep{
+                        "uncertainty",
+                        "Destination register value is uncertain after unsynchronized crossing",
+                        "flagged", src->loc.file});
                 }
+
+                SyncPattern detected_sync = f.detected_sync;
+                bool has_handshake = f.has_handshake;
+                bool crosses_module_boundary = f.crosses_module_boundary;
+                local_findings.push_back(std::move(f));
 
                 // CDC011: pulse crossing without proper 2FF chain
                 if (crossing_sync == SyncPattern::None && pattern_recognizer_) {
@@ -570,7 +569,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     mb.dest_domain = dst_dom->name;
                     mb.path.node_ids = reg_path.node_ids;
                     mb.source_loc = src->loc;
-                    mb.detected_sync = f.detected_sync;
+                    mb.detected_sync = detected_sync;
                     mb.bus_width = src->width;
                     mb.is_gray_coded = (pattern_recognizer_ &&
                                         (pattern_recognizer_->is_gray_coded(src_id, graph) ||
@@ -584,7 +583,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                     mb.source_module_path = src->module_path;
                     mb.dest_module_path = dst->module_path;
                     mb.clock_relationship = clock_rel;
-                    mb.crosses_module_boundary = f.crosses_module_boundary;
+                    mb.crosses_module_boundary = crosses_module_boundary;
 
                     // 4K: Classify multi-bit crossing type
                     if (mb.is_gray_coded) {
@@ -595,7 +594,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                                pattern_recognizer_->is_async_fifo_ptr(src_id, graph) &&
                                pattern_recognizer_->is_async_fifo_ptr(dst_id, graph)) {
                         mb.multi_bit_type = MultiBitCrossingType::AsyncFifo;
-                    } else if (f.detected_sync != SyncPattern::None) {
+                    } else if (detected_sync != SyncPattern::None) {
                         mb.multi_bit_type = MultiBitCrossingType::Synchronized;
                     } else if (src->width <= 8) {
                         mb.multi_bit_type = MultiBitCrossingType::StaticData;
@@ -655,7 +654,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
 
                 // Handshake verification: if a handshake pattern is detected,
                 // verify data stability and acceptance gating.
-                if (pattern_recognizer_ && f.has_handshake && src->width > 1) {
+                if (pattern_recognizer_ && has_handshake && src->width > 1) {
                     bool hs_stable = pattern_recognizer_->check_data_stability(
                         src_id, dst_id, graph);
                     bool hs_gated = pattern_recognizer_->check_acceptance_gating(
@@ -853,8 +852,11 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         }
     }
 
-    // Daisy-chain detection (sequential — needs global visited set)
+    // Daisy-chain detection (sequential — needs global visited set).
+    // Only emit from chain heads (no cross-domain register predecessor) and
+    // dedup by the set of domain ids so overlapping walks do not multiply.
     std::unordered_set<uint64_t> reported_sources;
+    std::unordered_set<std::string> reported_domain_sets;
     for (const auto& src : graph.nodes()) {
         if (src.kind != ir::NodeKind::Register)
             continue;
@@ -864,6 +866,18 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         const clock::ClockDomain* src_dom =
             find_domain_for_node(src.id, domains, register_to_domain);
         if (!src_dom)
+            continue;
+
+        bool has_cross_pred = false;
+        for (uint64_t pred : graph.register_predecessors(src.id, false)) {
+            const clock::ClockDomain* pred_dom =
+                find_domain_for_node(pred, domains, register_to_domain);
+            if (pred_dom && pred_dom->id != src_dom->id) {
+                has_cross_pred = true;
+                break;
+            }
+        }
+        if (has_cross_pred)
             continue;
 
         std::vector<uint64_t> domain_chain;
@@ -901,6 +915,13 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         reported_sources.insert(src.id);
 
         if (domain_chain.size() >= 3) {
+            std::vector<size_t> domain_ids(visited_domain_ids.begin(), visited_domain_ids.end());
+            std::sort(domain_ids.begin(), domain_ids.end());
+            std::string key;
+            for (size_t id : domain_ids)
+                key += std::to_string(id) + ",";
+            if (!reported_domain_sets.insert(key).second)
+                continue;
             Finding dc;
             dc.rule_id = "CDC008";
             dc.rule_name = "multi_domain_daisy_chain";
@@ -933,28 +954,46 @@ std::vector<Finding> CrossingAnalyzer::analyze(
 
 void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
                                              std::vector<Finding>& findings) const {
-    // Propagate value uncertainty downstream through combinational logic and
-    // registers within the same domain. Cross-domain propagation is already
-    // handled by the crossing detection pass marking destinations.
-    for (ir::Node& node : graph.nodes_mutable()) {
-        if (!node.value_uncertain)
+    for (const auto& f : findings) {
+        if (!f.propagates_uncertainty || f.dest_reg_id == 0)
             continue;
-        for (uint64_t succ : graph.successors(node.id)) {
-            ir::Node* n = graph.find_node_mutable(succ);
-            if (n && !n->value_uncertain &&
-                n->clock_domain == node.clock_domain) {
+        ir::Node* dest = graph.find_node_mutable(f.dest_reg_id);
+        if (!dest)
+            continue;
+        dest->value_uncertain = true;
+        if (dest->uncertainty_source.empty())
+            dest->uncertainty_source = f.uncertainty_reason;
+    }
+
+    std::vector<uint64_t> work;
+    for (const ir::Node& node : graph.nodes()) {
+        if (node.value_uncertain)
+            work.push_back(node.id);
+    }
+    size_t hops = 0;
+    while (!work.empty() && hops < ir::MAX_PATH_DEPTH) {
+        ++hops;
+        std::vector<uint64_t> next;
+        for (uint64_t id : work) {
+            const ir::Node* node = graph.find_node(id);
+            if (!node)
+                continue;
+            auto mark = [&](uint64_t succ) {
+                ir::Node* n = graph.find_node_mutable(succ);
+                if (!n || n->value_uncertain)
+                    return;
+                if (n->clock_domain != node->clock_domain)
+                    return;
                 n->value_uncertain = true;
-                n->uncertainty_source = "propagated from '" + node.hier_name + "'";
-            }
+                n->uncertainty_source = "propagated from '" + node->hier_name + "'";
+                next.push_back(succ);
+            };
+            for (uint64_t succ : graph.successors(id))
+                mark(succ);
+            for (uint64_t rsucc : graph.register_successors(id, false))
+                mark(rsucc);
         }
-        for (uint64_t rsucc : graph.register_successors(node.id, false)) {
-            ir::Node* n = graph.find_node_mutable(rsucc);
-            if (n && !n->value_uncertain &&
-                n->clock_domain == node.clock_domain) {
-                n->value_uncertain = true;
-                n->uncertainty_source = "propagated from '" + node.hier_name + "'";
-            }
-        }
+        work = std::move(next);
     }
 
     // Emit CDC013 findings for registers that became uncertain due to

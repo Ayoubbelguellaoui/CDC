@@ -4,12 +4,12 @@
 
 | Property | Value |
 |----------|-------|
-| Severity | error (info when a clean 2FF/3FF chain is verified; warning if the chain has structural warnings) |
+| Severity | error (warning when synchronizer detected) |
 | Description | Register drives register across clock domains without synchronization |
 
 **Detection**: An edge in the IR graph connects two registers in different clock domains, and no 2FF/3FF synchronizer chain is detected on the destination side.
 
-**Sync-chain behavior**: When a clean 2FF or 3FF synchronizer chain is detected at the destination (all stages must be single-bit width), CDC001 is `info` with `VerifiedSafe`. Chains with structural warnings (reset/fanout) stay `warning` + `Ambiguous`. CDC002, CDC004, CDC005, and CDC007 are NOT suppressed — they fire independently since a synchronized crossing can still be a multi-bit hazard, use gated/muxed clocks, or lack reset. `asic_signoff` / `strict` treat unwaived CDC001 **warnings** as errors, but ignore `VerifiedSafe` and `info`.
+**Sync-chain behavior**: When a 2FF or 3FF synchronizer chain is detected at the destination, CDC001 is downgraded to `warning`. CDC002, CDC004, CDC005, and CDC007 remain independent — they fire based on their own detection logic regardless of sync-chain status.
 
 **Why it matters**: Data sampled by a register in a different clock domain can be metastable or inconsistent, leading to functional failures.
 
@@ -30,7 +30,7 @@ rules:
 | Severity | error |
 | Description | Multi-bit bus crosses domains without gray-code encoding or handshake protocol |
 
-**Detection**: A CDC001 crossing where the source register has width > 1 bit, and no structural evidence of gray-code encoding, handshake protocol, or async FIFO pattern is detected by the pattern recognizer.
+**Detection**: A CDC001 crossing where the source register has width > 1 bit, and semantic analysis does not detect gray-code encoding, handshake protocol, or async FIFO pointer patterns on the source/destination registers.
 
 **Why it matters**: Multi-bit buses can arrive at the destination domain with partial updates (e.g., some bits old, some new), causing data corruption.
 
@@ -51,7 +51,7 @@ rules:
 | Severity | warning |
 | Description | Multiple paths from same source reconverge in destination domain |
 
-**Detection**: A multi-bit source register fans out to two or more destination registers in a different domain, and those paths reconverge at a common consumer register. The source bus must be multi-bit (>1 bit) for the hazard to be flagged.
+**Detection**: A multi-bit source register fans out to two or more destination registers in a different domain, and those paths reconverge at a common consumer register. The source bus must be multi-bit (>1 bit) for the hazard to be flagged. For single-bit sources, the finding is suppressed when a synchronizer chain is detected on either destination path, since the sync chain prevents transient incorrect values.
 
 **Why it matters**: Different bits of the same bus can arrive at the reconvergence point at different times, causing transient incorrect values.
 
@@ -132,7 +132,7 @@ rules:
 
 | Property | Value |
 |----------|-------|
-| Severity | info (warning under strict reset policy) |
+| Severity | warning |
 | Description | CDC register without reset signal |
 
 **Detection**: A CDC001 crossing where both source and destination registers have empty reset signals.
@@ -167,82 +167,6 @@ rules:
     enabled: true
     severity: warning
 ```
-
----
-
-## CDC009 — Reset Domain Crossing
-
-| Property | Value |
-|----------|-------|
-| Severity | warning |
-| Description | Registers in different reset domains share data |
-
-**Detection**: Two registers in different clock domains have different reset signals (or one has a reset and the other does not). After reset, registers may be in different states depending on which reset was asserted.
-
-**Why it matters**: If registers come out of reset at different times or with different polarities, the data sampled during the reset period can be corrupted. This can cause functional failures or excessive power consumption.
-
-**Config**:
-```yaml
-rules:
-  CDC009:
-    enabled: true
-    severity: warning
-```
-
----
-
-## CDC010 — Path Traversal Truncated
-
-| Property | Value |
-|----------|-------|
-| Severity | warning |
-| Description | Path traversal truncated — some crossings may be missed |
-
-**Detection**: The graph traversal reached the configured path limit (MAX_PATH_DEPTH or max_paths) before exploring all possible register-to-register paths. Some CDC crossings may not be reported.
-
-**Why it matters**: Truncation means the analysis is incomplete. A "no findings" result does not mean the design is clean when this rule fires. The `analysis_status` field in the report will show `incomplete` when CDC010 is present.
-
-**Config**:
-```yaml
-rules:
-  CDC010:
-    enabled: true
-    severity: warning
-```
-
----
-
-## CDC011 — Pulse Crossing
-
-Pulse synchronizer pattern without a proper destination 2FF chain. Severity: warning.
-
-## CDC012 — Toggle Crossing
-
-Toggle synchronizer pattern without a proper destination 2FF chain. Severity: warning.
-
-## CDC013 — Unknown Propagation
-
-A register's value is uncertain because it is downstream (same domain) of an unsynchronized CDC destination. Severity: warning.
-
----
-
-## Rule Interaction Table
-
-| Rule | Requires CDC001? | Fires with sync chain? | Fires independently? |
-|------|-------------------|----------------------|---------------------|
-| CDC001 | — | Yes (info if VerifiedSafe) | — |
-| CDC002 | Yes | Yes (multi-bit sync is unsafe) | Yes |
-| CDC003 | No | Yes | Yes |
-| CDC004 | Yes | Yes (gated clock applies regardless) | Yes |
-| CDC005 | Yes | Yes (muxed clock applies regardless) | Yes |
-| CDC006 | No | Yes (combinational logic between stages) | Yes |
-| CDC007 | Yes | Yes (both must lack reset) | Yes |
-| CDC008 | No | No (daisy chain detection) | Yes |
-| CDC009 | No | No (reset domain analysis) | Yes |
-| CDC010 | No | No (truncation) | Yes |
-| CDC011 | Yes | Yes | Yes |
-| CDC012 | Yes | Yes | Yes |
-| CDC013 | No | No (propagation) | Yes |
 
 ---
 

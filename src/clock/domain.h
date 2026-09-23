@@ -28,6 +28,10 @@ class DomainExtractor {
     const ClockDomain* find_domain(uint64_t register_id,
                                    const std::vector<ClockDomain>& domains) const;
 
+    const ClockDomain* find_domain(
+        uint64_t register_id, const std::vector<ClockDomain>& domains,
+        const std::unordered_map<uint64_t, size_t>& register_to_domain) const;
+
     bool same_domain(uint64_t reg_a, uint64_t reg_b, const std::vector<ClockDomain>& domains) const;
 
     bool same_domain(uint64_t reg_a, uint64_t reg_b, const std::vector<ClockDomain>& domains,

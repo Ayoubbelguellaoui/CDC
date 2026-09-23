@@ -31,7 +31,7 @@ Open-source static analysis tool for detecting Clock Domain Crossing (CDC) issue
 
 - C++20 compiler (GCC 11+ or Clang 14+)
 - CMake 3.28+
-- Git (for FetchContent to download slang and Google Test)
+- Git (for FetchContent to download slang, yaml-cpp, and Google Test)
 
 ### Build
 
@@ -72,6 +72,18 @@ opencdc check design.sv --top top --severity CDC003=error
 
 # False path (suppress specific crossing)
 opencdc check design.sv --top top --false-path src_reg:meta_reg
+
+# Parallel analysis (4 threads)
+opencdc check design.sv --top top --jobs 4
+
+# Save baseline for trend comparison
+opencdc check design.sv --top top --save-baseline baseline.json
+
+# Compare against saved baseline
+opencdc check design.sv --top top --compare-baseline baseline.json
+
+# Start LSP server
+opencdc lsp --top top --port 2087
 ```
 
 ## Rules
@@ -105,10 +117,15 @@ rules:
     enabled: false
 
 waivers:
-  - rule: CDC001, source: mod.src, dest: mod.dst, justification: "Known safe", owner: "@team"
+  - rule: CDC001
+    source: mod.src
+    dest: mod.dst
+    justification: "Known safe"
+    owner: "@team"
 
 false_paths:
-  - source: mod.src_reg, dest: mod.meta_reg
+  - source: mod.src_reg
+    dest: mod.meta_reg
 
 output:
   format: json

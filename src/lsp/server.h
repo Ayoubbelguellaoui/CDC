@@ -59,9 +59,8 @@ class LspServer {
     LspServer();
     ~LspServer();
 
-     void start(int port = 0);
-     void stop();
-     void wait();
+    void start(int port = 0);
+    void stop();
 
     void set_publish_diagnostics_callback(PublishDiagnosticsCallback callback);
 
@@ -99,6 +98,11 @@ class LspServer {
     }
     bool is_running() const {
         return running_;
+    }
+
+    void wait() {
+        if (server_thread_.joinable())
+            server_thread_.join();
     }
 
    private:

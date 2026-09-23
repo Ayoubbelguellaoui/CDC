@@ -1,93 +1,24 @@
 **Changelog**
 All notable changes to OpenCDC will be documented in this file.
 
-**[0.5.0] — 2026-09-11**
+**[0.4.1] — 2026-09-21**
 
 **Fixed**
-- **CDC001 VerifiedSafe is info**: A clean 2FF/3FF chain is `info` + `VerifiedSafe`, not a warning. `asic_signoff`/`strict` no longer fail a correctly synchronized design.
-- **`--signoff` exit code**: Pass/PassWithWaivers → 0; Fail/Incomplete/Error → 1.
-- **Use-after-move**: Uncertainty metadata is written on the CDC001 finding before it is moved.
-- **Blackboxes match module type**: IR nodes store `module_type`; vendor primitives match the definition name, not a coincidental instance path.
-- **Toggle `t <= ~t`**: Unary Not creates a combinational IR node so CDC012 can fire.
-- **Waiver `*`**: `rule_id: *` waives all rules for the matching registers/domains.
-- **Clock pattern matching**: `"clk"` no longer matches `nclk` / `myclk`. Hierarchical suffix match still works for `mod.src`.
-- **Reset names**: Token match (`rst`, `rst_n`, `reset`) — `first` is not a reset.
-- **Frequency ratio**: Integer MHz ratios are not treated as synchronous.
-- **ClockResolver cache**: Invalidated when the graph generation changes.
-- **Config `format: sarif`**: Accepted.
-- **LSP**: `OPENCDC_ENABLE_LSP` is defined on UNIX; `opencdc lsp` works. `LspServer::wait()` added.
-- **Incremental stub**: `run_incremental` with a clean graph returns previous findings (`no_changes`), not an empty result.
-- **CDC013**: Same-domain worklist propagation, not a single hop.
-- **CDC008**: One finding per unique domain-id set, from chain heads only.
-- **Control `short_name`**: Leaf of the hierarchy (`valid`, not `top.u.valid`).
-
-**Added**
-- IR `module_type` on nodes.
-- `--incdir` / `--define` (also `+incdir+` / `+define+`) passed through to slang.
-- `allow_user_annotation` gates frontend name tags; `require_structural_proof` ignores name-seeded handshake/FIFO.
-- Tests for signoff VerifiedSafe, waiver `*`, blackbox type match, toggle unary, pattern `nclk`, incremental preserve, define/incdir.
-
-**[0.4.0] — 2026-09-05**
-
-**Fixed**
-- **CDC006 multi-stage fix**: Findings for 3FF+ chains now correctly report the actual stage pair with combinational logic, not always the first stage. Also detects combinational predecessors behind combinational nodes.
-- **CDC009 safety status**: Reset domain crossing findings now include `safety_status` and `safety_provenance` fields (was: Unknown/empty, invisible in safety reports).
-- **HTML safety-status filter**: Fixed CSS selector mismatch (`.safety-status` → `.safety-badge`) making the safety-status dropdown filter functional.
-- **CDC001 misleading reason**: Reason string now says "with X detected" when a synchronizer IS found, instead of always saying "without synchronization."
-- **CDC007 dead code**: Removed unreachable `else` branch in reason string ternary.
-- **Synchronizer dedup key**: `match()` deduplication now includes destination register ID, preventing multiple destinations from same source being collapsed.
-- **SynchronizerChain depth**: Depth is now computed from `stage_ids.size()` after chain walk, not hardcoded.
-- **Synchronizer strict mode**: `match()` chain walk now applies the same strict predecessor validation as `find_pattern_for_dest`, preventing inconsistent chain topologies.
-- **CDC001 ambiguous state**: Sync chains with structural warnings (reset polarity mismatch, fanout) now get `SafetyStatus::Ambiguous` instead of `VerifiedSafe`.
-- **CDC007 mixed reset**: Crossings where one register has reset and the other doesn't now emit CDC007 at `info` severity (was: silently unreported).
-- **Synchronizer warnings**: `has_chain_warnings()` method added for per-destination chain health check.
-- **CDC006 between stages**: Now fires on ANY combinational logic feeding a sync stage (not just cross-domain-driven), as unexpected combinational inputs defeat synchronizer purpose.
-- **Synchronizer width validation**: 2FF/3FF synchronizer detection now requires all stages to be single-bit (width=1). Multi-bit buses through synchronizer chains are no longer classified as safe crossings.
-- **CDC007 false positives**: CDC007 now fires as warning only when BOTH source and destination registers lack a reset signal (was: either one).
-- **ClockResolver integration**: Main analysis pipeline now calls `ClockResolver::resolve()` to detect gated/muxed clocks through the IR graph, not just from frontend flags.
-- **Analysis status tracking**: `AnalysisResult` now includes `analysis_status` field ("complete", "incomplete", or "failed") on all exit paths.
-- **Safety provenance**: All findings now carry `safety_status` and `safety_provenance` fields explaining how safety was determined.
-- **Muxed clock warning dedup**: Muxed clock warnings no longer share a `seen_clocks` set with domain resolution, preventing silent suppression.
-- **Synchronizer depth tracking**: 4+ stage synchronizer chains (e.g., src→meta→sync1→sync2→dst) now correctly detected as 3FF/4FF patterns instead of hardcoded 3-stage limit.
-- **CDC006 all stage pairs**: Combinational logic detection now checks ALL adjacent stage pairs in a sync chain, not just the second-to-second stage transition.
-- **CDC006 before-first-stage**: Also detects combinational logic between the cross-domain source and the first sync stage.
-- **CDC003 single-bit reconvergence**: Single-bit sources through independent 2FF sync chains no longer trigger CDC003.
-- **CDC003 BFS truncation warning**: BFS hop/node limit breach now appends a truncation notice to the CDC003 reason string.
-- **Report summary format**: Summary now includes `analysis_status` field in structured `key=value` format.
-
-**Added**
-- **Adversarial test suite**: 18+ new tests proving naming alone does not bypass detection rules (sync, gray-code, handshake, async FIFO, CDC007).
-- **Systematic CDC mutation tests**: 15 new mutation tests (`cdc_mutation_test.cpp`) covering golden sync, missing stage, combinational insertion, multi-bit bus, missing reset, gated clock, reconvergence, safety status, naming bypass, muxed clock, daisy chain, reset domain crossing, mixed reset, and thread determinism.
-- **Thread determinism test**: Verifies identical findings regardless of thread count (1, 2, 4) with complex topology.
-- **Analysis status tests**: Validates analysis_status "complete" and "failed" states.
-- **Safety status unit tests**: Tests verifying `safety_status`/`safety_provenance` populated on CDC001 (safe/unsafe), CDC002, CDC004, CDC005, CDC007, CDC008 findings.
-- **Sync chain adversarial tests**: Missing middle stage, mismatched reset polarity detection.
-- **CDC006 adversarial tests**: Bypass path detection, combinational between stage2-stage3.
-- **SafetyStatus enum**: New enum in Finding model (Unknown, Candidate, VerifiedSafe, VerifiedUnsafe, Ambiguous).
-- **Synchronizer warnings**: `SynchronizerChain` now carries `warnings` vector for reset polarity mismatches and fanout violations.
-- **Stage reset validation**: `validate_stage_reset()` detects async reset on metastability-sensitive stages.
-- **Stage fanout validation**: `validate_stage_fanout()` detects stage1 feeding both stage2 and unrelated logic.
-- **JSON report envelope**: JSON output wrapped in `{"analysis_status":"...","finding_count":N,"findings":[...]}`.
-- **JSON report new fields**: `is_gray_coded`, `has_handshake`, `source_module_path`, `dest_module_path`, `crosses_module_boundary` added to each finding.
-- **HTML safety-status filter**: New dropdown to filter findings by safety status (Verified Safe/Unsafe/Candidate/Ambiguous).
-- **Text report status indicator**: Text output now shows `Analysis status: <status>` header.
-- **Report JSON safety field tests**: Tests verifying `safety_status`, `safety_provenance`, `is_gray_coded`, `has_handshake`, `source_module_path`, `dest_module_path`, `crosses_module_boundary` in JSON output.
-- **HTML safety-status filter rendering test**: Test verifying `<select id="safety-filter">` is rendered with all options.
-- **Text report analysis_status test**: Test verifying `Analysis status:` header appears in text output.
-- **CDC008/009 mutation tests**: Tests for multi-domain daisy chain and reset domain crossing detection.
-- **Mixed reset test**: Test verifying CDC007 fires at `info` severity when only one register lacks reset.
-- **Rule interaction table**: Expanded to cover all 10 rules with interaction descriptions in `docs/rule-semantics.md`.
-- **Safety provenance documentation**: Full provenance model documented in `docs/architecture.md`.
-- **Missing reset adversarial fixture**: `missing_reset_adversarial.sv` + full-pipeline test.
+- **LSP always available**: Removed `#ifdef OPENCDC_ENABLE_LSP` guards — LSP server is now always compiled in.
+- **LSP `wait()` missing**: Added `LspServer::wait()` method so the CLI `lsp` subcommand blocks correctly.
+- **`--jobs` flag**: New CLI flag to control parallel analysis threads (wired through to `CrossingAnalyzer`).
+- **`--save-baseline` / `--compare-baseline`**: New CLI flags for trend analysis — save findings baseline or compare against a previous run and exit.
+- **Test CMakeLists**: Unit and regression tests now link `opencdc_core` instead of recompiling all source files (fixes LTO and ODR violations).
+- **Dead declarations removed**: `HtmlReporter::write_index_html`, `write_findings_html`, `write_summary_html` removed (never implemented).
 
 **Changed**
-- **CDC001 sync-chain description**: Updated docs to reflect that CDC002/004/005/007 are NOT suppressed when sync chain detected.
-- **CDC002 detection description**: Updated docs to match structural PatternRecognizer (not substring matching).
-- **Architecture docs**: Updated to reflect ClockResolver integration, analysis_status, suppress_reset_crossings, and CDC009 in pipeline.
-- **Text report**: Uses structured `key=value` summary format.
-- **Rule interaction table**: Expanded to cover all 10 rules with interaction descriptions.
-- **Safety provenance documentation**: Full provenance model documented in architecture.
-- **JSON field semantics**: Documented that `is_gray_coded`/`has_handshake` are informational hints, not safety-classification evidence.
+- **yaml-cpp dependency**: Config and constraints YAML parsing rewritten to use [yaml-cpp](https://github.com/jbeder/yaml-cpp) (0.8.0) instead of hand-rolled line-by-line parsers. Old compact one-line waiver/false-path format still supported for backward compatibility.
+- **Config file format**: Config YAML now uses proper nested maps for waivers, false_paths, and clock_groups. Old compact comma-separated format is still accepted.
+- **Constraints YAML format**: Constraints YAML now uses proper nested maps for false_paths, multi_cycle_paths, and clock_groups. Old compact format still accepted.
+
+**Performance**
+- **`get_root_port_name`**: O(N) graph scan replaced with O(1) `short_to_hier_` index lookup.
+- **`find_domain`**: Added O(1) overload using `register_to_domain` map (linear scan fallback retained for callers without the map).
 
 **[0.3.1] — 2026-08-21**
 

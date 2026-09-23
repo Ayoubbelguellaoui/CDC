@@ -4,25 +4,9 @@
 #include <cctype>
 #include <unordered_set>
 
-#include "clock/relationship.h"
 #include "util/parallel.h"
 
 namespace opencdc::cdc {
-
-static const char* sync_pattern_name(SyncPattern p) {
-    switch (p) {
-        case SyncPattern::TwoFF:
-            return "2FF synchronizer";
-        case SyncPattern::ThreeFF:
-            return "3FF synchronizer";
-        case SyncPattern::FourFF:
-            return "4FF synchronizer";
-        case SyncPattern::NStage:
-            return "N-stage synchronizer";
-        default:
-            return "none";
-    }
-}
 
 bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id,
                                                   const ir::Graph& graph) const {
@@ -43,36 +27,6 @@ bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_
     return false;
 }
 
-bool CrossingAnalyzer::is_path_through_safe_blackbox(
-    const ir::Graph& graph, const std::vector<uint64_t>& path_node_ids) const {
-    if (!blackbox_registry_)
-        return false;
-
-    for (uint64_t nid : path_node_ids) {
-        const ir::Node* node = graph.find_node(nid);
-        if (!node)
-            continue;
-        if (!node->module_type.empty()) {
-            const BlackBoxModel* by_type = blackbox_registry_->find(node->module_type);
-            if (by_type && by_type->properties.is_safe_crossing)
-                return true;
-            continue;
-        }
-        std::string mp = node->module_path;
-        const BlackBoxModel* model = blackbox_registry_->find(mp);
-        if (model && model->properties.is_safe_crossing)
-            return true;
-        auto slash = mp.find_last_of("/.");
-        if (slash != std::string::npos) {
-            std::string leaf = mp.substr(slash + 1);
-            model = blackbox_registry_->find(leaf);
-            if (model && model->properties.is_safe_crossing)
-                return true;
-        }
-    }
-    return false;
-}
-
 const clock::ClockDomain* CrossingAnalyzer::find_domain_for_node(
     uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
     const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
@@ -85,15 +39,14 @@ const clock::ClockDomain* CrossingAnalyzer::find_domain_for_node(
 }
 
 std::string CrossingAnalyzer::build_reason(const Finding& f) const {
+    std::string r = "Register '" + f.source_reg_name + "' in domain '" + f.source_domain +
+                    "' drives register '" + f.dest_reg_name + "' in domain '" + f.dest_domain +
+                    "' without synchronization.";
+
     if (f.detected_sync == SyncPattern::None) {
-        return "Register '" + f.source_reg_name + "' in domain '" + f.source_domain +
-               "' drives register '" + f.dest_reg_name + "' in domain '" + f.dest_domain +
-               "' without synchronization. No 2FF/3FF synchronizer chain detected on "
-               "destination side.";
+        r += " No 2FF/3FF synchronizer chain detected on destination side.";
     }
-    return "Register '" + f.source_reg_name + "' in domain '" + f.source_domain +
-           "' drives register '" + f.dest_reg_name + "' in domain '" + f.dest_domain + "' with " +
-           sync_pattern_name(f.detected_sync) + " detected.";
+    return r;
 }
 
 std::vector<Finding> CrossingAnalyzer::analyze(
@@ -132,13 +85,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             trunc.source_module_path = src->module_path;
             trunc.reason = "Path traversal truncated at " + std::to_string(path_result.max_paths) +
                            " paths from register '" + src->hier_name + "'.";
-            trunc.safety_status = SafetyStatus::Ambiguous;
-            trunc.safety_provenance = "Path traversal truncated — some crossings may be missed";
             local_findings.push_back(std::move(trunc));
         }
 
-        // Path-aware dedup: include intermediate node set so materially
-        // different paths from the same src→dst pair are not collapsed.
         std::unordered_set<std::string> seen;
 
         for (const auto& reg_path : path_result.paths) {
@@ -155,67 +104,10 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             if (src_dom->id == dst_dom->id)
                 continue;
 
-            // Classify clock relationship between source and destination domains.
-            clock::ClockRelationship clock_rel = clock::ClockRelationship::Unknown;
-            if (resolve_result_) {
-                clock_rel = clock::classify_relationship(src_dom->name, dst_dom->name,
-                                                         *clock_constraints_, *resolve_result_);
-            } else if (clock_constraints_) {
-                clock::ResolveResult empty_resolve;
-                clock_rel = clock::classify_relationship(src_dom->name, dst_dom->name,
-                                                         *clock_constraints_, empty_resolve);
-            }
-
-            // Build path identity: src→dst + sorted set of intermediate node IDs.
-            // This ensures two materially different paths (different intermediate
-            // logic, different sync structure) are not collapsed into one finding.
-            std::vector<uint64_t> intermediates;
-            for (size_t i = 1; i + 1 < reg_path.node_ids.size(); ++i) {
-                intermediates.push_back(reg_path.node_ids[i]);
-            }
-            std::sort(intermediates.begin(), intermediates.end());
-            std::string path_key = std::to_string(src_id) + "->" + std::to_string(dst_id) + "|";
-            for (uint64_t nid : intermediates) {
-                path_key += std::to_string(nid) + ",";
-            }
-            if (seen.count(path_key))
+            std::string key = std::to_string(src_id) + "->" + std::to_string(dst_id);
+            if (seen.count(key))
                 continue;
-            seen.insert(path_key);
-
-            // Exclusive clocks: crossing is intentional per constraints.
-            // Record as info-level audit trail, skip CDC001 error.
-            if (clock_rel == clock::ClockRelationship::Exclusive) {
-                Finding exc;
-                exc.rule_id = "CDC001";
-                exc.rule_name = "unsynchronized_crossing";
-                exc.severity = "info";
-                exc.source_reg_id = src_id;
-                exc.dest_reg_id = dst_id;
-                exc.source_reg_name = src->hier_name;
-                exc.dest_reg_name = dst->hier_name;
-                exc.source_domain = src_dom->name;
-                exc.dest_domain = dst_dom->name;
-                exc.path.node_ids = reg_path.node_ids;
-                exc.source_loc = src->loc;
-                exc.bus_width = src->width;
-                exc.source_module_path = src->module_path;
-                exc.dest_module_path = dst->module_path;
-                exc.clock_relationship = clock_rel;
-                exc.suppressed_by_false_path = true;
-                exc.false_path_source = "exclusive clock groups";
-                exc.reason = "Crossing between exclusive clocks '" + src_dom->name + "' and '" +
-                             dst_dom->name + "' — intentional per clock group constraints.";
-                exc.safety_status = SafetyStatus::Ambiguous;
-                exc.safety_provenance = "Crossing between exclusive clock groups";
-                local_findings.push_back(std::move(exc));
-                continue;
-            }
-
-            // Synchronous clocks: known frequency-locked relationship.
-            // CDC001 reduced to warning since synchronizer may not be needed.
-            bool synchronous_clocks = (clock_rel == clock::ClockRelationship::Synchronous ||
-                                       clock_rel == clock::ClockRelationship::Related ||
-                                       clock_rel == clock::ClockRelationship::Generated);
+            seen.insert(key);
 
             bool is_false_path = false;
             if (clock_constraints_) {
@@ -236,591 +128,189 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 }
                 is_false_path = clock_constraints_->is_false_path(ctx);
             }
-            if (is_false_path) {
-                // Record false-path suppression for auditability.
-                // Users must be able to distinguish "clean" from "suppressed by constraint."
-                Finding sup;
-                sup.rule_id = "CDC001";
-                sup.rule_name = "unsynchronized_crossing";
-                sup.severity = "info";
-                sup.source_reg_id = src_id;
-                sup.dest_reg_id = dst_id;
-                sup.source_reg_name = src->hier_name;
-                sup.dest_reg_name = dst->hier_name;
-                sup.source_domain = src_dom->name;
-                sup.dest_domain = dst_dom->name;
-                sup.path.node_ids = reg_path.node_ids;
-                sup.source_loc = src->loc;
-                sup.bus_width = src->width;
-                sup.source_module_path = src->module_path;
-                sup.dest_module_path = dst->module_path;
-                sup.clock_relationship = clock_rel;
-                sup.suppressed_by_false_path = true;
-                sup.false_path_source = "false_path constraint";
-                sup.reason = "Crossing suppressed by false-path constraint from '" +
-                             src->hier_name + "' to '" + dst->hier_name + "'.";
-                sup.safety_status = SafetyStatus::Ambiguous;
-                sup.safety_provenance = "Suppressed by false-path constraint";
-                local_findings.push_back(std::move(sup));
+            if (is_false_path)
                 continue;
+
+            Finding f;
+            f.rule_id = "CDC001";
+            f.rule_name = "unsynchronized_crossing";
+            f.severity = "error";
+            f.source_reg_id = src_id;
+            f.dest_reg_id = dst_id;
+            f.source_reg_name = src->hier_name;
+            f.dest_reg_name = dst->hier_name;
+            f.source_domain = src_dom->name;
+            f.dest_domain = dst_dom->name;
+            f.path.node_ids = reg_path.node_ids;
+            f.source_loc = src->loc;
+            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph);
+            f.bus_width = src->width;
+            f.source_module_path = src->module_path;
+            f.dest_module_path = dst->module_path;
+            f.crosses_module_boundary = !src->module_path.empty() && !dst->module_path.empty() &&
+                                        src->module_path != dst->module_path;
+
+            SyncPattern crossing_sync = f.detected_sync;
+
+            f.is_gray_coded =
+                (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
+                                         pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
+                src->is_gray_coded || dst->is_gray_coded;
+
+            f.has_handshake = (pattern_recognizer_ &&
+                               (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
+                                pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
+                              src->is_handshake_signal || dst->is_handshake_signal;
+
+            if (crossing_sync != SyncPattern::None) {
+                f.severity = "warning";
             }
 
-            // Multicycle path suppression: when a multicycle constraint matches
-            // this crossing's clock domains, suppress the finding for rules in
-            // the suppress_rules list.  Creates an info-level audit trail.
-            bool multicycle_suppressed = false;
-            if (clock_constraints_ && multicycle_policy_ && multicycle_policy_->suppress_findings) {
-                bool suppress_cdc001 =
-                    std::find(multicycle_policy_->suppress_rules.begin(),
-                              multicycle_policy_->suppress_rules.end(),
-                              "CDC001") != multicycle_policy_->suppress_rules.end();
-                if (suppress_cdc001) {
-                    for (const auto& mcp : clock_constraints_->multi_cycle_paths) {
-                        if ((!mcp.from_clock.empty() && !mcp.to_clock.empty()) &&
-                            (clock::pattern_matches(mcp.from_clock, src_dom->name) &&
-                             clock::pattern_matches(mcp.to_clock, dst_dom->name))) {
-                            std::string mc_source = "multicycle_path: " + mcp.from_clock + " -> " +
-                                                    mcp.to_clock + " (" +
-                                                    std::to_string(mcp.cycles) + " cycles)";
-                            Finding sup;
-                            sup.rule_id = "CDC001";
-                            sup.rule_name = "unsynchronized_crossing";
-                            sup.severity = "info";
-                            sup.source_reg_id = src_id;
-                            sup.dest_reg_id = dst_id;
-                            sup.source_reg_name = src->hier_name;
-                            sup.dest_reg_name = dst->hier_name;
-                            sup.source_domain = src_dom->name;
-                            sup.dest_domain = dst_dom->name;
-                            sup.path.node_ids = reg_path.node_ids;
-                            sup.source_loc = src->loc;
-                            sup.bus_width = src->width;
-                            sup.source_module_path = src->module_path;
-                            sup.dest_module_path = dst->module_path;
-                            sup.clock_relationship = clock_rel;
-                            sup.suppressed_by_multicycle = true;
-                            sup.multicycle_source = mc_source;
-                            sup.has_multicycle_exception = true;
-                            sup.multicycle_cycles = mcp.cycles;
-                            sup.constraint_source = mc_source;
-                            sup.reason =
-                                "Crossing suppressed by multicycle path constraint from '" +
-                                src->hier_name + "' to '" + dst->hier_name + "'.";
-                            sup.safety_status = SafetyStatus::Ambiguous;
-                            sup.safety_provenance = "Suppressed by multicycle path constraint";
-                            local_findings.push_back(std::move(sup));
-                            multicycle_suppressed = true;
-                            break;
-                        }
+            f.reason = build_reason(f);
+
+            if (clock_constraints_) {
+                for (const auto& mcp : clock_constraints_->multi_cycle_paths) {
+                    if ((!mcp.from_clock.empty() && !mcp.to_clock.empty()) &&
+                        (clock::pattern_matches(mcp.from_clock, src_dom->name) &&
+                         clock::pattern_matches(mcp.to_clock, dst_dom->name))) {
+                        f.has_multicycle_exception = true;
+                        f.multicycle_cycles = mcp.cycles;
+                        f.constraint_source = "multicycle_path: " + mcp.from_clock + " -> " +
+                                              mcp.to_clock + " (" + std::to_string(mcp.cycles) +
+                                              " cycles)";
+                        break;
                     }
                 }
             }
 
-            if (!multicycle_suppressed) {
-                // Blackbox suppression: if the path goes through a safe black box
-                // module, suppress CDC001/002 since the black box handles synchronization.
-                bool blackbox_suppressed = is_path_through_safe_blackbox(graph, reg_path.node_ids);
+            local_findings.push_back(std::move(f));
 
-                if (blackbox_suppressed) {
-                    Finding bb;
-                    bb.rule_id = "CDC001";
-                    bb.rule_name = "unsynchronized_crossing";
-                    bb.severity = "info";
-                    bb.source_reg_id = src_id;
-                    bb.dest_reg_id = dst_id;
-                    bb.source_reg_name = src->hier_name;
-                    bb.dest_reg_name = dst->hier_name;
-                    bb.source_domain = src_dom->name;
-                    bb.dest_domain = dst_dom->name;
-                    bb.path.node_ids = reg_path.node_ids;
-                    bb.source_loc = src->loc;
-                    bb.bus_width = src->width;
-                    bb.source_module_path = src->module_path;
-                    bb.dest_module_path = dst->module_path;
-                    bb.clock_relationship = clock_rel;
-                    bb.suppressed_by_false_path = false;
-                    bb.reason =
-                        "Crossing suppressed: path passes through safe black box "
-                        "module with built-in synchronization.";
-                    bb.safety_status = SafetyStatus::VerifiedSafe;
-                    bb.safety_provenance = "Path through safe black box module";
-                    local_findings.push_back(std::move(bb));
-                    continue;
-                }
-                Finding f;
-                f.rule_id = "CDC001";
-                f.rule_name = "unsynchronized_crossing";
-                f.severity = "error";
-                f.source_reg_id = src_id;
-                f.dest_reg_id = dst_id;
-                f.source_reg_name = src->hier_name;
-                f.dest_reg_name = dst->hier_name;
-                f.source_domain = src_dom->name;
-                f.dest_domain = dst_dom->name;
-                f.path.node_ids = reg_path.node_ids;
-                f.source_loc = src->loc;
-                f.detected_sync =
-                    sync_matcher_.find_pattern_for_dest(dst_id, graph, /*strict=*/true);
-                f.bus_width = src->width;
-                f.source_module_path = src->module_path;
-                f.dest_module_path = dst->module_path;
-                f.clock_relationship = clock_rel;
-                f.crosses_module_boundary = !src->module_path.empty() &&
-                                            !dst->module_path.empty() &&
-                                            src->module_path != dst->module_path;
+            // NOTE: no early continue here — CDC002/004/005/007 are
+            // independent of synchronizer presence. A synchronized crossing
+            // can still be a multi-bit hazard (per-bit skew), and gated /
+            // muxed / reset properties apply regardless of sync chains.
 
-                // Evidence chain: ordered analysis steps for explainability.
-                f.evidence_chain.push_back(
-                    EvidenceStep{"clock_domains",
-                                 "Clock domains: '" + src_dom->name + "' -> '" + dst_dom->name + "'",
-                                 "identified", src->loc.file});
-                f.evidence_chain.push_back(
-                    EvidenceStep{"clock_relationship",
-                                 "Clock relationship: " +
-                                     std::string(clock::clock_relationship_name(clock_rel)),
-                                 "classified", src->loc.file});
-                f.evidence_chain.push_back(
-                    EvidenceStep{"bus_width", "Bus width: " + std::to_string(src->width), "measured",
-                                 src->loc.file});
+            bool safe_crossing = is_safe_multi_bit_crossing(src_id, dst_id, graph);
 
-                // Module hierarchy evidence.
-                if (module_tree_ && !src->module_path.empty() && !dst->module_path.empty()) {
-                    std::string ancestor =
-                        module_tree_->common_ancestor(src->module_path, dst->module_path);
-                    bool boundary = module_tree_->crosses_boundary(src_id, dst_id, graph);
-                    if (boundary) {
-                        f.evidence_chain.push_back(
-                            EvidenceStep{"module_boundary",
-                                         "Crosses module boundary: '" + src->module_path + "' -> '" +
-                                             dst->module_path + "' (common ancestor: '" + ancestor + "')",
-                                         "boundary_crossing", src->loc.file});
-                    }
-                }
-
-                SyncPattern crossing_sync = f.detected_sync;
-
-                f.is_gray_coded =
+            if (src->width > 1 && !safe_crossing) {
+                Finding mb;
+                mb.rule_id = "CDC002";
+                mb.rule_name = "multi_bit_crossing";
+                mb.severity = "error";
+                mb.source_reg_id = src_id;
+                mb.dest_reg_id = dst_id;
+                mb.source_reg_name = src->hier_name;
+                mb.dest_reg_name = dst->hier_name;
+                mb.source_domain = src_dom->name;
+                mb.dest_domain = dst_dom->name;
+                mb.path.node_ids = reg_path.node_ids;
+                mb.source_loc = src->loc;
+                mb.detected_sync = f.detected_sync;
+                mb.bus_width = src->width;
+                mb.is_gray_coded =
                     (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
                                              pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
                     src->is_gray_coded || dst->is_gray_coded;
+                mb.has_handshake = (pattern_recognizer_ &&
+                                    (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
+                                     pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
+                                   src->is_handshake_signal || dst->is_handshake_signal;
+                mb.source_module_path = src->module_path;
+                mb.dest_module_path = dst->module_path;
+                mb.crosses_module_boundary = f.crosses_module_boundary;
+                mb.reason = "Multi-bit bus '" + src->hier_name +
+                            "' (width=" + std::to_string(src->width) + ") crosses from domain '" +
+                            src_dom->name + "' to domain '" + dst_dom->name +
+                            "' without gray-code encoding or handshake protocol.";
+                local_findings.push_back(std::move(mb));
+            }
 
-                f.has_handshake = (pattern_recognizer_ &&
-                                   (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
-                                    pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
-                                  src->is_handshake_signal || dst->is_handshake_signal;
-
-                if (crossing_sync != SyncPattern::None) {
-                    f.evidence_chain.push_back(
-                        EvidenceStep{"sync_pattern",
-                                     "Sync pattern: " + std::string(sync_pattern_name(crossing_sync)),
-                                     "detected", src->loc.file});
-                    if (sync_matcher_.has_chain_warnings(graph, dst_id)) {
-                        f.severity = "warning";
-                        f.safety_status = SafetyStatus::Ambiguous;
-                        f.safety_provenance = std::string(sync_pattern_name(crossing_sync)) +
-                                              " detected but chain has structural warnings";
-                    } else {
-                        f.severity = "info";
-                        f.safety_status = SafetyStatus::VerifiedSafe;
-                        f.safety_provenance = std::string(sync_pattern_name(crossing_sync)) +
-                                              " detected at destination";
-                    }
+            if (src->clock_is_gated || dst->clock_is_gated) {
+                const ir::Node* gated_src = src->clock_is_gated ? src : nullptr;
+                const ir::Node* gated_dst = dst->clock_is_gated ? dst : nullptr;
+                Finding gc;
+                gc.rule_id = "CDC004";
+                gc.rule_name = "gated_clock_crossing";
+                gc.severity = "warning";
+                gc.source_reg_id = src_id;
+                gc.dest_reg_id = dst_id;
+                gc.source_reg_name = src->hier_name;
+                gc.dest_reg_name = dst->hier_name;
+                gc.source_domain = src_dom->name;
+                gc.dest_domain = dst_dom->name;
+                gc.path.node_ids = reg_path.node_ids;
+                gc.source_loc = src->loc;
+                gc.bus_width = src->width;
+                gc.source_module_path = src->module_path;
+                gc.dest_module_path = dst->module_path;
+                std::string gated_info;
+                if (gated_src && gated_dst) {
+                    gated_info = "both source '" + gated_src->hier_name + "' (domain '" +
+                                 gated_src->clock_domain + "') and destination '" +
+                                 gated_dst->hier_name + "' (domain '" + gated_dst->clock_domain +
+                                 "')";
                 } else {
-                    f.evidence_chain.push_back(
-                        EvidenceStep{"sync_pattern", "Sync pattern: none detected", "missing",
-                                     src->loc.file});
-                    f.safety_status = SafetyStatus::VerifiedUnsafe;
-                    f.safety_provenance = "No synchronizer chain detected on destination side";
+                    const ir::Node* g = gated_src ? gated_src : gated_dst;
+                    gated_info = "'" + g->hier_name + "' (domain '" + g->clock_domain +
+                                 "', root: '" + g->root_clock + "')";
                 }
+                gc.reason = "Register " + gated_info +
+                            " is clocked by a gated clock on a crossing from domain '" +
+                            src_dom->name + "' to domain '" + dst_dom->name + "'.";
+                local_findings.push_back(std::move(gc));
+            }
 
-                // Check minimum sync stages requirement.
-                if (crossing_sync != SyncPattern::None && min_sync_stages_ > 1) {
-                    if (sync_matcher_.below_min_stages(dst_id, graph, min_sync_stages_)) {
-                        f.severity = "error";
-                        f.safety_status = SafetyStatus::VerifiedUnsafe;
-                        f.safety_provenance = std::string(sync_pattern_name(crossing_sync)) +
-                                              " detected but chain depth " +
-                                              std::to_string(sync_matcher_.chain_depth(dst_id, graph)) +
-                                              " < minimum " + std::to_string(min_sync_stages_);
-                    }
-                }
+            bool src_muxed_no_reset = src->clock_is_muxed && src->reset_signal.empty();
+            bool dst_muxed_no_reset = dst->clock_is_muxed && dst->reset_signal.empty();
+            if (src_muxed_no_reset || dst_muxed_no_reset) {
+                const ir::Node* muxed_node = src_muxed_no_reset ? src : dst;
+                Finding mr;
+                mr.rule_id = "CDC005";
+                mr.rule_name = "muxed_clock_no_reset";
+                mr.severity = "warning";
+                mr.source_reg_id = src_id;
+                mr.dest_reg_id = dst_id;
+                mr.source_reg_name = src->hier_name;
+                mr.dest_reg_name = dst->hier_name;
+                mr.source_domain = src_dom->name;
+                mr.dest_domain = dst_dom->name;
+                mr.path.node_ids = reg_path.node_ids;
+                mr.source_loc = src->loc;
+                mr.bus_width = src->width;
+                mr.source_module_path = src->module_path;
+                mr.dest_module_path = dst->module_path;
+                mr.reason = "Register '" + muxed_node->hier_name + "' is clocked by muxed clock '" +
+                            muxed_node->clock_domain + "' without reset signal.";
+                local_findings.push_back(std::move(mr));
+            }
 
-                // Synchronous/related clocks: reduce severity since synchronizer may not be needed.
-                if (synchronous_clocks && f.severity == "error") {
-                    f.severity = "warning";
-                    f.safety_provenance += " (clocks are synchronous/related)";
-                }
-
-                f.reason = build_reason(f);
-
-                if (clock_rel == clock::ClockRelationship::Unknown) {
-                    f.reason +=
-                        " [Unknown clock relationship: analysis may require user annotation]";
-                }
-
-                if (clock_constraints_) {
-                    for (const auto& mcp : clock_constraints_->multi_cycle_paths) {
-                        if ((!mcp.from_clock.empty() && !mcp.to_clock.empty()) &&
-                            (clock::pattern_matches(mcp.from_clock, src_dom->name) &&
-                             clock::pattern_matches(mcp.to_clock, dst_dom->name))) {
-                            f.has_multicycle_exception = true;
-                            f.multicycle_cycles = mcp.cycles;
-                            f.constraint_source = "multicycle_path: " + mcp.from_clock + " -> " +
-                                                  mcp.to_clock + " (" + std::to_string(mcp.cycles) +
-                                                  " cycles)";
-                            break;
-                        }
-                    }
-                }
-
-                if (crossing_sync == SyncPattern::None) {
-                    f.propagates_uncertainty = true;
-                    f.uncertainty_reason = "unsynchronized crossing from '" + src->hier_name +
-                                           "' in domain '" + src_dom->name + "'";
-                    f.evidence_chain.push_back(EvidenceStep{
-                        "uncertainty",
-                        "Destination register value is uncertain after unsynchronized crossing",
-                        "flagged", src->loc.file});
-                }
-
-                SyncPattern detected_sync = f.detected_sync;
-                bool has_handshake = f.has_handshake;
-                bool crosses_module_boundary = f.crosses_module_boundary;
-                local_findings.push_back(std::move(f));
-
-                // CDC011: pulse crossing without proper 2FF chain
-                if (crossing_sync == SyncPattern::None && pattern_recognizer_) {
-                    if (pattern_recognizer_->is_pulse_sync(src_id, graph) ||
-                        pattern_recognizer_->is_pulse_sync(dst_id, graph)) {
-                        Finding ps;
-                        ps.rule_id = "CDC011";
-                        ps.rule_name = "pulse_crossing";
-                        ps.severity = "warning";
-                        ps.source_reg_id = src_id;
-                        ps.dest_reg_id = dst_id;
-                        ps.source_reg_name = src->hier_name;
-                        ps.dest_reg_name = dst->hier_name;
-                        ps.source_domain = src_dom->name;
-                        ps.dest_domain = dst_dom->name;
-                        ps.path.node_ids = reg_path.node_ids;
-                        ps.source_loc = src->loc;
-                        ps.bus_width = src->width;
-                        ps.source_module_path = src->module_path;
-                        ps.dest_module_path = dst->module_path;
-                        ps.clock_relationship = clock_rel;
-                        ps.reason = "Pulse synchronizer pattern detected crossing from domain '" +
-                                    src_dom->name + "' to '" + dst_dom->name +
-                                    "' but no proper 2FF synchronizer chain on destination side.";
-                        ps.safety_status = SafetyStatus::Candidate;
-                        ps.safety_provenance = "Pulse crossing without proper 2FF chain";
-                        local_findings.push_back(std::move(ps));
-                    }
-
-                    // CDC012: toggle crossing without proper 2FF chain
-                    if (pattern_recognizer_->is_toggle_sync(src_id, graph) ||
-                        pattern_recognizer_->is_toggle_sync(dst_id, graph)) {
-                        Finding ts;
-                        ts.rule_id = "CDC012";
-                        ts.rule_name = "toggle_crossing";
-                        ts.severity = "warning";
-                        ts.source_reg_id = src_id;
-                        ts.dest_reg_id = dst_id;
-                        ts.source_reg_name = src->hier_name;
-                        ts.dest_reg_name = dst->hier_name;
-                        ts.source_domain = src_dom->name;
-                        ts.dest_domain = dst_dom->name;
-                        ts.path.node_ids = reg_path.node_ids;
-                        ts.source_loc = src->loc;
-                        ts.bus_width = src->width;
-                        ts.source_module_path = src->module_path;
-                        ts.dest_module_path = dst->module_path;
-                        ts.clock_relationship = clock_rel;
-                        ts.reason = "Toggle synchronizer pattern detected crossing from domain '" +
-                                    src_dom->name + "' to '" + dst_dom->name +
-                                    "' but no proper 2FF synchronizer chain on destination side.";
-                        ts.safety_status = SafetyStatus::Candidate;
-                        ts.safety_provenance = "Toggle crossing without proper 2FF chain";
-                        local_findings.push_back(std::move(ts));
-                    }
-                }
-
-                // NOTE: no early continue here — CDC002/004/005/007 are
-                // independent of synchronizer presence. A synchronized crossing
-                // can still be a multi-bit hazard (per-bit skew), and gated /
-                // muxed / reset properties apply regardless of sync chains.
-
-                // Skip CDC002 for control signals (valid/ready/enable) — these are
-                // expected to cross domains and use handshaking protocols.
-                bool is_control_crossing = src->is_control_signal || dst->is_control_signal;
-
-                if (!is_control_crossing) {
-                bool safe_crossing = is_safe_multi_bit_crossing(src_id, dst_id, graph);
-
-                if (src->width > 1 && !safe_crossing) {
-                    Finding mb;
-                    mb.rule_id = "CDC002";
-                    mb.rule_name = "multi_bit_crossing";
-                    mb.severity = "error";
-                    mb.source_reg_id = src_id;
-                    mb.dest_reg_id = dst_id;
-                    mb.source_reg_name = src->hier_name;
-                    mb.dest_reg_name = dst->hier_name;
-                    mb.source_domain = src_dom->name;
-                    mb.dest_domain = dst_dom->name;
-                    mb.path.node_ids = reg_path.node_ids;
-                    mb.source_loc = src->loc;
-                    mb.detected_sync = detected_sync;
-                    mb.bus_width = src->width;
-                    mb.is_gray_coded = (pattern_recognizer_ &&
-                                        (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                                         pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                                       src->is_gray_coded || dst->is_gray_coded;
-                    mb.has_handshake =
-                        (pattern_recognizer_ &&
-                         (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
-                          pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
-                        src->is_handshake_signal || dst->is_handshake_signal;
-                    mb.source_module_path = src->module_path;
-                    mb.dest_module_path = dst->module_path;
-                    mb.clock_relationship = clock_rel;
-                    mb.crosses_module_boundary = crosses_module_boundary;
-
-                    // 4K: Classify multi-bit crossing type
-                    if (mb.is_gray_coded) {
-                        mb.multi_bit_type = MultiBitCrossingType::GrayCoded;
-                    } else if (mb.has_handshake) {
-                        mb.multi_bit_type = MultiBitCrossingType::HandshakeControlled;
-                    } else if (pattern_recognizer_ &&
-                               pattern_recognizer_->is_async_fifo_ptr(src_id, graph) &&
-                               pattern_recognizer_->is_async_fifo_ptr(dst_id, graph)) {
-                        mb.multi_bit_type = MultiBitCrossingType::AsyncFifo;
-                    } else if (detected_sync != SyncPattern::None) {
-                        mb.multi_bit_type = MultiBitCrossingType::Synchronized;
-                    } else if (src->width <= 8) {
-                        mb.multi_bit_type = MultiBitCrossingType::StaticData;
-                    } else {
-                        mb.multi_bit_type = MultiBitCrossingType::Raw;
-                    }
-
-                    mb.reason = "Multi-bit bus '" + src->hier_name +
-                                "' (width=" + std::to_string(src->width) +
-                                ") crosses from domain '" + src_dom->name + "' to domain '" +
-                                dst_dom->name +
-                                "' without verified gray-code encoding, handshake protocol, or "
-                                "async FIFO pattern.";
-                    mb.safety_status = SafetyStatus::VerifiedUnsafe;
-                    mb.safety_provenance = "Multi-bit crossing without verified safety pattern";
-                    local_findings.push_back(std::move(mb));
-                }
-                }  // end if (!is_control_crossing)
-
-                // Async FIFO verification: if an async FIFO pattern is detected,
-                // verify it has proper gray encoding, sync chains, and flags.
-                if (pattern_recognizer_ &&
-                    (src->is_async_fifo_ptr || dst->is_async_fifo_ptr)) {
-                    std::string fifo_failure;
-                    bool fifo_ok = pattern_recognizer_->verify_async_fifo(
-                        src_id, dst_id, graph, fifo_failure);
-                    if (!fifo_ok && !fifo_failure.empty()) {
-                        Finding fv;
-                        fv.rule_id = "CDC002";
-                        fv.rule_name = "multi_bit_crossing";
-                        fv.severity = "warning";
-                        fv.source_reg_id = src_id;
-                        fv.dest_reg_id = dst_id;
-                        fv.source_reg_name = src->hier_name;
-                        fv.dest_reg_name = dst->hier_name;
-                        fv.source_domain = src_dom->name;
-                        fv.dest_domain = dst_dom->name;
-                        fv.path.node_ids = reg_path.node_ids;
-                        fv.source_loc = src->loc;
-                        fv.bus_width = src->width;
-                        fv.source_module_path = src->module_path;
-                        fv.dest_module_path = dst->module_path;
-                        fv.clock_relationship = clock_rel;
-                        fv.multi_bit_type = MultiBitCrossingType::AsyncFifo;
-                        fv.reason = "Async FIFO crossing: " + fifo_failure;
-                        fv.safety_status = SafetyStatus::Candidate;
-                        fv.safety_provenance = "Async FIFO verification failed";
-                        fv.evidence_chain.push_back(
-                            EvidenceStep{"async_fifo", "Async FIFO pattern detected", "found",
-                                         src->loc.file});
-                        fv.evidence_chain.push_back(
-                            EvidenceStep{"fifo_verification", "Verification: " + fifo_failure, "failed",
-                                         src->loc.file});
-                        local_findings.push_back(std::move(fv));
-                    }
-                }
-
-                // Handshake verification: if a handshake pattern is detected,
-                // verify data stability and acceptance gating.
-                if (pattern_recognizer_ && has_handshake && src->width > 1) {
-                    bool hs_stable = pattern_recognizer_->check_data_stability(
-                        src_id, dst_id, graph);
-                    bool hs_gated = pattern_recognizer_->check_acceptance_gating(
-                        src_id, dst_id, graph);
-                    if (!hs_stable || !hs_gated) {
-                        Finding hv;
-                        hv.rule_id = "CDC002";
-                        hv.rule_name = "multi_bit_crossing";
-                        hv.severity = "warning";
-                        hv.source_reg_id = src_id;
-                        hv.dest_reg_id = dst_id;
-                        hv.source_reg_name = src->hier_name;
-                        hv.dest_reg_name = dst->hier_name;
-                        hv.source_domain = src_dom->name;
-                        hv.dest_domain = dst_dom->name;
-                        hv.path.node_ids = reg_path.node_ids;
-                        hv.source_loc = src->loc;
-                        hv.bus_width = src->width;
-                        hv.source_module_path = src->module_path;
-                        hv.dest_module_path = dst->module_path;
-                        hv.clock_relationship = clock_rel;
-                        hv.multi_bit_type = MultiBitCrossingType::HandshakeControlled;
-                        std::string reason = "Handshake crossing: ";
-                        if (!hs_stable)
-                            reason += "data may not be stable during handshake; ";
-                        if (!hs_gated)
-                            reason += "acceptance gating may be missing";
-                        hv.reason = reason;
-                        hv.safety_status = SafetyStatus::Candidate;
-                        hv.safety_provenance = "Handshake verification incomplete";
-                        hv.evidence_chain.push_back(
-                            EvidenceStep{"handshake", "Handshake pattern detected", "found",
-                                         src->loc.file});
-                        hv.evidence_chain.push_back(
-                            EvidenceStep{"handshake_verification", "Verification: " + reason, "failed",
-                                         src->loc.file});
-                        local_findings.push_back(std::move(hv));
-                    }
-                }
-
-                if (src->clock_is_gated || dst->clock_is_gated) {
-                    const ir::Node* gated_src = src->clock_is_gated ? src : nullptr;
-                    const ir::Node* gated_dst = dst->clock_is_gated ? dst : nullptr;
-                    Finding gc;
-                    gc.rule_id = "CDC004";
-                    gc.rule_name = "gated_clock_crossing";
-                    gc.severity = "warning";
-                    gc.source_reg_id = src_id;
-                    gc.dest_reg_id = dst_id;
-                    gc.source_reg_name = src->hier_name;
-                    gc.dest_reg_name = dst->hier_name;
-                    gc.source_domain = src_dom->name;
-                    gc.dest_domain = dst_dom->name;
-                    gc.path.node_ids = reg_path.node_ids;
-                    gc.source_loc = src->loc;
-                    gc.bus_width = src->width;
-                    gc.source_module_path = src->module_path;
-                    gc.dest_module_path = dst->module_path;
-                    gc.clock_relationship = clock_rel;
-                    std::string gated_info;
-                    if (gated_src && gated_dst) {
-                        gated_info = "both source '" + gated_src->hier_name + "' (domain '" +
-                                     gated_src->clock_domain + "') and destination '" +
-                                     gated_dst->hier_name + "' (domain '" +
-                                     gated_dst->clock_domain + "')";
-                    } else {
-                        const ir::Node* g = gated_src ? gated_src : gated_dst;
-                        gated_info = "'" + g->hier_name + "' (domain '" + g->clock_domain +
-                                     "', root: '" + g->root_clock + "')";
-                    }
-                    gc.reason = "Register " + gated_info +
-                                " is clocked by a gated clock on a crossing from domain '" +
-                                src_dom->name + "' to domain '" + dst_dom->name + "'.";
-                    gc.safety_status = SafetyStatus::VerifiedUnsafe;
-                    gc.safety_provenance = "Gated clock on crossing path";
-                    local_findings.push_back(std::move(gc));
-                }
-
-                bool src_muxed_no_reset = src->clock_is_muxed && src->reset_signal.empty();
-                bool dst_muxed_no_reset = dst->clock_is_muxed && dst->reset_signal.empty();
-                if (src_muxed_no_reset || dst_muxed_no_reset) {
-                    const ir::Node* muxed_node = src_muxed_no_reset ? src : dst;
-                    Finding mr;
-                    mr.rule_id = "CDC005";
-                    mr.rule_name = "muxed_clock_no_reset";
-                    mr.severity = "warning";
-                    mr.source_reg_id = src_id;
-                    mr.dest_reg_id = dst_id;
-                    mr.source_reg_name = src->hier_name;
-                    mr.dest_reg_name = dst->hier_name;
-                    mr.source_domain = src_dom->name;
-                    mr.dest_domain = dst_dom->name;
-                    mr.path.node_ids = reg_path.node_ids;
-                    mr.source_loc = src->loc;
-                    mr.bus_width = src->width;
-                    mr.source_module_path = src->module_path;
-                    mr.dest_module_path = dst->module_path;
-                    mr.clock_relationship = clock_rel;
-                    mr.reason = "Register '" + muxed_node->hier_name +
-                                "' is clocked by muxed clock '" + muxed_node->clock_domain +
-                                "' without reset signal.";
-                    mr.safety_status = SafetyStatus::VerifiedUnsafe;
-                    mr.safety_provenance = "Muxed clock without reset on crossing path";
-                    local_findings.push_back(std::move(mr));
-                }
-
-                if (src->reset_signal.empty() && dst->reset_signal.empty()) {
-                    bool strict = reset_policy_ && reset_policy_->require_cdc_register_reset;
-                    Finding nr;
-                    nr.rule_id = "CDC007";
-                    nr.rule_name = "missing_reset";
-                    nr.severity = strict ? "warning" : "info";
-                    nr.source_reg_id = src_id;
-                    nr.dest_reg_id = dst_id;
-                    nr.source_reg_name = src->hier_name;
-                    nr.dest_reg_name = dst->hier_name;
-                    nr.source_domain = src_dom->name;
-                    nr.dest_domain = dst_dom->name;
-                    nr.path.node_ids = reg_path.node_ids;
-                    nr.source_loc = src->loc;
-                    nr.bus_width = src->width;
-                    nr.source_module_path = src->module_path;
-                    nr.dest_module_path = dst->module_path;
-                    nr.clock_relationship = clock_rel;
-                    if (strict) {
-                        nr.reason = "CDC crossing between registers '" + src->hier_name +
-                                    "' and '" + dst->hier_name +
-                                    "': neither register has a reset signal. "
-                                    "Strict reset policy requires all CDC registers to have reset.";
-                        nr.safety_status = SafetyStatus::VerifiedUnsafe;
-                        nr.safety_provenance = "Neither register has reset — strict reset policy";
-                    } else {
-                        nr.reason = "CDC crossing between registers '" + src->hier_name +
-                                    "' and '" + dst->hier_name +
-                                    "': neither register has a reset signal. "
-                                    "This is advisory — many datapath registers intentionally "
-                                    "omit reset. Use waivers or methodology rules to manage.";
-                        nr.safety_status = SafetyStatus::Candidate;
-                        nr.safety_provenance = "Neither register has a reset signal";
-                    }
-                    local_findings.push_back(std::move(nr));
-                } else if (src->reset_signal.empty() != dst->reset_signal.empty()) {
-                    Finding mr;
-                    mr.rule_id = "CDC007";
-                    mr.rule_name = "missing_reset";
-                    mr.severity = "info";
-                    mr.source_reg_id = src_id;
-                    mr.dest_reg_id = dst_id;
-                    mr.source_reg_name = src->hier_name;
-                    mr.dest_reg_name = dst->hier_name;
-                    mr.source_domain = src_dom->name;
-                    mr.dest_domain = dst_dom->name;
-                    mr.path.node_ids = reg_path.node_ids;
-                    mr.source_loc = src->loc;
-                    mr.bus_width = src->width;
-                    mr.source_module_path = src->module_path;
-                    mr.dest_module_path = dst->module_path;
-                    mr.clock_relationship = clock_rel;
-                    std::string which = src->reset_signal.empty() ? src->hier_name : dst->hier_name;
-                    mr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
-                                dst->hier_name + "': '" + which + "' lacks a reset signal.";
-                    mr.safety_status = SafetyStatus::Candidate;
-                    mr.safety_provenance = "One register lacks a reset signal";
-                    local_findings.push_back(std::move(mr));
-                }
-            }  // !multicycle_suppressed
+            if (src->reset_signal.empty() || dst->reset_signal.empty()) {
+                Finding nr;
+                nr.rule_id = "CDC007";
+                nr.rule_name = "missing_reset";
+                nr.severity = "warning";
+                nr.source_reg_id = src_id;
+                nr.dest_reg_id = dst_id;
+                nr.source_reg_name = src->hier_name;
+                nr.dest_reg_name = dst->hier_name;
+                nr.source_domain = src_dom->name;
+                nr.dest_domain = dst_dom->name;
+                nr.path.node_ids = reg_path.node_ids;
+                nr.source_loc = src->loc;
+                nr.bus_width = src->width;
+                nr.source_module_path = src->module_path;
+                nr.dest_module_path = dst->module_path;
+                std::string missing =
+                    (src->reset_signal.empty() && dst->reset_signal.empty())
+                        ? "neither register has"
+                        : "'" +
+                              std::string(src->reset_signal.empty() ? src->hier_name
+                                                                    : dst->hier_name) +
+                              "' lacks";
+                nr.reason = "CDC crossing between registers '" + src->hier_name + "' and '" +
+                            dst->hier_name + "': " + missing + " a reset signal.";
+                local_findings.push_back(std::move(nr));
+            }
         }
         return local_findings;
     };
@@ -852,11 +342,8 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         }
     }
 
-    // Daisy-chain detection (sequential — needs global visited set).
-    // Only emit from chain heads (no cross-domain register predecessor) and
-    // dedup by the set of domain ids so overlapping walks do not multiply.
+    // Daisy-chain detection (sequential — needs global visited set)
     std::unordered_set<uint64_t> reported_sources;
-    std::unordered_set<std::string> reported_domain_sets;
     for (const auto& src : graph.nodes()) {
         if (src.kind != ir::NodeKind::Register)
             continue;
@@ -866,18 +353,6 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         const clock::ClockDomain* src_dom =
             find_domain_for_node(src.id, domains, register_to_domain);
         if (!src_dom)
-            continue;
-
-        bool has_cross_pred = false;
-        for (uint64_t pred : graph.register_predecessors(src.id, false)) {
-            const clock::ClockDomain* pred_dom =
-                find_domain_for_node(pred, domains, register_to_domain);
-            if (pred_dom && pred_dom->id != src_dom->id) {
-                has_cross_pred = true;
-                break;
-            }
-        }
-        if (has_cross_pred)
             continue;
 
         std::vector<uint64_t> domain_chain;
@@ -915,13 +390,6 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         reported_sources.insert(src.id);
 
         if (domain_chain.size() >= 3) {
-            std::vector<size_t> domain_ids(visited_domain_ids.begin(), visited_domain_ids.end());
-            std::sort(domain_ids.begin(), domain_ids.end());
-            std::string key;
-            for (size_t id : domain_ids)
-                key += std::to_string(id) + ",";
-            if (!reported_domain_sets.insert(key).second)
-                continue;
             Finding dc;
             dc.rule_id = "CDC008";
             dc.rule_name = "multi_domain_daisy_chain";
@@ -943,98 +411,11 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             dc.reason = "Register '" + src.hier_name + "' is part of a daisy chain crossing " +
                         std::to_string(domain_chain.size() - 1) + " clock domains: " + chain_desc +
                         ".";
-            dc.safety_status = SafetyStatus::Candidate;
-            dc.safety_provenance = "Multi-domain daisy chain";
             findings.push_back(std::move(dc));
         }
     }
 
     return findings;
-}
-
-void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
-                                             std::vector<Finding>& findings) const {
-    for (const auto& f : findings) {
-        if (!f.propagates_uncertainty || f.dest_reg_id == 0)
-            continue;
-        ir::Node* dest = graph.find_node_mutable(f.dest_reg_id);
-        if (!dest)
-            continue;
-        dest->value_uncertain = true;
-        if (dest->uncertainty_source.empty())
-            dest->uncertainty_source = f.uncertainty_reason;
-    }
-
-    std::vector<uint64_t> work;
-    for (const ir::Node& node : graph.nodes()) {
-        if (node.value_uncertain)
-            work.push_back(node.id);
-    }
-    size_t hops = 0;
-    while (!work.empty() && hops < ir::MAX_PATH_DEPTH) {
-        ++hops;
-        std::vector<uint64_t> next;
-        for (uint64_t id : work) {
-            const ir::Node* node = graph.find_node(id);
-            if (!node)
-                continue;
-            auto mark = [&](uint64_t succ) {
-                ir::Node* n = graph.find_node_mutable(succ);
-                if (!n || n->value_uncertain)
-                    return;
-                if (n->clock_domain != node->clock_domain)
-                    return;
-                n->value_uncertain = true;
-                n->uncertainty_source = "propagated from '" + node->hier_name + "'";
-                next.push_back(succ);
-            };
-            for (uint64_t succ : graph.successors(id))
-                mark(succ);
-            for (uint64_t rsucc : graph.register_successors(id, false))
-                mark(rsucc);
-        }
-        work = std::move(next);
-    }
-
-    // Emit CDC013 findings for registers that became uncertain due to
-    // propagation (not from direct crossing detection).
-    for (const ir::Node& node : graph.nodes()) {
-        if (!node.value_uncertain || node.kind != ir::NodeKind::Register)
-            continue;
-        bool already_reported = false;
-        for (const auto& f : findings) {
-            if ((f.source_reg_id == node.id || f.dest_reg_id == node.id) &&
-                f.rule_id != "CDC013") {
-                already_reported = true;
-                break;
-            }
-        }
-        if (already_reported || node.uncertainty_source.find("propagated from") == std::string::npos)
-            continue;
-
-        Finding uf;
-        uf.rule_id = "CDC013";
-        uf.rule_name = "unknown_propagation";
-        uf.severity = "warning";
-        uf.source_reg_id = node.id;
-        uf.source_reg_name = node.hier_name;
-        uf.source_domain = node.clock_domain;
-        uf.path.node_ids.push_back(node.id);
-        uf.source_loc = node.loc;
-        uf.bus_width = node.width;
-        uf.propagates_uncertainty = true;
-        uf.uncertainty_reason = node.uncertainty_source;
-        uf.reason = "Register '" + node.hier_name + "' has uncertain value due to " +
-                    node.uncertainty_source + ".";
-        uf.safety_status = SafetyStatus::Candidate;
-        uf.safety_provenance = "Value uncertainty propagation";
-        uf.evidence_chain.push_back(
-            EvidenceStep{"source", "Source: " + node.uncertainty_source, "identified", node.loc.file});
-        uf.evidence_chain.push_back(
-            EvidenceStep{"propagation", "Propagated within domain '" + node.clock_domain + "'", "propagated",
-                         node.loc.file});
-        findings.push_back(std::move(uf));
-    }
 }
 
 }  // namespace opencdc::cdc

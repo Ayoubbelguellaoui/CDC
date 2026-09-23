@@ -6,7 +6,13 @@ rules:
     enabled: true
 
 waivers:
-  - rule: CDC001, source: stress_test_system.uart_rx.shift_reg, dest: stress_test_system.sync_2ff_bus.src_reg, source_domain: clk_uart, dest_domain: clk_bridge, justification: "Async FIFO handles this crossing", owner: "@rtl-team"
+  - rule: CDC001
+    source: stress_test_system.uart_rx.shift_reg
+    dest: stress_test_system.sync_2ff_bus.src_reg
+    source_domain: clk_uart
+    dest_domain: clk_bridge
+    justification: "Async FIFO handles this crossing"
+    owner: "@rtl-team"
 
 output:
   format: json

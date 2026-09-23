@@ -102,12 +102,6 @@ class ConstraintsParser {
    public:
     ClockConstraints parse_yaml(const std::string& content);
     ClockConstraints parse_file(const std::string& path, std::string* error = nullptr);
-
-   private:
-    void parse_clocks_section(const std::string& content, ClockConstraints& constraints);
-    void parse_false_paths_section(const std::string& content, ClockConstraints& constraints);
-    void parse_multi_cycle_section(const std::string& content, ClockConstraints& constraints);
-    void parse_groups_section(const std::string& content, ClockConstraints& constraints);
 };
 
 }  // namespace opencdc::clock

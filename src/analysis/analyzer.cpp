@@ -1,15 +1,12 @@
 #include "analysis/analyzer.h"
 
-#include "cdc/blackbox.h"
 #include "cdc/cdc006.h"
 #include "cdc/pattern.h"
 #include "cdc/reconvergence.h"
 #include "cdc/reset_domain.h"
 #include "cdc/waiver.h"
 #include "clock/constraints.h"
-#include "clock/resolve.h"
 #include "config/config.h"
-#include "config/profile.h"
 #include "frontend/slang_adapter.h"
 #include "rules/rule.h"
 
@@ -18,36 +15,11 @@ namespace opencdc::analysis {
 AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     AnalysisResult result;
 
-    rules::RuleEngine rule_engine;
-    config::Config cfg;
-    if (request.config.has_value()) {
-        cfg = *request.config;
-    } else if (!request.config_path.empty()) {
-        config::ConfigParser parser;
-        std::string cfg_error;
-        cfg = parser.parse_file(request.config_path, &cfg_error);
-        if (!cfg_error.empty()) {
-            result.errors.push_back(std::move(cfg_error));
-            result.analysis_status = "failed";
-            return result;
-        }
-    }
-    if (!request.profile.empty()) {
-        config::ProfileSettings profile_settings = config::get_profile_settings(request.profile);
-        config::apply_profile(profile_settings, cfg);
-    }
-
     // 1. Frontend: parse and elaborate to IR graph.
     frontend::SlangAdapter adapter;
-    frontend::FrontendOptions fe_opts;
-    fe_opts.include_dirs = request.include_dirs;
-    fe_opts.defines = request.defines;
-    fe_opts.allow_user_annotation = cfg.allow_user_annotation;
-    frontend::FrontendResult fe_result =
-        adapter.elaborate(request.input_files, request.top_module, fe_opts);
+    frontend::FrontendResult fe_result = adapter.elaborate(request.input_files, request.top_module);
     if (!fe_result.ok) {
         result.errors = std::move(fe_result.errors);
-        result.analysis_status = "failed";
         return result;
     }
     result.graph = std::move(fe_result.graph);
@@ -61,7 +33,6 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         constraints = constraints_parser.parse_file(request.constraints_path, &constraints_error);
         if (!constraints_error.empty()) {
             result.errors.push_back(std::move(constraints_error));
-            result.analysis_status = "failed";
             return result;
         }
 
@@ -81,33 +52,24 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     result.domains = domain_extractor.extract(result.graph);
     result.warnings = result.domains.warnings;
 
-    // 3b. Clock resolution: trace gated/muxed clocks to root.
-    clock::ClockResolver clock_resolver;
-    auto resolve_result = clock_resolver.resolve(result.graph);
-    for (auto& w : resolve_result.warnings) {
-        result.warnings.push_back(std::move(w));
-    }
-    for (auto& node : result.graph.nodes_mutable()) {
-        if (node.kind != ir::NodeKind::Register)
-            continue;
-        auto it = resolve_result.clock_map.find(node.clock_domain);
-        if (it == resolve_result.clock_map.end())
-            continue;
-        const clock::ClockInfo& ci = it->second;
-        if (!ci.root_clock.empty() && node.root_clock.empty()) {
-            node.root_clock = ci.root_clock;
+    // 4. Config file: rule overrides, waivers, false paths, reset policy.
+    rules::RuleEngine rule_engine;
+    config::Config cfg;
+    if (request.config.has_value()) {
+        cfg = *request.config;
+    } else if (!request.config_path.empty()) {
+        config::ConfigParser parser;
+        std::string cfg_error;
+        cfg = parser.parse_file(request.config_path, &cfg_error);
+        if (!cfg_error.empty()) {
+            result.errors.push_back(std::move(cfg_error));
+            return result;
         }
-        if (ci.is_gated)
-            node.clock_is_gated = true;
-        if (ci.is_muxed)
-            node.clock_is_muxed = true;
     }
 
-    // 4. Config already parsed (needed before frontend for annotation policy).
     for (const auto& [rule_id, rule_cfg] : cfg.rules) {
         if (!rule_engine.find_rule(rule_id).has_value()) {
             result.errors.push_back("unknown rule in config: " + rule_id);
-            result.analysis_status = "failed";
             return result;
         }
         if (!rule_cfg.enabled) {
@@ -166,7 +128,6 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     for (const auto& id : request.disable_rules) {
         if (!rule_engine.find_rule(id).has_value()) {
             result.errors.push_back("unknown rule: " + id);
-            result.analysis_status = "failed";
             return result;
         }
         rule_engine.add_override({id, "", true, false});
@@ -176,7 +137,6 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         if (eq == std::string::npos) {
             result.errors.push_back("invalid severity override '" + s +
                                     "': expected RULE=SEVERITY");
-            result.analysis_status = "failed";
             return result;
         }
         std::string rule_id = s.substr(0, eq);
@@ -184,7 +144,6 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         if (!rule_engine.find_rule(rule_id).has_value() ||
             (severity != "error" && severity != "warning" && severity != "info")) {
             result.errors.push_back("invalid severity override: " + s);
-            result.analysis_status = "failed";
             return result;
         }
         rule_engine.add_override({rule_id, severity, false, true});
@@ -200,48 +159,20 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 
     // 8. Pattern recognition, then crossing analysis.
     cdc::PatternRecognizer pattern_recognizer;
-    pattern_recognizer.set_require_structural_proof(cfg.require_structural_proof);
     pattern_recognizer.analyze_and_annotate(result.graph);
-
-    // 8b. Blackbox registry: built-in models + user-configured.
-    cdc::BlackBoxRegistry blackbox_registry;
-    for (const auto& bb : cfg.blackboxes) {
-        cdc::BlackBoxModel model;
-        model.module_name = bb.module_name;
-        model.vendor = bb.vendor;
-        model.properties.is_safe_crossing = bb.is_safe_crossing;
-        model.properties.has_synchronizer = bb.has_synchronizer;
-        model.properties.has_gray_encoding = bb.has_gray_encoding;
-        model.properties.has_async_fifo = bb.has_async_fifo;
-        model.properties.has_handshake = bb.has_handshake;
-        blackbox_registry.add_model(model);
-    }
-
-    // 8c. Module tree: build hierarchy for boundary crossing analysis.
-    ir::ModuleTree module_tree;
-    module_tree.build(result.graph);
 
     cdc::CrossingAnalyzer crossing_analyzer;
     crossing_analyzer.set_pattern_recognizer(&pattern_recognizer);
     // Always attach constraints: config and request false paths must be
     // honored even when no constraints file was provided.
     crossing_analyzer.set_clock_constraints(&constraints);
-    crossing_analyzer.set_reset_policy(&cfg.reset_policy);
-    crossing_analyzer.set_multicycle_policy(&cfg.multicycle_path_policy);
-    crossing_analyzer.set_resolve_result(&resolve_result);
-    crossing_analyzer.set_blackbox_registry(&blackbox_registry);
-    crossing_analyzer.set_min_sync_stages(cfg.min_sync_stages);
-    crossing_analyzer.set_module_tree(&module_tree);
     auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
-                                               result.domains.register_to_domain);
-
-    // Propagate value uncertainty downstream after crossing detection.
-    crossing_analyzer.propagate_uncertainty(result.graph, findings);
+                                              result.domains.register_to_domain);
 
     // 9. Reconvergence.
     cdc::ReconvergenceAnalyzer reconvergence_analyzer;
-    auto reconv_findings = reconvergence_analyzer.analyze(result.graph, result.domains.domains,
-                                                          findings, cfg.reconvergence_depth);
+    auto reconv_findings =
+        reconvergence_analyzer.analyze(result.graph, result.domains.domains, findings);
     for (auto& f : reconv_findings) {
         findings.push_back(std::move(f));
     }
@@ -257,8 +188,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // 11. Reset domain crossings.
     cdc::ResetDomainAnalyzer reset_domain_analyzer;
     auto reset_findings = reset_domain_analyzer.check_reset_crossings(
-        result.graph, {}, result.domains.domains, result.domains.register_to_domain,
-        &cfg.reset_policy);
+        result.graph, {}, result.domains.domains, result.domains.register_to_domain);
     for (auto& f : reset_findings) {
         if (cfg.suppress_reset_crossings && f.rule_id == "CDC009")
             continue;
@@ -290,7 +220,6 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
         if (!waiver_engine.load_from_file(request.waiver_path, &waiver_error)) {
             result.errors.push_back("could not load waiver file: " + request.waiver_path +
                                     (waiver_error.empty() ? "" : " (" + waiver_error + ")"));
-            result.analysis_status = "failed";
             return result;
         }
     }
@@ -305,40 +234,6 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
 
     result.findings = std::move(findings);
     result.ok = true;
-
-    for (const auto& f : result.findings) {
-        if (f.rule_id == "CDC010") {
-            result.analysis_status = "incomplete";
-            break;
-        }
-    }
-
-    // 14. Compute coverage and signoff.
-    CoverageEngine coverage_engine;
-    result.coverage = coverage_engine.compute(result.findings, result.analysis_status);
-    coverage_engine.compute_crossing_coverage(result.coverage, result.graph,
-                                              result.domains.domains,
-                                              result.domains.register_to_domain);
-
-    SignoffEngine signoff_engine;
-    result.signoff = signoff_engine.evaluate(result.findings, result.analysis_status, cfg,
-                                              request.profile.empty() ? "default" : request.profile);
-
-    return result;
-}
-
-AnalysisResult Analyzer::run_incremental(AnalysisResult& previous,
-                                          const AnalysisRequest& request) {
-    if (!previous.graph.dirty()) {
-        AnalysisResult keep = previous;
-        keep.ok = true;
-        keep.analysis_status = "no_changes";
-        return keep;
-    }
-
-    // Re-run full analysis on the modified graph.
-    AnalysisResult result = run(request);
-    previous.graph.clear_dirty();
     return result;
 }
 

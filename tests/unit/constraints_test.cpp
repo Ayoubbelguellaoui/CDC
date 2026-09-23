@@ -35,12 +35,30 @@ clocks:
 TEST_F(ConstraintsTest, ParseYamlFalsePaths) {
     std::string yaml = R"(
 false_paths:
+  - from_clock: clk_core
+    to_clock: clk_test
+    reason: "Test clock"
+  - from_reg: top.test.src
+    to_reg: top.test.dst
+)";
+
+    auto constraints = parser.parse_yaml(yaml);
+
+    EXPECT_EQ(constraints.false_paths.size(), 2u);
+    EXPECT_EQ(constraints.false_paths[0].from_clock, "clk_core");
+    EXPECT_EQ(constraints.false_paths[0].to_clock, "clk_test");
+    EXPECT_EQ(constraints.false_paths[1].from_reg, "top.test.src");
+}
+
+TEST_F(ConstraintsTest, ParseYamlFalsePathsCompactCompat) {
+    std::string yaml = R"(
+false_paths:
   - from_clock: clk_core, to_clock: clk_test, reason: "Test clock"
   - from_reg: top.test.src, to_reg: top.test.dst
 )";
-    
+
     auto constraints = parser.parse_yaml(yaml);
-    
+
     EXPECT_EQ(constraints.false_paths.size(), 2u);
     EXPECT_EQ(constraints.false_paths[0].from_clock, "clk_core");
     EXPECT_EQ(constraints.false_paths[0].to_clock, "clk_test");
@@ -51,12 +69,31 @@ TEST_F(ConstraintsTest, ParseYamlClockGroups) {
     std::string yaml = R"(
 clock_groups:
   async_group:
+    clocks:
+      - clk_core
+      - clk_periph
+      - clk_test
+    asynchronous: true
+)";
+
+    auto constraints = parser.parse_yaml(yaml);
+
+    EXPECT_EQ(constraints.clock_groups.size(), 1u);
+    EXPECT_EQ(constraints.clock_groups[0].name, "async_group");
+    EXPECT_TRUE(constraints.clock_groups[0].asynchronous);
+    EXPECT_EQ(constraints.clock_groups[0].clocks.size(), 3u);
+}
+
+TEST_F(ConstraintsTest, ParseYamlClockGroupsCompactCompat) {
+    std::string yaml = R"(
+clock_groups:
+  async_group:
     clocks: clk_core, clk_periph, clk_test
     asynchronous: true
 )";
-    
+
     auto constraints = parser.parse_yaml(yaml);
-    
+
     EXPECT_EQ(constraints.clock_groups.size(), 1u);
     EXPECT_EQ(constraints.clock_groups[0].name, "async_group");
     EXPECT_TRUE(constraints.clock_groups[0].asynchronous);

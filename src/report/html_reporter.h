@@ -5,8 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "analysis/coverage.h"
-#include "analysis/signoff.h"
 #include "cdc/crossing.h"
 
 namespace opencdc::report {
@@ -23,31 +21,13 @@ struct HtmlReportOptions {
 class HtmlReporter {
    public:
     void generate_report(const std::vector<cdc::Finding>& findings,
-                         const HtmlReportOptions& options = {},
-                         const std::string& analysis_status = "complete");
-    void generate_report(const std::vector<cdc::Finding>& findings,
-                         const analysis::CoverageResult& coverage,
-                         const analysis::SignoffResult& signoff,
-                         const HtmlReportOptions& options = {},
-                         const std::string& analysis_status = "complete");
+                         const HtmlReportOptions& options = {});
 
    private:
-    void write_index_html(const std::vector<cdc::Finding>& findings,
-                          const analysis::CoverageResult& coverage,
-                          const analysis::SignoffResult& signoff, const HtmlReportOptions& options);
-    void write_findings_html(const std::vector<cdc::Finding>& findings,
-                             const HtmlReportOptions& options);
-    void write_summary_html(const std::vector<cdc::Finding>& findings,
-                            const HtmlReportOptions& options);
     void write_css(const HtmlReportOptions& options);
     void write_js(const HtmlReportOptions& options);
 
-    std::string generate_summary_dashboard(const std::vector<cdc::Finding>& findings,
-                                           const analysis::CoverageResult& coverage,
-                                           const analysis::SignoffResult& signoff,
-                                           const std::string& analysis_status = "complete");
-    std::string generate_coverage_table(const analysis::CoverageResult& coverage);
-    std::string generate_clock_domain_table(const analysis::CoverageResult& coverage);
+    std::string generate_summary_dashboard(const std::vector<cdc::Finding>& findings);
     std::string generate_findings_table(const std::vector<cdc::Finding>& findings,
                                         bool include_source_snippets = true);
     std::string generate_severity_chart(const std::vector<cdc::Finding>& findings);

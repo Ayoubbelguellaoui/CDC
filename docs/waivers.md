@@ -41,8 +41,24 @@ opencdc check design.sv --top top --waiver waivers.txt
 
 ```yaml
 waivers:
+  - rule: CDC001
+    source: mod.src
+    dest: mod.dst
+    justification: "Known safe"
+    owner: "@team"
+  - rule: CDC002
+    source: bus.src
+    dest: bus.dst
+    justification: "Gray-coded"
+    owner: "@designer"
+    expiry: "2027-12-31"
+```
+
+The old compact one-line format is also accepted for backward compatibility:
+
+```yaml
+waivers:
   - rule: CDC001, source: mod.src, dest: mod.dst, justification: "Known safe", owner: "@team"
-  - rule: CDC002, source: bus.src, dest: bus.dst, justification: "Gray-coded", owner: "@designer", expiry: "2027-12-31"
 ```
 
 ## Matching Rules

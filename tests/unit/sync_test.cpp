@@ -76,3 +76,26 @@ TEST_F(SyncTest, MatchFindsChains) {
     EXPECT_EQ(chains[0].source_reg_id, src);
     EXPECT_EQ(chains[0].stage_ids.size(), 2u);
 }
+
+TEST_F(SyncTest, TwoFFNotMisclassifiedAsThreeFFByConsumer) {
+    // Two independent 2FF chains reconverge at a common consumer.
+    // Each chain is meta→sync. The consumer has two same-domain predecessors
+    // and must NOT be counted as a 3rd FF stage.
+    uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t meta1 = graph.add_register("mod.meta1", "clk_b", 1, {"mod.sv", 8, 5});
+    uint64_t sync1 = graph.add_register("mod.sync1", "clk_b", 1, {"mod.sv", 9, 5});
+    uint64_t meta2 = graph.add_register("mod.meta2", "clk_b", 1, {"mod.sv", 10, 5});
+    uint64_t sync2 = graph.add_register("mod.sync2", "clk_b", 1, {"mod.sv", 11, 5});
+    uint64_t consumer = graph.add_register("mod.consumer", "clk_b", 1, {"mod.sv", 12, 5});
+
+    graph.add_edge(src, meta1);
+    graph.add_edge(meta1, sync1);
+    graph.add_edge(sync1, consumer);
+    graph.add_edge(src, meta2);
+    graph.add_edge(meta2, sync2);
+    graph.add_edge(sync2, consumer);
+
+    auto pat = matcher.find_pattern_for_dest(meta1, graph);
+    EXPECT_EQ(pat, SyncPattern::TwoFF)
+        << "Reconvergent consumer with two preds must not inflate to ThreeFF";
+}

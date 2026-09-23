@@ -1,11 +1,15 @@
 #include "clock/constraints.h"
 
+#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <fstream>
 #include <regex>
 #include <sstream>
+
+#include "util/yaml_compat.h"
 
 namespace opencdc::clock {
 
@@ -51,58 +55,7 @@ bool pattern_matches(const std::string& pattern, const std::string& value) {
         pattern.find('*') != std::string::npos || pattern.find('?') != std::string::npos;
 
     if (!has_wildcard) {
-        auto starts_with_ci = [](const std::string& s, const std::string& p) {
-            if (s.size() < p.size())
-                return false;
-            for (size_t i = 0; i < p.size(); ++i) {
-                if (std::tolower(static_cast<unsigned char>(s[i])) !=
-                    std::tolower(static_cast<unsigned char>(p[i])))
-                    return false;
-            }
-            return true;
-        };
-        auto contains_ci = [](const std::string& s, const std::string& p) {
-            if (p.size() > s.size())
-                return false;
-            for (size_t i = 0; i + p.size() <= s.size(); ++i) {
-                bool ok = true;
-                for (size_t j = 0; j < p.size(); ++j) {
-                    if (std::tolower(static_cast<unsigned char>(s[i + j])) !=
-                        std::tolower(static_cast<unsigned char>(p[j]))) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (ok)
-                    return true;
-            }
-            return false;
-        };
-        if (pattern.find('.') != std::string::npos) {
-            if (iequals(pattern, value))
-                return true;
-            if (value.size() > pattern.size() + 1) {
-                std::string suffix = value.substr(value.size() - pattern.size() - 1);
-                if (suffix[0] == '.' && iequals(suffix.substr(1), pattern))
-                    return true;
-            }
-            return contains_ci(value, "." + pattern + ".") || contains_ci(value, "." + pattern);
-        }
-        size_t pos = 0;
-        while (pos <= value.size()) {
-            size_t next = value.find('.', pos);
-            std::string segment =
-                value.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
-            if (iequals(pattern, segment))
-                return true;
-            if (starts_with_ci(segment, pattern) && segment.size() > pattern.size() &&
-                (segment[pattern.size()] == '_' || segment[pattern.size()] == '-'))
-                return true;
-            if (next == std::string::npos)
-                break;
-            pos = next + 1;
-        }
-        return false;
+        return value.find(pattern) != std::string::npos;
     }
 
     if (wildcard_match(pattern, value))
@@ -780,220 +733,136 @@ std::string to_lower(const std::string& s) {
     return r;
 }
 
-void ConstraintsParser::parse_clocks_section(const std::string& content,
-                                             ClockConstraints& constraints) {
-    std::istringstream iss(content);
-    std::string line;
-    ClockDefinition* current_clock = nullptr;
+static ClockConstraints parse_yaml_from_node(const YAML::Node& root) {
+    ClockConstraints constraints;
 
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        if (line.back() == ':' && line.size() > 1) {
-            std::string name = trim(line.substr(0, line.size() - 1));
-            if (name.find(' ') == std::string::npos && name.find('-') == std::string::npos) {
-                constraints.clocks.push_back(ClockDefinition{});
-                current_clock = &constraints.clocks.back();
-                current_clock->name = name;
-                continue;
+    // --- clocks ---
+    if (root["clocks"] && root["clocks"].IsMap()) {
+        for (auto it = root["clocks"].begin(); it != root["clocks"].end(); ++it) {
+            ClockDefinition clk;
+            clk.name = it->first.as<std::string>();
+            YAML::Node cn = it->second;
+            if (cn["frequency"] || cn["frequency_mhz"]) {
+                auto v = (cn["frequency"] ? cn["frequency"] : cn["frequency_mhz"]).as<double>();
+                if (std::isfinite(v) && v >= 0)
+                    clk.frequency_mhz = v;
             }
+            if (cn["period"] || cn["period_ns"]) {
+                auto v = (cn["period"] ? cn["period"] : cn["period_ns"]).as<double>();
+                if (std::isfinite(v) && v > 0)
+                    clk.period_ns = v;
+            }
+            if (cn["source"])
+                clk.source = cn["source"].as<std::string>();
+            if (cn["master_clock"]) {
+                clk.master_clock = cn["master_clock"].as<std::string>();
+                clk.is_generated = true;
+            }
+            if (cn["divider"] || cn["divider_ratio"]) {
+                auto v = (cn["divider"] ? cn["divider"] : cn["divider_ratio"]).as<double>();
+                if (std::isfinite(v) && v > 0)
+                    clk.divider_ratio = v;
+            }
+            if (cn["multiplier"] || cn["multiplier_ratio"]) {
+                auto v =
+                    (cn["multiplier"] ? cn["multiplier"] : cn["multiplier_ratio"]).as<double>();
+                if (std::isfinite(v) && v > 0)
+                    clk.multiplier_ratio = v;
+            }
+            constraints.clocks.push_back(clk);
+            constraints.clock_map[clk.name] = clk;
         }
+    }
 
-        if (current_clock) {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos) {
-                std::string key = to_lower(trim(line.substr(0, colon)));
-                std::string value = trim(line.substr(colon + 1));
-
-                if (key == "frequency" || key == "frequency_mhz") {
-                    try {
-                        auto v = std::stod(value);
-                        if (std::isfinite(v) && v >= 0)
-                            current_clock->frequency_mhz = v;
-                    } catch (...) {
-                    }
-                } else if (key == "period" || key == "period_ns") {
-                    try {
-                        auto v = std::stod(value);
-                        if (std::isfinite(v) && v > 0)
-                            current_clock->period_ns = v;
-                    } catch (...) {
-                    }
-                } else if (key == "source") {
-                    current_clock->source = value;
-                } else if (key == "master_clock") {
-                    current_clock->master_clock = value;
-                    current_clock->is_generated = true;
-                } else if (key == "divider" || key == "divider_ratio") {
-                    try {
-                        auto v = std::stod(value);
-                        if (std::isfinite(v) && v > 0)
-                            current_clock->divider_ratio = v;
-                    } catch (...) {
-                    }
-                } else if (key == "multiplier" || key == "multiplier_ratio") {
-                    try {
-                        auto v = std::stod(value);
-                        if (std::isfinite(v) && v > 0)
-                            current_clock->multiplier_ratio = v;
-                    } catch (...) {
-                    }
+    // --- false_paths ---
+    if (root["false_paths"] && root["false_paths"].IsSequence()) {
+        for (const auto& item : root["false_paths"]) {
+            if (!item.IsMap())
+                continue;
+            FalsePath fp;
+            if (item["from_clock"] || item["from"])
+                fp.from_clock =
+                    (item["from_clock"] ? item["from_clock"] : item["from"]).as<std::string>();
+            if (item["to_clock"] || item["to"])
+                fp.to_clock = (item["to_clock"] ? item["to_clock"] : item["to"]).as<std::string>();
+            if (item["from_reg"])
+                fp.from_reg = item["from_reg"].as<std::string>();
+            if (item["to_reg"])
+                fp.to_reg = item["to_reg"].as<std::string>();
+            if (item["source"])
+                fp.from_reg = item["source"].as<std::string>();
+            if (item["dest"])
+                fp.to_reg = item["dest"].as<std::string>();
+            if (item["through"]) {
+                if (item["through"].IsSequence()) {
+                    for (const auto& t : item["through"])
+                        fp.through.push_back(t.as<std::string>());
+                } else {
+                    fp.through.push_back(item["through"].as<std::string>());
                 }
             }
+            if (item["reason"])
+                fp.reason = item["reason"].as<std::string>();
+            constraints.false_paths.push_back(fp);
         }
     }
 
-    for (const auto& clk : constraints.clocks) {
-        constraints.clock_map[clk.name] = clk;
-    }
-}
-
-void ConstraintsParser::parse_false_paths_section(const std::string& content,
-                                                  ClockConstraints& constraints) {
-    std::istringstream iss(content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-        if (line[0] != '-')
-            continue;
-
-        FalsePath fp;
-        std::string rest = trim(line.substr(1));
-        std::istringstream fiss(rest);
-        std::string token;
-
-        while (std::getline(fiss, token, ',')) {
-            token = trim(token);
-            size_t colon = token.find(':');
-            if (colon == std::string::npos)
+    // --- multi_cycle_paths ---
+    if (root["multi_cycle_paths"] && root["multi_cycle_paths"].IsSequence()) {
+        for (const auto& item : root["multi_cycle_paths"]) {
+            if (!item.IsMap())
                 continue;
-
-            std::string key = to_lower(trim(token.substr(0, colon)));
-            std::string value = trim(token.substr(colon + 1));
-            if (!value.empty() && value.front() == '"') {
-                value = value.substr(1);
-                if (!value.empty() && value.back() == '"') {
-                    value.pop_back();
-                }
-            }
-
-            if (key == "from_clock" || key == "from")
-                fp.from_clock = value;
-            else if (key == "to_clock" || key == "to")
-                fp.to_clock = value;
-            else if (key == "from_reg")
-                fp.from_reg = value;
-            else if (key == "to_reg")
-                fp.to_reg = value;
-            else if (key == "source")
-                fp.from_reg = value;
-            else if (key == "dest")
-                fp.to_reg = value;
-            else if (key == "through")
-                fp.through.push_back(value);
-            else if (key == "reason")
-                fp.reason = value;
+            MultiCyclePath mcp;
+            if (item["from_clock"] || item["from"])
+                mcp.from_clock =
+                    (item["from_clock"] ? item["from_clock"] : item["from"]).as<std::string>();
+            if (item["to_clock"] || item["to"])
+                mcp.to_clock = (item["to_clock"] ? item["to_clock"] : item["to"]).as<std::string>();
+            if (item["cycles"])
+                mcp.cycles = item["cycles"].as<int>();
+            constraints.multi_cycle_paths.push_back(mcp);
         }
-
-        constraints.false_paths.push_back(fp);
     }
-}
 
-void ConstraintsParser::parse_multi_cycle_section(const std::string& content,
-                                                  ClockConstraints& constraints) {
-    std::istringstream iss(content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-        if (line[0] != '-')
-            continue;
-
-        MultiCyclePath mcp;
-        std::string rest = trim(line.substr(1));
-        std::istringstream fiss(rest);
-        std::string token;
-
-        while (std::getline(fiss, token, ',')) {
-            token = trim(token);
-            size_t colon = token.find(':');
-            if (colon == std::string::npos)
-                continue;
-
-            std::string key = to_lower(trim(token.substr(0, colon)));
-            std::string value = trim(token.substr(colon + 1));
-
-            if (key == "from_clock" || key == "from")
-                mcp.from_clock = value;
-            else if (key == "to_clock" || key == "to")
-                mcp.to_clock = value;
-            else if (key == "cycles") {
-                try {
-                    mcp.cycles = std::stoi(value);
-                } catch (...) {
-                }
-            }
-        }
-
-        constraints.multi_cycle_paths.push_back(mcp);
-    }
-}
-
-void ConstraintsParser::parse_groups_section(const std::string& content,
-                                             ClockConstraints& constraints) {
-    std::istringstream iss(content);
-    std::string line;
-    ClockGroup* current_group = nullptr;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        if (line.back() == ':' && line.size() > 1) {
-            constraints.clock_groups.push_back(ClockGroup{});
-            current_group = &constraints.clock_groups.back();
-            current_group->name = trim(line.substr(0, line.size() - 1));
-            continue;
-        }
-
-        if (current_group) {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos) {
-                std::string key = to_lower(trim(line.substr(0, colon)));
-                std::string value = trim(line.substr(colon + 1));
-
-                if (key == "clocks") {
-                    std::istringstream vss(value);
+    // --- clock_groups ---
+    if (root["clock_groups"] && root["clock_groups"].IsMap()) {
+        int set_id = 0;
+        for (auto it = root["clock_groups"].begin(); it != root["clock_groups"].end(); ++it) {
+            ClockGroup grp;
+            grp.name = it->first.as<std::string>();
+            grp.set_id = set_id++;
+            YAML::Node gn = it->second;
+            if (gn["clocks"]) {
+                if (gn["clocks"].IsSequence()) {
+                    for (const auto& c : gn["clocks"])
+                        grp.clocks.push_back(c.as<std::string>());
+                } else if (gn["clocks"].IsScalar()) {
+                    std::string val = gn["clocks"].as<std::string>();
+                    std::istringstream ss(val);
                     std::string clk;
-                    while (std::getline(vss, clk, ',')) {
-                        clk = trim(clk);
-                        if (!clk.empty()) {
-                            current_group->clocks.push_back(clk);
-                        }
+                    while (std::getline(ss, clk, ',')) {
+                        auto a = clk.find_first_not_of(" \t");
+                        auto b = clk.find_last_not_of(" \t");
+                        if (a != std::string::npos)
+                            grp.clocks.push_back(clk.substr(a, b - a + 1));
                     }
-                } else if (key == "asynchronous") {
-                    current_group->asynchronous = (to_lower(value) == "true");
-                } else if (key == "exclusive") {
-                    current_group->exclusive = (to_lower(value) == "true");
                 }
             }
+            if (gn["asynchronous"])
+                grp.asynchronous = to_lower(gn["asynchronous"].as<std::string>()) == "true";
+            if (gn["exclusive"])
+                grp.exclusive = to_lower(gn["exclusive"].as<std::string>()) == "true";
+            constraints.clock_groups.push_back(grp);
         }
     }
+
+    return constraints;
 }
 
-ClockConstraints ConstraintsParser::parse_yaml(const std::string& content) {
+static ClockConstraints parse_yaml_legacy(const std::string& content) {
     ClockConstraints constraints;
     std::string clocks_section, false_paths_section, multi_cycle_section, groups_section;
     std::string current_section;
-
     std::istringstream iss(content);
     std::string line;
 
@@ -1001,35 +870,218 @@ ClockConstraints ConstraintsParser::parse_yaml(const std::string& content) {
         std::string trimmed = trim(line);
         if (trimmed.empty() || trimmed[0] == '#')
             continue;
-
         std::string lower = to_lower(trimmed);
         if (lower == "clocks:" || lower == "false_paths:" || lower == "multi_cycle_paths:" ||
             lower == "clock_groups:") {
             current_section = lower.substr(0, lower.size() - 1);
             continue;
         }
-
-        if (current_section == "clocks") {
+        if (current_section == "clocks")
             clocks_section += line + "\n";
-        } else if (current_section == "false_paths") {
+        else if (current_section == "false_paths")
             false_paths_section += line + "\n";
-        } else if (current_section == "multi_cycle_paths") {
+        else if (current_section == "multi_cycle_paths")
             multi_cycle_section += line + "\n";
-        } else if (current_section == "clock_groups") {
+        else if (current_section == "clock_groups")
             groups_section += line + "\n";
+    }
+
+    // Parse clocks section.
+    {
+        std::istringstream ss(clocks_section);
+        std::string ln;
+        ClockDefinition* cur = nullptr;
+        while (std::getline(ss, ln)) {
+            ln = trim(ln);
+            if (ln.empty() || ln[0] == '#')
+                continue;
+            if (ln.back() == ':' && ln.size() > 1) {
+                std::string name = trim(ln.substr(0, ln.size() - 1));
+                if (name.find(' ') == std::string::npos && name.find('-') == std::string::npos) {
+                    constraints.clocks.push_back(ClockDefinition{});
+                    cur = &constraints.clocks.back();
+                    cur->name = name;
+                    continue;
+                }
+            }
+            if (cur) {
+                size_t colon = ln.find(':');
+                if (colon != std::string::npos) {
+                    std::string key = to_lower(trim(ln.substr(0, colon)));
+                    std::string value = trim(ln.substr(colon + 1));
+                    if (key == "frequency" || key == "frequency_mhz") {
+                        try {
+                            auto v = std::stod(value);
+                            if (std::isfinite(v) && v >= 0)
+                                cur->frequency_mhz = v;
+                        } catch (...) {
+                        }
+                    } else if (key == "period" || key == "period_ns") {
+                        try {
+                            auto v = std::stod(value);
+                            if (std::isfinite(v) && v > 0)
+                                cur->period_ns = v;
+                        } catch (...) {
+                        }
+                    } else if (key == "source")
+                        cur->source = value;
+                    else if (key == "master_clock") {
+                        cur->master_clock = value;
+                        cur->is_generated = true;
+                    } else if (key == "divider" || key == "divider_ratio") {
+                        try {
+                            auto v = std::stod(value);
+                            if (std::isfinite(v) && v > 0)
+                                cur->divider_ratio = v;
+                        } catch (...) {
+                        }
+                    } else if (key == "multiplier" || key == "multiplier_ratio") {
+                        try {
+                            auto v = std::stod(value);
+                            if (std::isfinite(v) && v > 0)
+                                cur->multiplier_ratio = v;
+                        } catch (...) {
+                        }
+                    }
+                }
+            }
+        }
+        for (const auto& clk : constraints.clocks)
+            constraints.clock_map[clk.name] = clk;
+    }
+
+    // Parse false_paths section.
+    {
+        std::istringstream ss(false_paths_section);
+        std::string ln;
+        while (std::getline(ss, ln)) {
+            ln = trim(ln);
+            if (ln.empty() || ln[0] == '#' || ln[0] != '-')
+                continue;
+            FalsePath fp;
+            std::string rest = trim(ln.substr(1));
+            std::istringstream fiss(rest);
+            std::string token;
+            while (std::getline(fiss, token, ',')) {
+                token = trim(token);
+                size_t colon = token.find(':');
+                if (colon == std::string::npos)
+                    continue;
+                std::string key = to_lower(trim(token.substr(0, colon)));
+                std::string value = trim(token.substr(colon + 1));
+                if (!value.empty() && value.front() == '"' && value.back() == '"')
+                    value = value.substr(1, value.size() - 2);
+                if (key == "from_clock" || key == "from")
+                    fp.from_clock = value;
+                else if (key == "to_clock" || key == "to")
+                    fp.to_clock = value;
+                else if (key == "from_reg")
+                    fp.from_reg = value;
+                else if (key == "to_reg")
+                    fp.to_reg = value;
+                else if (key == "source")
+                    fp.from_reg = value;
+                else if (key == "dest")
+                    fp.to_reg = value;
+                else if (key == "through")
+                    fp.through.push_back(value);
+                else if (key == "reason")
+                    fp.reason = value;
+            }
+            constraints.false_paths.push_back(fp);
         }
     }
 
-    if (!clocks_section.empty())
-        parse_clocks_section(clocks_section, constraints);
-    if (!false_paths_section.empty())
-        parse_false_paths_section(false_paths_section, constraints);
-    if (!multi_cycle_section.empty())
-        parse_multi_cycle_section(multi_cycle_section, constraints);
-    if (!groups_section.empty())
-        parse_groups_section(groups_section, constraints);
+    // Parse multi_cycle_paths section.
+    {
+        std::istringstream ss(multi_cycle_section);
+        std::string ln;
+        while (std::getline(ss, ln)) {
+            ln = trim(ln);
+            if (ln.empty() || ln[0] == '#' || ln[0] != '-')
+                continue;
+            MultiCyclePath mcp;
+            std::string rest = trim(ln.substr(1));
+            std::istringstream fiss(rest);
+            std::string token;
+            while (std::getline(fiss, token, ',')) {
+                token = trim(token);
+                size_t colon = token.find(':');
+                if (colon == std::string::npos)
+                    continue;
+                std::string key = to_lower(trim(token.substr(0, colon)));
+                std::string value = trim(token.substr(colon + 1));
+                if (key == "from_clock" || key == "from")
+                    mcp.from_clock = value;
+                else if (key == "to_clock" || key == "to")
+                    mcp.to_clock = value;
+                else if (key == "cycles") {
+                    try {
+                        mcp.cycles = std::stoi(value);
+                    } catch (...) {
+                    }
+                }
+            }
+            constraints.multi_cycle_paths.push_back(mcp);
+        }
+    }
+
+    // Parse clock_groups section.
+    {
+        std::istringstream ss(groups_section);
+        std::string ln;
+        ClockGroup* cur = nullptr;
+        while (std::getline(ss, ln)) {
+            ln = trim(ln);
+            if (ln.empty() || ln[0] == '#')
+                continue;
+            if (ln.back() == ':' && ln.size() > 1) {
+                constraints.clock_groups.push_back(ClockGroup{});
+                cur = &constraints.clock_groups.back();
+                cur->name = trim(ln.substr(0, ln.size() - 1));
+                continue;
+            }
+            if (cur) {
+                size_t colon = ln.find(':');
+                if (colon != std::string::npos) {
+                    std::string key = to_lower(trim(ln.substr(0, colon)));
+                    std::string value = trim(ln.substr(colon + 1));
+                    if (key == "clocks") {
+                        std::istringstream vss(value);
+                        std::string clk;
+                        while (std::getline(vss, clk, ',')) {
+                            clk = trim(clk);
+                            if (!clk.empty())
+                                cur->clocks.push_back(clk);
+                        }
+                    } else if (key == "asynchronous") {
+                        cur->asynchronous = (to_lower(value) == "true");
+                    } else if (key == "exclusive") {
+                        cur->exclusive = (to_lower(value) == "true");
+                    }
+                }
+            }
+        }
+    }
 
     return constraints;
+}
+
+ClockConstraints ConstraintsParser::parse_yaml(const std::string& content) {
+    ClockConstraints constraints;
+    if (content.empty())
+        return constraints;
+
+    // Rewrite compact comma-separated list items into proper nested YAML,
+    // then parse with yaml-cpp. Legacy parser is only a throw-only fallback.
+    std::string expanded = util::expand_compact_yaml(content);
+    try {
+        return parse_yaml_from_node(YAML::Load(expanded));
+    } catch (const YAML::Exception&) {
+        // Fall through to legacy line-based parser for truly malformed input.
+    }
+
+    return parse_yaml_legacy(content);
 }
 
 ClockConstraints ConstraintsParser::parse_file(const std::string& path, std::string* error) {

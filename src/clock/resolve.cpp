@@ -4,20 +4,7 @@
 
 namespace opencdc::clock {
 
-void ClockResolver::invalidate_if_stale(const ir::Graph& graph) const {
-    if (cached_generation_ == graph.generation())
-        return;
-    port_names_.clear();
-    short_port_names_.clear();
-    port_names_built_ = false;
-    port_by_name_.clear();
-    short_to_hier_.clear();
-    port_index_built_ = false;
-    cached_generation_ = graph.generation();
-}
-
 void ClockResolver::ensure_port_names(const ir::Graph& graph) const {
-    invalidate_if_stale(graph);
     if (port_names_built_)
         return;
     for (const auto& node : graph.nodes()) {
@@ -33,7 +20,6 @@ void ClockResolver::ensure_port_names(const ir::Graph& graph) const {
 }
 
 void ClockResolver::ensure_port_index(const ir::Graph& graph) const {
-    invalidate_if_stale(graph);
     if (port_index_built_)
         return;
     for (const auto& node : graph.nodes()) {
@@ -58,17 +44,12 @@ std::string ClockResolver::get_root_port_name(const std::string& name,
     ensure_port_names(graph);
     if (port_names_.count(name))
         return name;
-    if (short_port_names_.count(name)) {
-        for (const auto& node : graph.nodes()) {
-            if (node.kind == ir::NodeKind::Port) {
-                size_t dot = node.hier_name.rfind('.');
-                if (dot != std::string::npos) {
-                    std::string short_n = node.hier_name.substr(dot + 1);
-                    if (short_n == name)
-                        return node.hier_name;
-                }
-            }
-        }
+    ensure_port_index(graph);
+    size_t dot = name.rfind('.');
+    std::string short_name = (dot != std::string::npos) ? name.substr(dot + 1) : name;
+    auto it = short_to_hier_.find(short_name);
+    if (it != short_to_hier_.end() && !it->second.empty()) {
+        return it->second.front();
     }
     return name;
 }
@@ -296,7 +277,6 @@ ResolveResult ClockResolver::resolve(const ir::Graph& graph) {
         result.clock_map[node.clock_domain] = std::move(info);
     }
 
-    std::unordered_set<std::string> warned_muxed;
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register)
             continue;
@@ -309,11 +289,9 @@ ResolveResult ClockResolver::resolve(const ir::Graph& graph) {
 
         const ClockInfo& ci = it->second;
         if (ci.is_muxed) {
-            if (warned_muxed.insert(node.clock_domain).second) {
-                result.warnings.push_back("Clock '" + node.clock_domain +
-                                          "' is derived from multiple sources: "
-                                          "analysis requires user annotation.");
-            }
+            result.warnings.push_back("Clock '" + node.clock_domain +
+                                      "' is derived from multiple sources: "
+                                      "analysis requires user annotation.");
         }
     }
 

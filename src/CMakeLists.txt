@@ -44,7 +44,7 @@ target_include_directories(opencdc_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(opencdc_core PUBLIC slang::slang nlohmann_json::nlohmann_json)
+target_link_libraries(opencdc_core PUBLIC slang::slang nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp)
 
 add_executable(opencdc entry.cpp)
 target_link_libraries(opencdc PRIVATE opencdc_core)

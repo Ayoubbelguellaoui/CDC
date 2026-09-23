@@ -121,11 +121,6 @@ void LspServer::start(int port) {
     }
 }
 
-void LspServer::wait() {
-    if (server_thread_.joinable())
-        server_thread_.join();
-}
-
 void LspServer::stop() {
     running_ = false;
     cv_.notify_all();
@@ -155,6 +150,23 @@ void LspServer::did_open(const TextDocument& document) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         open_documents_[document.uri] = document;
+    }
+
+    auto diagnostics = analyze_document(document.uri, document.text);
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        diagnostics_cache_[document.uri] = diagnostics;
+    }
+
+    if (publish_callback_) {
+        PublishDiagnosticsParams params;
+        params.uri = document.uri;
+        params.diagnostics = diagnostics;
+        publish_callback_(params);
+    } else {
+        PublishDiagnosticsParams params{document.uri, diagnostics};
+        send_diagnostics_notification(params);
     }
 }
 
@@ -432,8 +444,10 @@ void LspServer::server_loop() {
 
     if (bind(listen_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
         close(listen_fd);
+        std::lock_guard<std::mutex> lock(socket_mutex_);
         socket_fd_ = -1;
         running_ = false;
+        { std::lock_guard<std::mutex> lock(startup_mutex_); }
         startup_cv_.notify_all();
         return;
     }
@@ -445,17 +459,20 @@ void LspServer::server_loop() {
             port_ = ntohs(address.sin_port);
         }
     }
+    bound_port_ = port_;
+    { std::lock_guard<std::mutex> lock(startup_mutex_); }
+    startup_cv_.notify_all();
 
     if (listen(listen_fd, 5) < 0) {
         close(listen_fd);
-        socket_fd_ = -1;
+        {
+            std::lock_guard<std::mutex> lock(socket_mutex_);
+            socket_fd_ = -1;
+        }
         running_ = false;
         startup_cv_.notify_all();
         return;
     }
-
-    bound_port_ = port_;
-    startup_cv_.notify_all();
 
     while (running_) {
         fd_set read_fds;
@@ -785,7 +802,7 @@ bool LspClient::connect(const std::string& host, int port) {
     if (socket_fd_ < 0)
         return false;
 
-    struct sockaddr_in server_addr = {};
+    struct sockaddr_in server_addr {};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
     if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) != 1) {
@@ -795,7 +812,7 @@ bool LspClient::connect(const std::string& host, int port) {
     }
 
     // Set connection timeout (5 seconds)
-    struct timeval tv = {};
+    struct timeval tv {};
     tv.tv_sec = 5;
     setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 

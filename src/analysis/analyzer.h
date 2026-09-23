@@ -6,8 +6,6 @@
 #include <utility>
 #include <vector>
 
-#include "analysis/coverage.h"
-#include "analysis/signoff.h"
 #include "cdc/crossing.h"
 #include "clock/domain.h"
 #include "config/config.h"
@@ -21,28 +19,20 @@ struct AnalysisRequest {
     std::string config_path;
     std::string waiver_path;
     std::string constraints_path;
-    // Explicit false paths as (source, destination) register name pairs.
     std::vector<std::pair<std::string, std::string>> false_paths;
     std::vector<std::string> disable_rules;
-    std::vector<std::string> severity_overrides;  // "RULE=severity"
-    // Pre-parsed config (optional). When set, the analyzer skips re-parsing.
+    std::vector<std::string> severity_overrides;
     std::optional<config::Config> config;
-    // Methodology profile name (optional). When set, overrides config settings.
-    std::string profile;
-    std::vector<std::string> include_dirs;
-    std::vector<std::string> defines;
+    size_t num_threads = 0;
 };
 
 struct AnalysisResult {
     bool ok = false;
-    std::string analysis_status = "complete";
     std::vector<std::string> errors;
     std::vector<std::string> warnings;
     ir::Graph graph;
     clock::DomainResult domains;
     std::vector<cdc::Finding> findings;
-    CoverageResult coverage;
-    SignoffResult signoff;
 };
 
 // Runs the full CDC analysis pipeline. Single entry point shared by the
@@ -50,11 +40,6 @@ struct AnalysisResult {
 class Analyzer {
    public:
     AnalysisResult run(const AnalysisRequest& request);
-
-    // Incremental re-analysis: returns previous findings if the graph is clean;
-    // otherwise re-runs the full pipeline.
-    AnalysisResult run_incremental(AnalysisResult& previous,
-                                   const AnalysisRequest& request);
 };
 
 }  // namespace opencdc::analysis

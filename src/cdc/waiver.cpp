@@ -95,40 +95,12 @@ bool WaiverEngine::fields_match(const std::string& waiver_field, const std::stri
     return to_lower(waiver_field) == to_lower(finding_field);
 }
 
-static bool hierarchical_match(const std::string& pattern, const std::string& value) {
+static bool substring_match(const std::string& pattern, const std::string& value) {
     if (pattern.empty())
         return true;
     if (value.empty())
         return false;
-
-    auto split = [](const std::string& s) {
-        std::vector<std::string> parts;
-        size_t start = 0;
-        while (start < s.size()) {
-            size_t dot = s.find('.', start);
-            if (dot == std::string::npos) {
-                parts.push_back(s.substr(start));
-                break;
-            }
-            parts.push_back(s.substr(start, dot - start));
-            start = dot + 1;
-        }
-        return parts;
-    };
-
-    auto pat_parts = split(to_lower(pattern));
-    auto val_parts = split(to_lower(value));
-
-    if (pat_parts.size() > val_parts.size())
-        return false;
-
-    // Check if pattern segments form a suffix of the value segments.
-    size_t offset = val_parts.size() - pat_parts.size();
-    for (size_t i = 0; i < pat_parts.size(); ++i) {
-        if (pat_parts[i] != val_parts[offset + i])
-            return false;
-    }
-    return true;
+    return to_lower(value).find(to_lower(pattern)) != std::string::npos;
 }
 
 // Rule ids in this tool have the shape CDC001 (letter prefix + digits); "*"
@@ -189,13 +161,13 @@ bool WaiverEngine::matches(const Finding& f, const Waiver& w) const {
     if (w.rule_id.empty())
         return false;
 
-    if (w.rule_id != "*" && !fields_match(w.rule_id, f.rule_id))
+    if (!fields_match(w.rule_id, f.rule_id))
         return false;
 
     if (w.match_type == WaiverMatchType::Substring) {
-        if (!hierarchical_match(w.source_reg_name, f.source_reg_name))
+        if (!substring_match(w.source_reg_name, f.source_reg_name))
             return false;
-        if (!hierarchical_match(w.dest_reg_name, f.dest_reg_name))
+        if (!substring_match(w.dest_reg_name, f.dest_reg_name))
             return false;
     } else if (w.match_type == WaiverMatchType::Wildcard) {
         if (!w.source_reg_name.empty()) {
@@ -265,7 +237,6 @@ std::vector<Finding> WaiverEngine::apply(const std::vector<Finding>& findings) c
                 f.waived = true;
                 f.waiver_justification = w.justification;
                 f.waiver_owner = w.owner;
-                f.waiver_ticket = w.ticket;
                 break;
             }
         }
@@ -279,11 +250,10 @@ std::vector<std::string> WaiverEngine::check_unused(const std::vector<Finding>& 
     for (size_t i = 0; i < waivers_.size(); ++i) {
         const auto& w = waivers_[i];
         bool used = false;
-        size_t match_count = 0;
         for (const auto& f : findings) {
             if (matches(f, w)) {
                 used = true;
-                ++match_count;
+                break;
             }
         }
         if (is_expired(w.expiry)) {
@@ -296,11 +266,6 @@ std::vector<std::string> WaiverEngine::check_unused(const std::vector<Finding>& 
             warnings.push_back("Waiver #" + std::to_string(i + 1) + " (rule=" + w.rule_id +
                                ", source=" + w.source_reg_name + ", dest=" + w.dest_reg_name +
                                ") did not match any finding");
-        } else if (match_count >= 10) {
-            warnings.push_back("Waiver #" + std::to_string(i + 1) + " (rule=" + w.rule_id +
-                               ", source=" + w.source_reg_name + ", dest=" + w.dest_reg_name +
-                               ") matched " + std::to_string(match_count) +
-                               " findings — may be overly broad");
         }
     }
     return warnings;
@@ -381,19 +346,6 @@ bool WaiverEngine::load_from_file(const std::string& path, std::string* error) {
             if (space != std::string::npos) {
                 rest = trim(rest.substr(space + 1));
             } else {
-                rest.clear();
-            }
-        }
-
-        // Parse optional ticket reference (TICKET-NNN or JIRA-NNN or #NNN pattern).
-        if (!rest.empty() && (rest[0] == 'T' || rest[0] == 't' || rest[0] == 'J' ||
-                              rest[0] == 'j' || rest[0] == '#')) {
-            size_t space = rest.find(' ');
-            if (space != std::string::npos) {
-                w.ticket = rest.substr(0, space);
-                rest = trim(rest.substr(space + 1));
-            } else {
-                w.ticket = rest;
                 rest.clear();
             }
         }

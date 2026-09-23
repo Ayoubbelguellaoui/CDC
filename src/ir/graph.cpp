@@ -5,16 +5,8 @@
 
 namespace opencdc::ir {
 
-static std::string leaf_name(const std::string& hier_name) {
-    size_t dot = hier_name.rfind('.');
-    if (dot == std::string::npos)
-        return hier_name;
-    return hier_name.substr(dot + 1);
-}
-
 uint64_t Graph::add_register(const std::string& hier_name, const std::string& clock_domain,
-                             uint32_t width, const SourceLoc& loc, const std::string& module_path,
-                             const std::string& module_type) {
+                             uint32_t width, const SourceLoc& loc, const std::string& module_path) {
     // Return existing node if hier_name already present — prevents orphaned
     // nodes when multiple always blocks assign to the same register.
     auto existing = name_to_idx_.find(hier_name);
@@ -35,9 +27,8 @@ uint64_t Graph::add_register(const std::string& hier_name, const std::string& cl
     Node node;
     node.id = id;
     node.hier_name = hier_name;
-    node.short_name = leaf_name(hier_name);
+    node.short_name = hier_name;
     node.module_path = module_path;
-    node.module_type = module_type;
     node.kind = NodeKind::Register;
     node.width = width;
     node.clock_domain = clock_domain;
@@ -46,12 +37,11 @@ uint64_t Graph::add_register(const std::string& hier_name, const std::string& cl
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
-    dirty_ = true;
     return id;
 }
 
 uint64_t Graph::add_port(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
-                         const std::string& module_path, const std::string& module_type) {
+                         const std::string& module_path) {
     auto existing = name_to_idx_.find(hier_name);
     if (existing != name_to_idx_.end()) {
         return nodes_[existing->second].id;
@@ -70,9 +60,8 @@ uint64_t Graph::add_port(const std::string& hier_name, uint32_t width, const Sou
     Node node;
     node.id = id;
     node.hier_name = hier_name;
-    node.short_name = leaf_name(hier_name);
+    node.short_name = hier_name;
     node.module_path = module_path;
-    node.module_type = module_type;
     node.kind = NodeKind::Port;
     node.width = width;
     node.loc = loc;
@@ -80,12 +69,11 @@ uint64_t Graph::add_port(const std::string& hier_name, uint32_t width, const Sou
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
-    dirty_ = true;
     return id;
 }
 
 uint64_t Graph::add_net(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
-                        const std::string& module_path, const std::string& module_type) {
+                        const std::string& module_path) {
     auto existing = name_to_idx_.find(hier_name);
     if (existing != name_to_idx_.end()) {
         return nodes_[existing->second].id;
@@ -104,9 +92,8 @@ uint64_t Graph::add_net(const std::string& hier_name, uint32_t width, const Sour
     Node node;
     node.id = id;
     node.hier_name = hier_name;
-    node.short_name = leaf_name(hier_name);
+    node.short_name = hier_name;
     node.module_path = module_path;
-    node.module_type = module_type;
     node.kind = NodeKind::Net;
     node.width = width;
     node.loc = loc;
@@ -114,14 +101,12 @@ uint64_t Graph::add_net(const std::string& hier_name, uint32_t width, const Sour
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
-    dirty_ = true;
     return id;
 }
 
 uint64_t Graph::add_combinational(const std::string& hier_name, LogicType logic_type,
                                   const std::vector<uint64_t>& inputs, uint32_t width,
-                                  const SourceLoc& loc, const std::string& module_path,
-                                  const std::string& module_type) {
+                                  const SourceLoc& loc, const std::string& module_path) {
     auto existing = name_to_idx_.find(hier_name);
     if (existing != name_to_idx_.end()) {
         return nodes_[existing->second].id;
@@ -140,9 +125,8 @@ uint64_t Graph::add_combinational(const std::string& hier_name, LogicType logic_
     Node node;
     node.id = id;
     node.hier_name = hier_name;
-    node.short_name = leaf_name(hier_name);
+    node.short_name = hier_name;
     node.module_path = module_path;
-    node.module_type = module_type;
     node.kind = NodeKind::Combinational;
     node.width = width;
     node.loc = loc;
@@ -152,7 +136,6 @@ uint64_t Graph::add_combinational(const std::string& hier_name, LogicType logic_
     id_to_idx_[id] = idx;
     name_to_idx_[hier_name] = idx;
     ++generation_;
-    dirty_ = true;
 
     for (uint64_t input_id : inputs) {
         add_edge(input_id, id);
@@ -180,28 +163,6 @@ void Graph::add_edge(uint64_t from_id, uint64_t to_id) {
     adj_[from_id].push_back(to_id);
     radj_[to_id].push_back(from_id);
     ++generation_;
-    dirty_ = true;
-}
-
-void Graph::add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role) {
-    if (from_id == to_id)
-        return;
-    if (!find_node(from_id) || !find_node(to_id))
-        return;
-    if (edges_.size() >= MAX_GRAPH_EDGES) {
-        truncated_ = true;
-        return;
-    }
-
-    uint64_t edge_key = (from_id << 32) | to_id;
-    if (!edge_set_.insert(edge_key).second)
-        return;
-
-    edges_.push_back({from_id, to_id, role});
-    adj_[from_id].push_back(to_id);
-    radj_[to_id].push_back(from_id);
-    ++generation_;
-    dirty_ = true;
 }
 
 const Node* Graph::find_node(uint64_t id) const {

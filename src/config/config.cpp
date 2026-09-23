@@ -1,12 +1,16 @@
 #include "config/config.h"
 
+#include <yaml-cpp/yaml.h>
+
 #include <algorithm>
 #include <fstream>
 #include <sstream>
 
+#include "util/yaml_compat.h"
+
 namespace opencdc::config {
 
-std::string ConfigParser::trim(const std::string& s) {
+static std::string trim(const std::string& s) {
     size_t start = s.find_first_not_of(" \t\r\n");
     if (start == std::string::npos)
         return "";
@@ -14,7 +18,7 @@ std::string ConfigParser::trim(const std::string& s) {
     return s.substr(start, end - start + 1);
 }
 
-std::string ConfigParser::to_lower(const std::string& s) {
+static std::string to_lower(const std::string& s) {
     std::string r = s;
     std::transform(r.begin(), r.end(), r.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -22,350 +26,26 @@ std::string ConfigParser::to_lower(const std::string& s) {
 }
 
 static std::string strip_quotes(const std::string& s) {
-    if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
+    if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
         return s.substr(1, s.size() - 2);
-    }
     return s;
 }
 
-void ConfigParser::parse_rule_section(const std::string& content, Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-    std::string current_rule;
+// ---------------------------------------------------------------------------
+// Legacy line-based parser: handles old compact one-line format
+// "- rule: CDC001, source: mod.src, dest: mod.dst, justification: ..."
+// Used as fallback when yaml-cpp rejects invalid YAML (compact comma format).
+// ---------------------------------------------------------------------------
 
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        if (line.back() == ':' && line.size() > 1) {
-            std::string stripped = trim(line.substr(0, line.size() - 1));
-            if (!stripped.empty() && stripped.find(' ') == std::string::npos) {
-                current_rule = stripped;
-                continue;
-            }
-        }
-
-        if (!current_rule.empty()) {
-            size_t colon = line.find(':');
-            if (colon != std::string::npos) {
-                std::string key = trim(line.substr(0, colon));
-                std::string value = trim(line.substr(colon + 1));
-
-                if (to_lower(key) == "enabled") {
-                    std::string v = to_lower(value);
-                    if (v == "true") {
-                        config.rules[current_rule].enabled = true;
-                    } else if (v == "false") {
-                        config.rules[current_rule].enabled = false;
-                    }
-                    // Ignore invalid booleans (typos silently suppressed before)
-                } else if (to_lower(key) == "severity") {
-                    std::string v = to_lower(value);
-                    if (v == "error" || v == "warning" || v == "info") {
-                        config.rules[current_rule].severity = v;
-                    }
-                }
-            }
-        }
-    }
-}
-
-void ConfigParser::parse_waiver_section(const std::string& content, Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        if (line[0] != '-')
-            continue;
-
-        std::string rest = trim(line.substr(1));
-        WaiverConfig w;
-
-        std::string token;
-        bool in_quotes = false;
-        std::string current;
-        std::vector<std::string> tokens;
-
-        for (char c : rest) {
-            if (c == '"') {
-                in_quotes = !in_quotes;
-                current += c;
-            } else if (c == ',' && !in_quotes) {
-                tokens.push_back(trim(current));
-                current.clear();
-            } else {
-                current += c;
-            }
-        }
-        if (!current.empty())
-            tokens.push_back(trim(current));
-
-        for (const auto& tok : tokens) {
-            size_t colon = tok.find(':');
-            if (colon == std::string::npos)
-                continue;
-
-            std::string key = trim(tok.substr(0, colon));
-            std::string value = strip_quotes(trim(tok.substr(colon + 1)));
-
-            if (to_lower(key) == "rule")
-                w.rule_id = value;
-            else if (to_lower(key) == "source")
-                w.source_reg = value;
-            else if (to_lower(key) == "dest")
-                w.dest_reg = value;
-            else if (to_lower(key) == "source_domain")
-                w.source_domain = value;
-            else if (to_lower(key) == "dest_domain")
-                w.dest_domain = value;
-            else if (to_lower(key) == "justification")
-                w.justification = value;
-            else if (to_lower(key) == "owner")
-                w.owner = value;
-            else if (to_lower(key) == "expiry")
-                w.expiry = value;
-        }
-
-        if (!w.rule_id.empty()) {
-            config.waivers.push_back(std::move(w));
-        }
-    }
-}
-
-void ConfigParser::parse_output_section(const std::string& content, Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        size_t colon = line.find(':');
-        if (colon != std::string::npos) {
-            std::string key = trim(line.substr(0, colon));
-            std::string value = trim(line.substr(colon + 1));
-
-            if (to_lower(key) == "format")
-                config.output.format = value;
-            else if (to_lower(key) == "file")
-                config.output.file = value;
-            else if (to_lower(key) == "suppress_reset_crossings")
-                config.suppress_reset_crossings = (to_lower(value) == "true");
-            else if (to_lower(key) == "reconvergence_depth") {
-                try {
-                    int d = std::stoi(value);
-                    if (d >= 1 && d <= 50)
-                        config.reconvergence_depth = d;
-                } catch (...) {
-                }
-            }
-        }
-    }
-}
-
-void ConfigParser::parse_false_path_section(const std::string& content, Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-        if (line[0] != '-')
-            continue;
-
-        std::string rest = trim(line.substr(1));
-        FalsePathConfig fp;
-
-        std::string token;
-        bool in_quotes = false;
-        std::string current;
-        std::vector<std::string> tokens;
-
-        for (char c : rest) {
-            if (c == '"') {
-                in_quotes = !in_quotes;
-                current += c;
-            } else if (c == ',' && !in_quotes) {
-                tokens.push_back(trim(current));
-                current.clear();
-            } else {
-                current += c;
-            }
-        }
-        if (!current.empty())
-            tokens.push_back(trim(current));
-
-        for (const auto& tok : tokens) {
-            size_t colon = tok.find(':');
-            if (colon == std::string::npos)
-                continue;
-            std::string key = trim(tok.substr(0, colon));
-            std::string value = strip_quotes(trim(tok.substr(colon + 1)));
-            std::string lk = to_lower(key);
-            if (lk == "source")
-                fp.source_reg = value;
-            else if (lk == "dest")
-                fp.dest_reg = value;
-            else if (lk == "source_clock" || lk == "from_clock")
-                fp.source_clock = value;
-            else if (lk == "dest_clock" || lk == "to_clock")
-                fp.dest_clock = value;
-        }
-
-        if ((!fp.source_reg.empty() && !fp.dest_reg.empty()) ||
-            (!fp.source_clock.empty() && !fp.dest_clock.empty())) {
-            config.false_paths.push_back(std::move(fp));
-        }
-    }
-}
-
-void ConfigParser::parse_reset_policy_section(const std::string& content, Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        size_t colon = line.find(':');
-        if (colon != std::string::npos) {
-            std::string key = trim(line.substr(0, colon));
-            std::string value = to_lower(trim(line.substr(colon + 1)));
-
-            if (to_lower(key) == "require_cdc_register_reset") {
-                config.reset_policy.require_cdc_register_reset = (value == "true");
-            } else if (to_lower(key) == "check_same_clock_reset_crossings") {
-                config.reset_policy.check_same_clock_reset_crossings = (value == "true");
-            } else if (to_lower(key) == "detect_reset_synchronizer") {
-                config.reset_policy.detect_reset_synchronizer = (value == "true");
-            }
-        }
-    }
-}
-
-void ConfigParser::parse_multicycle_policy_section(const std::string& content,
-                                                   Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-    bool in_suppress_rules = false;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        size_t colon = line.find(':');
-        if (colon != std::string::npos) {
-            std::string key = trim(line.substr(0, colon));
-            std::string value = to_lower(trim(line.substr(colon + 1)));
-
-            if (to_lower(key) == "suppress_findings") {
-                config.multicycle_path_policy.suppress_findings = (value == "true");
-                in_suppress_rules = false;
-            } else if (to_lower(key) == "suppress_rules") {
-                in_suppress_rules = true;
-                config.multicycle_path_policy.suppress_rules.clear();
-                // Inline list: suppress_rules: [CDC001, CDC002]
-                if (!value.empty() && value.front() == '[') {
-                    in_suppress_rules = false;
-                    std::string inner = value;
-                    if (inner.front() == '[')
-                        inner = inner.substr(1);
-                    if (!inner.empty() && inner.back() == ']')
-                        inner.pop_back();
-                    std::istringstream vss(inner);
-                    std::string rule;
-                    while (std::getline(vss, rule, ',')) {
-                        rule = trim(rule);
-                        if (!rule.empty())
-                            config.multicycle_path_policy.suppress_rules.push_back(rule);
-                    }
-                }
-            }
-        } else if (in_suppress_rules) {
-            // YAML list item:  - CDC001
-            std::string trimmed_line = trim(line);
-            if (trimmed_line.front() == '-') {
-                trimmed_line = trim(trimmed_line.substr(1));
-            }
-            if (!trimmed_line.empty())
-                config.multicycle_path_policy.suppress_rules.push_back(trimmed_line);
-        }
-    }
-}
-
-void ConfigParser::parse_blackbox_section(const std::string& content, Config& config) const {
-    std::istringstream iss(content);
-    std::string line;
-    BlackBoxConfig* cur = nullptr;
-
-    while (std::getline(iss, line)) {
-        line = trim(line);
-        if (line.empty() || line[0] == '#')
-            continue;
-
-        // New entry:  - module_name: xpm_cdc_gray
-        if (line[0] == '-') {
-            std::string rest = trim(line.substr(1));
-            size_t colon = rest.find(':');
-            if (colon != std::string::npos) {
-                std::string key = to_lower(trim(rest.substr(0, colon)));
-                std::string value = strip_quotes(trim(rest.substr(colon + 1)));
-                if (key == "module_name" && !value.empty()) {
-                    config.blackboxes.emplace_back();
-                    cur = &config.blackboxes.back();
-                    cur->module_name = value;
-                    continue;
-                }
-            }
-            cur = nullptr;
-            continue;
-        }
-
-        if (!cur)
-            continue;
-
-        size_t colon = line.find(':');
-        if (colon == std::string::npos)
-            continue;
-        std::string key = to_lower(trim(line.substr(0, colon)));
-        std::string value = to_lower(strip_quotes(trim(line.substr(colon + 1))));
-
-        if (key == "vendor")
-            cur->vendor = value;
-        else if (key == "is_safe_crossing")
-            cur->is_safe_crossing = (value == "true");
-        else if (key == "has_synchronizer")
-            cur->has_synchronizer = (value == "true");
-        else if (key == "has_gray_encoding")
-            cur->has_gray_encoding = (value == "true");
-        else if (key == "has_async_fifo")
-            cur->has_async_fifo = (value == "true");
-        else if (key == "has_handshake")
-            cur->has_handshake = (value == "true");
-    }
-}
-
-Config ConfigParser::parse_string(const std::string& content, std::string* error) const {
+static Config parse_legacy(const std::string& content, std::string* error) {
     Config config;
-
-    std::string rules_section, waivers_section, output_section, false_paths_section,
-        clock_groups_section, reset_policy_section, multicycle_policy_section, blackboxes_section;
     std::string current_section;
+    std::string current_rule;
+    size_t line_number = 0;
 
     std::istringstream iss(content);
     std::string line;
-    std::string current_rule;
 
-    size_t line_number = 0;
     while (std::getline(iss, line)) {
         line_number++;
         std::string trimmed = trim(line);
@@ -374,27 +54,10 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
 
         std::string lower = to_lower(trimmed);
         if (lower == "rules:" || lower == "waivers:" || lower == "output:" ||
-            lower == "false_paths:" || lower == "clock_groups:" || lower == "reset_policy:" ||
-            lower == "multicycle_path_policy:" || lower == "blackboxes:") {
+            lower == "false_paths:" || lower == "clock_groups:") {
             current_section = to_lower(trimmed.substr(0, trimmed.size() - 1));
             current_rule.clear();
             continue;
-        }
-
-        if (line.find_first_not_of(" \t") == 0 && trimmed.back() == ':') {
-            if (error) {
-                *error = "Unknown config section at line " + std::to_string(line_number) + ": " +
-                         trimmed;
-            }
-            return Config();
-        }
-
-        if (current_section.empty() && line.find_first_not_of(" \t") == 0) {
-            if (error) {
-                *error = "Unexpected top-level config entry at line " +
-                         std::to_string(line_number) + ": " + trimmed;
-            }
-            return Config();
         }
 
         if (current_section == "rules") {
@@ -405,108 +68,333 @@ Config ConfigParser::parse_string(const std::string& content, std::string* error
                 if (colon != std::string::npos) {
                     std::string key = to_lower(trim(trimmed.substr(0, colon)));
                     std::string value = to_lower(strip_quotes(trim(trimmed.substr(colon + 1))));
-                    bool invalid = (key == "enabled" && value != "true" && value != "false") ||
-                                   (key == "severity" && value != "error" && value != "warning" &&
-                                    value != "info");
-                    if (invalid) {
-                        if (error)
-                            *error = "Invalid value at line " + std::to_string(line_number) + ": " +
-                                     trimmed;
-                        return Config();
+                    if (key == "enabled") {
+                        if (value == "true")
+                            config.rules[current_rule].enabled = true;
+                        else if (value == "false")
+                            config.rules[current_rule].enabled = false;
+                    } else if (key == "severity") {
+                        if (value == "error" || value == "warning" || value == "info")
+                            config.rules[current_rule].severity = value;
                     }
                 }
+            }
+        } else if (current_section == "waivers") {
+            if (trimmed[0] == '-') {
+                std::string rest = trim(trimmed.substr(1));
+                WaiverConfig w;
+                std::string token;
+                bool in_quotes = false;
+                std::string current;
+                std::vector<std::string> tokens;
+                for (char c : rest) {
+                    if (c == '"') {
+                        in_quotes = !in_quotes;
+                        current += c;
+                    } else if (c == ',' && !in_quotes) {
+                        tokens.push_back(trim(current));
+                        current.clear();
+                    } else {
+                        current += c;
+                    }
+                }
+                if (!current.empty())
+                    tokens.push_back(trim(current));
+                for (const auto& tok : tokens) {
+                    size_t colon = tok.find(':');
+                    if (colon == std::string::npos)
+                        continue;
+                    std::string key = trim(tok.substr(0, colon));
+                    std::string value = strip_quotes(trim(tok.substr(colon + 1)));
+                    std::string lk = to_lower(key);
+                    if (lk == "rule")
+                        w.rule_id = value;
+                    else if (lk == "source")
+                        w.source_reg = value;
+                    else if (lk == "dest")
+                        w.dest_reg = value;
+                    else if (lk == "source_domain")
+                        w.source_domain = value;
+                    else if (lk == "dest_domain")
+                        w.dest_domain = value;
+                    else if (lk == "justification")
+                        w.justification = value;
+                    else if (lk == "owner")
+                        w.owner = value;
+                    else if (lk == "expiry")
+                        w.expiry = value;
+                }
+                if (!w.rule_id.empty())
+                    config.waivers.push_back(std::move(w));
             }
         } else if (current_section == "output") {
             size_t colon = trimmed.find(':');
             if (colon != std::string::npos) {
                 std::string key = to_lower(trim(trimmed.substr(0, colon)));
                 std::string value = to_lower(strip_quotes(trim(trimmed.substr(colon + 1))));
-                if (key == "suppress_reset_crossings" && value != "true" && value != "false") {
-                    if (error)
-                        *error =
-                            "Invalid value at line " + std::to_string(line_number) + ": " + trimmed;
-                    return Config();
-                }
-                if (key == "format" && value != "text" && value != "json" && value != "html" &&
-                    value != "sarif") {
-                    if (error)
-                        *error = "Invalid output format at line " + std::to_string(line_number) +
-                                 ": " + value;
-                    return Config();
-                }
+                if (key == "format")
+                    config.output.format = value;
+                else if (key == "file")
+                    config.output.file = value;
+                else if (key == "suppress_reset_crossings")
+                    config.suppress_reset_crossings = (value == "true");
             }
-        }
-
-        if (current_section == "rules") {
-            rules_section += line + "\n";
-        } else if (current_section == "waivers") {
-            waivers_section += line + "\n";
-        } else if (current_section == "output") {
-            output_section += line + "\n";
         } else if (current_section == "false_paths") {
-            false_paths_section += line + "\n";
-        } else if (current_section == "clock_groups") {
-            clock_groups_section += line + "\n";
-        } else if (current_section == "reset_policy") {
-            reset_policy_section += line + "\n";
-        } else if (current_section == "multicycle_path_policy") {
-            multicycle_policy_section += line + "\n";
-        } else if (current_section == "blackboxes") {
-            blackboxes_section += line + "\n";
-        }
-    }
-
-    if (!rules_section.empty())
-        parse_rule_section(rules_section, config);
-    if (!waivers_section.empty())
-        parse_waiver_section(waivers_section, config);
-    if (!output_section.empty())
-        parse_output_section(output_section, config);
-    if (!false_paths_section.empty())
-        parse_false_path_section(false_paths_section, config);
-    if (!clock_groups_section.empty()) {
-        std::istringstream ciss(clock_groups_section);
-        std::string line;
-        ClockGroupConfig* cur = nullptr;
-        while (std::getline(ciss, line)) {
-            line = trim(line);
-            if (line.empty() || line[0] == '#')
-                continue;
-            if (line.back() == ':' && line.size() > 1) {
-                config.clock_groups.emplace_back();
-                cur = &config.clock_groups.back();
-                cur->exclusive = true;
-                continue;
-            }
-            if (!cur)
-                continue;
-            size_t colon = line.find(':');
-            if (colon == std::string::npos)
-                continue;
-            std::string key = to_lower(trim(line.substr(0, colon)));
-            std::string value = trim(line.substr(colon + 1));
-            if (key == "clocks") {
-                std::istringstream vss(value);
-                std::string clk;
-                while (std::getline(vss, clk, ',')) {
-                    clk = trim(clk);
-                    if (!clk.empty())
-                        cur->clocks.push_back(clk);
+            if (trimmed[0] == '-') {
+                std::string rest = trim(trimmed.substr(1));
+                FalsePathConfig fp;
+                std::string token;
+                bool in_quotes = false;
+                std::string current;
+                std::vector<std::string> tokens;
+                for (char c : rest) {
+                    if (c == '"') {
+                        in_quotes = !in_quotes;
+                        current += c;
+                    } else if (c == ',' && !in_quotes) {
+                        tokens.push_back(trim(current));
+                        current.clear();
+                    } else {
+                        current += c;
+                    }
                 }
-            } else if (key == "exclusive") {
-                cur->exclusive = (to_lower(value) == "true");
+                if (!current.empty())
+                    tokens.push_back(trim(current));
+                for (const auto& tok : tokens) {
+                    size_t colon = tok.find(':');
+                    if (colon == std::string::npos)
+                        continue;
+                    std::string key = to_lower(trim(tok.substr(0, colon)));
+                    std::string value = strip_quotes(trim(tok.substr(colon + 1)));
+                    if (key == "source")
+                        fp.source_reg = value;
+                    else if (key == "dest")
+                        fp.dest_reg = value;
+                    else if (key == "source_clock" || key == "from_clock")
+                        fp.source_clock = value;
+                    else if (key == "dest_clock" || key == "to_clock")
+                        fp.dest_clock = value;
+                }
+                if ((!fp.source_reg.empty() && !fp.dest_reg.empty()) ||
+                    (!fp.source_clock.empty() && !fp.dest_clock.empty())) {
+                    config.false_paths.push_back(std::move(fp));
+                }
+            }
+        } else if (current_section == "clock_groups") {
+            // Legacy clock_groups parser (compact format).
+            if (trimmed.back() == ':' && trimmed.size() > 1) {
+                config.clock_groups.emplace_back();
+                config.clock_groups.back().exclusive = true;
+            } else if (!config.clock_groups.empty()) {
+                size_t colon = trimmed.find(':');
+                if (colon != std::string::npos) {
+                    std::string key = to_lower(trim(trimmed.substr(0, colon)));
+                    std::string value = trim(trimmed.substr(colon + 1));
+                    auto& cur = config.clock_groups.back();
+                    if (key == "clocks") {
+                        std::istringstream vss(value);
+                        std::string clk;
+                        while (std::getline(vss, clk, ',')) {
+                            clk = trim(clk);
+                            if (!clk.empty())
+                                cur.clocks.push_back(clk);
+                        }
+                    } else if (key == "exclusive") {
+                        cur.exclusive = (to_lower(value) == "true");
+                    }
+                }
             }
         }
     }
-
-    if (!reset_policy_section.empty())
-        parse_reset_policy_section(reset_policy_section, config);
-    if (!multicycle_policy_section.empty())
-        parse_multicycle_policy_section(multicycle_policy_section, config);
-    if (!blackboxes_section.empty())
-        parse_blackbox_section(blackboxes_section, config);
-
     return config;
+}
+
+// ---------------------------------------------------------------------------
+// yaml-cpp based parser
+// ---------------------------------------------------------------------------
+
+static bool parse_rules_node(const YAML::Node& rules_node, Config& config,
+                             std::string* error = nullptr) {
+    for (auto it = rules_node.begin(); it != rules_node.end(); ++it) {
+        std::string rule_id = it->first.as<std::string>();
+        YAML::Node rule_node = it->second;
+        RuleConfig rc;
+        if (rule_node["enabled"]) {
+            std::string v = to_lower(rule_node["enabled"].as<std::string>());
+            if (v == "true")
+                rc.enabled = true;
+            else if (v == "false")
+                rc.enabled = false;
+            else {
+                if (error)
+                    *error = "Invalid value for enabled in rule " + rule_id + ": " + v;
+                return false;
+            }
+        }
+        if (rule_node["severity"]) {
+            std::string v = to_lower(rule_node["severity"].as<std::string>());
+            if (v == "error" || v == "warning" || v == "info")
+                rc.severity = v;
+            else {
+                if (error)
+                    *error = "Invalid severity for rule " + rule_id + ": " + v;
+                return false;
+            }
+        }
+        config.rules[rule_id] = rc;
+    }
+    return true;
+}
+
+static void parse_waivers_node(const YAML::Node& waivers_node, Config& config) {
+    if (!waivers_node || !waivers_node.IsSequence())
+        return;
+    for (const auto& item : waivers_node) {
+        if (!item.IsMap())
+            continue;
+        WaiverConfig w;
+        if (item["rule"])
+            w.rule_id = item["rule"].as<std::string>();
+        if (item["source"])
+            w.source_reg = item["source"].as<std::string>();
+        if (item["dest"])
+            w.dest_reg = item["dest"].as<std::string>();
+        if (item["source_domain"])
+            w.source_domain = item["source_domain"].as<std::string>();
+        if (item["dest_domain"])
+            w.dest_domain = item["dest_domain"].as<std::string>();
+        if (item["justification"])
+            w.justification = item["justification"].as<std::string>();
+        if (item["owner"])
+            w.owner = item["owner"].as<std::string>();
+        if (item["expiry"])
+            w.expiry = item["expiry"].as<std::string>();
+        if (!w.rule_id.empty())
+            config.waivers.push_back(std::move(w));
+    }
+}
+
+static void parse_output_node(const YAML::Node& output_node, Config& config,
+                              std::string* error = nullptr) {
+    if (!output_node || !output_node.IsMap())
+        return;
+    if (output_node["format"])
+        config.output.format = output_node["format"].as<std::string>();
+    if (output_node["file"])
+        config.output.file = output_node["file"].as<std::string>();
+    if (output_node["suppress_reset_crossings"]) {
+        std::string v = to_lower(output_node["suppress_reset_crossings"].as<std::string>());
+        if (v == "true")
+            config.suppress_reset_crossings = true;
+        else if (v == "false")
+            config.suppress_reset_crossings = false;
+        else if (error)
+            *error = "Invalid value for suppress_reset_crossings: " + v;
+    }
+}
+
+static void parse_false_paths_node(const YAML::Node& fp_node, Config& config) {
+    if (!fp_node || !fp_node.IsSequence())
+        return;
+    for (const auto& item : fp_node) {
+        if (!item.IsMap())
+            continue;
+        FalsePathConfig fp;
+        if (item["source"])
+            fp.source_reg = item["source"].as<std::string>();
+        if (item["dest"])
+            fp.dest_reg = item["dest"].as<std::string>();
+        if (item["source_clock"] || item["from_clock"])
+            fp.source_clock = (item["source_clock"] ? item["source_clock"] : item["from_clock"])
+                                  .as<std::string>();
+        if (item["dest_clock"] || item["to_clock"])
+            fp.dest_clock =
+                (item["dest_clock"] ? item["dest_clock"] : item["to_clock"]).as<std::string>();
+        if (item["from_reg"])
+            fp.source_reg = item["from_reg"].as<std::string>();
+        if (item["to_reg"])
+            fp.dest_reg = item["to_reg"].as<std::string>();
+        if ((!fp.source_reg.empty() && !fp.dest_reg.empty()) ||
+            (!fp.source_clock.empty() && !fp.dest_clock.empty())) {
+            config.false_paths.push_back(std::move(fp));
+        }
+    }
+}
+
+static void parse_clock_groups_node(const YAML::Node& cg_node, Config& config) {
+    if (!cg_node || !cg_node.IsMap())
+        return;
+    for (auto it = cg_node.begin(); it != cg_node.end(); ++it) {
+        ClockGroupConfig grp;
+        grp.exclusive = true;
+        YAML::Node grp_node = it->second;
+        if (grp_node["clocks"]) {
+            if (grp_node["clocks"].IsSequence()) {
+                for (const auto& c : grp_node["clocks"]) {
+                    grp.clocks.push_back(c.as<std::string>());
+                }
+            } else if (grp_node["clocks"].IsScalar()) {
+                std::string val = grp_node["clocks"].as<std::string>();
+                std::istringstream ss(val);
+                std::string clk;
+                while (std::getline(ss, clk, ',')) {
+                    auto a = clk.find_first_not_of(" \t");
+                    auto b = clk.find_last_not_of(" \t");
+                    if (a != std::string::npos)
+                        grp.clocks.push_back(clk.substr(a, b - a + 1));
+                }
+            }
+        }
+        if (grp_node["exclusive"]) {
+            grp.exclusive = to_lower(grp_node["exclusive"].as<std::string>()) == "true";
+        }
+        config.clock_groups.push_back(std::move(grp));
+    }
+}
+
+static Config parse_yaml_content(const std::string& content, std::string* error) {
+    Config config;
+    YAML::Node root = YAML::Load(content);
+
+    if (root["rules"]) {
+        if (!parse_rules_node(root["rules"], config, error))
+            return Config();
+    }
+    if (root["waivers"])
+        parse_waivers_node(root["waivers"], config);
+    if (root["output"]) {
+        parse_output_node(root["output"], config, error);
+        if (error && !error->empty())
+            return Config();
+    }
+    if (root["false_paths"])
+        parse_false_paths_node(root["false_paths"], config);
+    if (root["clock_groups"])
+        parse_clock_groups_node(root["clock_groups"], config);
+
+    if (!config.output.format.empty() && config.output.format != "json" &&
+        config.output.format != "text" && config.output.format != "html") {
+        if (error)
+            *error = "Invalid output format: " + config.output.format;
+        return Config();
+    }
+    return config;
+}
+
+Config ConfigParser::parse_string(const std::string& content, std::string* error) const {
+    if (content.empty())
+        return Config();
+
+    // Rewrite compact comma-separated list items into proper nested YAML,
+    // then parse with yaml-cpp. Legacy parser is only a throw-only fallback.
+    std::string expanded = util::expand_compact_yaml(content);
+    try {
+        return parse_yaml_content(expanded, error);
+    } catch (const YAML::Exception&) {
+        // Fall through to legacy line-based parser for truly malformed input.
+    }
+
+    return parse_legacy(content, error);
 }
 
 Config ConfigParser::parse_file(const std::string& path, std::string* error) const {

@@ -58,6 +58,15 @@ const ClockDomain* DomainExtractor::find_domain(uint64_t register_id,
     return nullptr;
 }
 
+const ClockDomain* DomainExtractor::find_domain(
+    uint64_t register_id, const std::vector<ClockDomain>& domains,
+    const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
+    auto it = register_to_domain.find(register_id);
+    if (it == register_to_domain.end() || it->second >= domains.size())
+        return nullptr;
+    return &domains[it->second];
+}
+
 bool DomainExtractor::same_domain(uint64_t reg_a, uint64_t reg_b,
                                   const std::vector<ClockDomain>& domains) const {
     const ClockDomain* dom_a = find_domain(reg_a, domains);

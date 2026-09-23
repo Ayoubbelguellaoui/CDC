@@ -1,21 +1,17 @@
-#include "analysis/analyzer.h"
-#include "analysis/signoff.h"
-#include "analysis/trend.h"
-#include "config/config.h"
-#include "config/profile.h"
-#include "opencdc/opencdc.h"
-#include "opencdc/version.h"
-#include "report/html_reporter.h"
-#include "report/report.h"
-#include "report/sarif_reporter.h"
-#ifdef OPENCDC_ENABLE_LSP
-#include "lsp/server.h"
-#endif
 #include <exception>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include "analysis/analyzer.h"
+#include "analysis/trend.h"
+#include "config/config.h"
+#include "lsp/server.h"
+#include "opencdc/opencdc.h"
+#include "opencdc/version.h"
+#include "report/html_reporter.h"
+#include "report/report.h"
 
 namespace opencdc {
 
@@ -30,19 +26,15 @@ static void print_usage(const char* prog) {
         << "  --config <file>      Configuration file (YAML)\n"
         << "  --waiver <file>      Waiver file\n"
         << "  --constraints <file> Clock constraints file (SDC or YAML)\n"
-        << "  --format <fmt>       Output format: json, text, html, sarif (default: json)\n"
+        << "  --format <fmt>       Output format: json, text, html (default: json)\n"
         << "  --out <file>         Write report to file (default: stdout)\n"
         << "  --html-dir <dir>     HTML report output directory (default: opencdc_report)\n"
         << "  --disable-rule <id>  Disable a rule (e.g., CDC001). Repeatable.\n"
         << "  --severity <id>=<sev> Override rule severity (e.g., CDC003=error). Repeatable.\n"
         << "  --false-path <s:d>   False path (e.g., top.src:top.dst). Repeatable.\n"
-        << "  --signoff            Print signoff status; exit 1 on Fail/Incomplete/Error\n"
-        << "  --save-baseline <n>  Save current findings as baseline named <n>\n"
-        << "  --compare-baseline <f> Compare findings against baseline file <f>\n"
-        << "  --profile <name>     Use methodology profile "
-           "(default/strict/asic_signoff/fpga/ip_development/soc_integration)\n"
-        << "  --incdir <dir>       Add Verilog include directory. Repeatable.\n"
-        << "  --define <NAME[=V]>  Predefine a macro (value defaults to 1). Repeatable.\n"
+        << "  --jobs <n>           Number of threads for parallel analysis (0 = auto)\n"
+        << "  --save-baseline <f>  Save findings baseline to file for trend comparison\n"
+        << "  --compare-baseline <f> Compare current findings against saved baseline\n"
         << "  --verbose            Enable verbose output\n"
         << "\nlsp options:\n"
         << "  --top <module>       Top module name (required by analysis)\n"
@@ -99,22 +91,6 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.html_output_dir = argv[++i];
         } else if (arg == "--verbose") {
             opts.verbose = true;
-        } else if (arg == "--signoff") {
-            opts.signoff_mode = true;
-        } else if (arg == "--save-baseline" && i + 1 < argc) {
-            opts.save_baseline = argv[++i];
-        } else if (arg == "--compare-baseline" && i + 1 < argc) {
-            opts.compare_baseline = argv[++i];
-        } else if (arg == "--profile" && i + 1 < argc) {
-            opts.profile = argv[++i];
-        } else if ((arg == "--incdir" || arg == "+incdir") && i + 1 < argc) {
-            opts.include_dirs.push_back(argv[++i]);
-        } else if ((arg == "--define" || arg == "+define") && i + 1 < argc) {
-            opts.defines.push_back(argv[++i]);
-        } else if (arg.rfind("+incdir+", 0) == 0) {
-            opts.include_dirs.push_back(arg.substr(8));
-        } else if (arg.rfind("+define+", 0) == 0) {
-            opts.defines.push_back(arg.substr(8));
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
@@ -125,6 +101,22 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.disable_rules.push_back(argv[++i]);
         } else if (arg == "--severity" && i + 1 < argc) {
             opts.severity_overrides.push_back(argv[++i]);
+        } else if (arg == "--jobs" && i + 1 < argc) {
+            try {
+                int n = std::stoi(argv[++i]);
+                if (n < 0) {
+                    std::cerr << "Error: --jobs must be >= 0\n";
+                    return -1;
+                }
+                opts.num_threads = static_cast<size_t>(n);
+            } catch (const std::exception&) {
+                std::cerr << "Error: --jobs requires a valid integer\n";
+                return -1;
+            }
+        } else if (arg == "--save-baseline" && i + 1 < argc) {
+            opts.save_baseline = argv[++i];
+        } else if (arg == "--compare-baseline" && i + 1 < argc) {
+            opts.compare_baseline = argv[++i];
         } else if (arg == "--false-path" && i + 1 < argc) {
             std::string fp = argv[++i];
             auto colon = fp.find(':');
@@ -162,7 +154,6 @@ int run(int argc, const char* argv[]) {
     // Handle lsp subcommand before the shared parse_args path (which requires
     // input files — irrelevant for the LSP which receives content over the socket).
     if (argc >= 2 && std::string(argv[1]) == "lsp") {
-#ifdef OPENCDC_ENABLE_LSP
         int port = 2087;
         std::string top_module;
         std::string config_path;
@@ -205,10 +196,6 @@ int run(int argc, const char* argv[]) {
         std::cerr << "OpenCDC LSP server listening on port " << server.bound_port() << "\n";
         server.wait();
         return static_cast<int>(ExitCode::OK);
-#else
-        std::cerr << "Error: OpenCDC was built without LSP support.\n";
-        return static_cast<int>(ExitCode::INPUT_ERROR);
-#endif
     }
 
     CheckOptions opts;
@@ -219,8 +206,7 @@ int run(int argc, const char* argv[]) {
                            : static_cast<int>(ExitCode::INPUT_ERROR);
     }
 
-    if (opts.format != "json" && opts.format != "text" && opts.format != "html" &&
-        opts.format != "sarif") {
+    if (opts.format != "json" && opts.format != "text" && opts.format != "html") {
         std::cerr << "Error: unsupported output format: " << opts.format << "\n";
         return static_cast<int>(ExitCode::INPUT_ERROR);
     }
@@ -261,13 +247,6 @@ int run(int argc, const char* argv[]) {
         std::cerr << "\n";
     }
 
-    if (!opts.profile.empty() && !config::is_valid_profile(opts.profile)) {
-        std::cerr << "Error: unknown profile '" << opts.profile << "'\n";
-        std::cerr << "Valid profiles: default, strict, asic_signoff, fpga, ip_development, "
-                     "soc_integration\n";
-        return static_cast<int>(ExitCode::INPUT_ERROR);
-    }
-
     analysis::AnalysisRequest request;
     request.input_files = opts.input_files;
     request.top_module = opts.top_module;
@@ -277,12 +256,10 @@ int run(int argc, const char* argv[]) {
     request.false_paths = opts.false_paths;
     request.disable_rules = opts.disable_rules;
     request.severity_overrides = opts.severity_overrides;
+    request.num_threads = opts.num_threads;
     if (have_parsed_config) {
         request.config = std::move(parsed_cfg);
     }
-    request.profile = opts.profile;
-    request.include_dirs = opts.include_dirs;
-    request.defines = opts.defines;
 
     analysis::Analyzer analyzer;
     analysis::AnalysisResult analysis = analyzer.run(request);
@@ -312,6 +289,36 @@ int run(int argc, const char* argv[]) {
         std::cerr << "No CDC crossings detected.\n";
     }
 
+    // Baseline comparison: report diffs and exit.
+    if (!opts.compare_baseline.empty()) {
+        analysis::TrendAnalyzer trend;
+        auto report = trend.compare(opts.compare_baseline, findings);
+        std::cerr << "Baseline comparison (" << opts.compare_baseline << "):\n"
+                  << "  Current: " << report.total_current
+                  << "  Baseline: " << report.total_baseline << "\n"
+                  << "  Added: " << report.new_findings << "  Fixed: " << report.fixed_findings
+                  << "  Persistent: " << report.persistent_findings << "\n";
+        for (const auto& f : report.added) {
+            std::cerr << "  + " << f.rule_id << " [" << f.source_reg_name << " -> "
+                      << f.dest_reg_name << "]\n";
+        }
+        for (const auto& f : report.removed) {
+            std::cerr << "  - " << f.rule_id << " [" << f.source_reg_name << " -> "
+                      << f.dest_reg_name << "]\n";
+        }
+        return report.regressed() ? static_cast<int>(ExitCode::FINDINGS)
+                                  : static_cast<int>(ExitCode::OK);
+    }
+
+    // Save baseline for future comparison.
+    if (!opts.save_baseline.empty()) {
+        analysis::TrendAnalyzer trend;
+        trend.save_baseline(opts.top_module, findings, opts.save_baseline);
+        if (opts.verbose) {
+            std::cerr << "Baseline saved to " << opts.save_baseline << "\n";
+        }
+    }
+
     report::Reporter reporter;
 
     std::ofstream out_file;
@@ -326,11 +333,8 @@ int run(int argc, const char* argv[]) {
     }
 
     if (opts.format == "text") {
-        reporter.report_text(findings, *out, analysis.analysis_status);
-        reporter.report_summary(findings, std::cerr, analysis.analysis_status);
-    } else if (opts.format == "sarif") {
-        report::SarifReporter sarif_reporter;
-        sarif_reporter.report(findings, analysis.coverage, analysis.signoff, *out);
+        reporter.report_text(findings, *out);
+        reporter.report_summary(findings, std::cerr);
     } else if (opts.format == "html") {
         report::HtmlReporter html_reporter;
         report::HtmlReportOptions html_opts;
@@ -338,8 +342,7 @@ int run(int argc, const char* argv[]) {
             html_opts.output_dir = opts.html_output_dir;
         }
         try {
-            html_reporter.generate_report(findings, analysis.coverage, analysis.signoff, html_opts,
-                                          analysis.analysis_status);
+            html_reporter.generate_report(findings, html_opts);
         } catch (const std::exception& e) {
             std::cerr << "Error: could not generate HTML report: " << e.what() << "\n";
             return static_cast<int>(ExitCode::INPUT_ERROR);
@@ -348,58 +351,7 @@ int run(int argc, const char* argv[]) {
             std::cerr << "HTML report generated in " << html_opts.output_dir << "/\n";
         }
     } else {
-        reporter.report_json(findings, analysis.coverage, analysis.signoff, *out,
-                             analysis.analysis_status);
-    }
-
-    if (opts.signoff_mode) {
-        std::cerr << "Signoff: " << analysis::signoff_status_name(analysis.signoff.status) << " — "
-                  << analysis.signoff.reason << "\n";
-        std::cerr << "Coverage: " << analysis.coverage.counts.total << " total, "
-                  << analysis.coverage.counts.errors << " errors, "
-                  << analysis.coverage.counts.warnings << " warnings, "
-                  << analysis.coverage.counts.verified_safe << " verified safe, "
-                  << analysis.coverage.counts.waived << " waived\n";
-    }
-
-    // Baseline save
-    if (!opts.save_baseline.empty()) {
-        analysis::TrendAnalyzer trend;
-        trend.save_baseline(opts.save_baseline, findings, opts.save_baseline + ".baseline.json");
-        if (opts.verbose) {
-            std::cerr << "Baseline '" << opts.save_baseline << "' saved.\n";
-        }
-    }
-
-    // Baseline comparison
-    if (!opts.compare_baseline.empty()) {
-        analysis::TrendAnalyzer trend;
-        try {
-            auto trend_result = trend.compare(opts.compare_baseline, findings);
-            std::cerr << "Baseline comparison (" << opts.compare_baseline << "):\n"
-                      << "  baseline=" << trend_result.total_baseline
-                      << " current=" << trend_result.total_current
-                      << " added=" << trend_result.new_findings
-                      << " fixed=" << trend_result.fixed_findings
-                      << " unchanged=" << trend_result.persistent_findings << "\n";
-            if (trend_result.improved())
-                std::cerr << "  Status: IMPROVED\n";
-            else if (trend_result.regressed())
-                std::cerr << "  Status: REGRESSED\n";
-            else
-                std::cerr << "  Status: STABLE\n";
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: could not load baseline: " << e.what() << "\n";
-        }
-    }
-
-    if (opts.signoff_mode) {
-        using analysis::SignoffStatus;
-        if (analysis.signoff.status == SignoffStatus::Pass ||
-            analysis.signoff.status == SignoffStatus::PassWithWaivers) {
-            return static_cast<int>(ExitCode::OK);
-        }
-        return static_cast<int>(ExitCode::FINDINGS);
+        reporter.report_json(findings, *out);
     }
 
     return reporter.has_unsuppressed_errors(findings) ? static_cast<int>(ExitCode::FINDINGS)

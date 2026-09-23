@@ -2,8 +2,6 @@
 
 #include <algorithm>
 
-#include "clock/relationship.h"
-
 namespace opencdc::report {
 
 std::string Reporter::escape_json(const std::string& s) {
@@ -46,39 +44,12 @@ std::string Reporter::escape_json(const std::string& s) {
     return out;
 }
 
-static const char* multi_bit_type_name(cdc::MultiBitCrossingType t) {
-    switch (t) {
-        case cdc::MultiBitCrossingType::Raw:
-            return "raw";
-        case cdc::MultiBitCrossingType::Synchronized:
-            return "synchronized";
-        case cdc::MultiBitCrossingType::StaticData:
-            return "static_data";
-        case cdc::MultiBitCrossingType::HandshakeControlled:
-            return "handshake";
-        case cdc::MultiBitCrossingType::GrayCoded:
-            return "gray_coded";
-        case cdc::MultiBitCrossingType::AsyncFifo:
-            return "async_fifo";
-        default:
-            return nullptr;
-    }
-}
-
 ReportCounts Reporter::count(const std::vector<cdc::Finding>& findings) const {
     ReportCounts c;
     c.total = findings.size();
     for (const auto& f : findings) {
         if (f.waived) {
             c.waived++;
-            continue;
-        }
-        if (f.suppressed_by_false_path) {
-            c.suppressed++;
-            continue;
-        }
-        if (f.suppressed_by_multicycle) {
-            c.multicycle_suppressed++;
             continue;
         }
         if (f.severity == "error")
@@ -97,194 +68,59 @@ bool Reporter::has_unsuppressed_errors(const std::vector<cdc::Finding>& findings
     return false;
 }
 
-void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostream& os,
-                           const std::string& analysis_status) const {
+void Reporter::report_json(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
     auto sorted = sorted_findings(findings);
-    os << "{\n"
-       << "  \"analysis_status\": \"" << escape_json(analysis_status) << "\",\n"
-       << "  \"finding_count\": " << sorted.size() << ",\n"
-       << "  \"findings\": [\n";
+    os << "[\n";
     for (size_t i = 0; i < sorted.size(); ++i) {
         const auto& f = sorted[i];
-        os << "    {\n"
-           << "      \"rule_id\": \"" << escape_json(f.rule_id) << "\",\n"
-           << "      \"rule_name\": \"" << escape_json(f.rule_name) << "\",\n"
-           << "      \"severity\": \"" << escape_json(f.severity) << "\",\n"
-           << "      \"waived\": " << (f.waived ? "true" : "false") << ",\n";
+        os << "  {\n"
+           << "    \"rule_id\": \"" << escape_json(f.rule_id) << "\",\n"
+           << "    \"rule_name\": \"" << escape_json(f.rule_name) << "\",\n"
+           << "    \"severity\": \"" << escape_json(f.severity) << "\",\n"
+           << "    \"waived\": " << (f.waived ? "true" : "false") << ",\n";
 
         if (f.waived) {
-            os << "      \"waiver_justification\": \"" << escape_json(f.waiver_justification)
+            os << "    \"waiver_justification\": \"" << escape_json(f.waiver_justification)
                << "\",\n"
-               << "      \"waiver_owner\": \"" << escape_json(f.waiver_owner) << "\",\n";
-            if (!f.waiver_ticket.empty()) {
-                os << "      \"waiver_ticket\": \"" << escape_json(f.waiver_ticket) << "\",\n";
-            }
+               << "    \"waiver_owner\": \"" << escape_json(f.waiver_owner) << "\",\n";
         }
 
-        os << "      \"source\": \"" << escape_json(f.source_reg_name) << "\",\n"
-           << "      \"source_domain\": \"" << escape_json(f.source_domain) << "\",\n"
-           << "      \"dest\": \"" << escape_json(f.dest_reg_name) << "\",\n"
-           << "      \"dest_domain\": \"" << escape_json(f.dest_domain) << "\",\n"
-           << "      \"bus_width\": " << f.bus_width << ",\n"
-           << "      \"reason\": \"" << escape_json(f.reason) << "\",\n"
-           << "      \"is_gray_coded\": " << (f.is_gray_coded ? "true" : "false") << ",\n"
-           << "      \"has_handshake\": " << (f.has_handshake ? "true" : "false") << ",\n"
-           << "      \"source_module_path\": \"" << escape_json(f.source_module_path) << "\",\n"
-           << "      \"dest_module_path\": \"" << escape_json(f.dest_module_path) << "\",\n"
-           << "      \"crosses_module_boundary\": "
-           << (f.crosses_module_boundary ? "true" : "false") << ",\n"
-           << "      \"clock_relationship\": \""
-           << escape_json(clock::clock_relationship_name(f.clock_relationship)) << "\",\n";
-
-        if (f.safety_status != cdc::SafetyStatus::Unknown) {
-            const char* status_str = "unknown";
-            switch (f.safety_status) {
-                case cdc::SafetyStatus::Candidate:
-                    status_str = "candidate";
-                    break;
-                case cdc::SafetyStatus::VerifiedSafe:
-                    status_str = "verified_safe";
-                    break;
-                case cdc::SafetyStatus::VerifiedUnsafe:
-                    status_str = "verified_unsafe";
-                    break;
-                case cdc::SafetyStatus::Ambiguous:
-                    status_str = "ambiguous";
-                    break;
-                default:
-                    break;
-            }
-            os << "      \"safety_status\": \"" << status_str << "\",\n";
-            if (!f.safety_provenance.empty()) {
-                os << "      \"safety_provenance\": \"" << escape_json(f.safety_provenance)
-                   << "\",\n";
-            }
-        }
+        os << "    \"source\": \"" << escape_json(f.source_reg_name) << "\",\n"
+           << "    \"source_domain\": \"" << escape_json(f.source_domain) << "\",\n"
+           << "    \"dest\": \"" << escape_json(f.dest_reg_name) << "\",\n"
+           << "    \"dest_domain\": \"" << escape_json(f.dest_domain) << "\",\n"
+           << "    \"bus_width\": " << f.bus_width << ",\n"
+           << "    \"reason\": \"" << escape_json(f.reason) << "\",\n";
 
         if (f.has_multicycle_exception) {
-            os << "      \"multicycle_cycles\": " << f.multicycle_cycles << ",\n"
-               << "      \"constraint_source\": \"" << escape_json(f.constraint_source) << "\",\n";
+            os << "    \"multicycle_cycles\": " << f.multicycle_cycles << ",\n"
+               << "    \"constraint_source\": \"" << escape_json(f.constraint_source) << "\",\n";
         }
 
-        if (f.suppressed_by_false_path) {
-            os << "      \"suppressed_by_false_path\": true,\n"
-               << "      \"false_path_source\": \"" << escape_json(f.false_path_source) << "\",\n";
-        }
-
-        if (f.suppressed_by_multicycle) {
-            os << "      \"suppressed_by_multicycle\": true,\n"
-               << "      \"multicycle_source\": \"" << escape_json(f.multicycle_source) << "\",\n";
-        }
-
-        if (f.multi_bit_type != cdc::MultiBitCrossingType::None) {
-            const char* mbt = "unknown";
-            switch (f.multi_bit_type) {
-                case cdc::MultiBitCrossingType::Raw:
-                    mbt = "raw";
-                    break;
-                case cdc::MultiBitCrossingType::Synchronized:
-                    mbt = "synchronized";
-                    break;
-                case cdc::MultiBitCrossingType::StaticData:
-                    mbt = "static_data";
-                    break;
-                case cdc::MultiBitCrossingType::HandshakeControlled:
-                    mbt = "handshake_controlled";
-                    break;
-                case cdc::MultiBitCrossingType::GrayCoded:
-                    mbt = "gray_coded";
-                    break;
-                case cdc::MultiBitCrossingType::AsyncFifo:
-                    mbt = "async_fifo";
-                    break;
-                default:
-                    break;
-            }
-            os << "      \"multi_bit_type\": \"" << mbt << "\",\n";
-        }
-
-        if (!f.evidence_chain.empty()) {
-            os << "      \"evidence_chain\": [\n";
-            for (size_t j = 0; j < f.evidence_chain.size(); ++j) {
-                const auto& step = f.evidence_chain[j];
-                os << "        {\n"
-                   << "          \"step_type\": \"" << escape_json(step.step_type) << "\",\n"
-                   << "          \"description\": \"" << escape_json(step.description) << "\",\n"
-                   << "          \"result\": \"" << escape_json(step.result) << "\"\n"
-                   << "        }";
-                if (j + 1 < f.evidence_chain.size())
-                    os << ",";
-                os << "\n";
-            }
-            os << "      ],\n";
-        }
-
-        os << "      \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
-           << "      \"line\": " << f.source_loc.line << "\n"
-           << "    }";
+        os << "    \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
+           << "    \"line\": " << f.source_loc.line << "\n"
+           << "  }";
 
         if (i + 1 < sorted.size())
             os << ",";
         os << "\n";
     }
-    os << "  ]\n"
-       << "}\n";
+    os << "]\n";
 }
 
-void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostream& os,
-                           const std::string& analysis_status) const {
+void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
     auto sorted = sorted_findings(findings);
-    os << "Analysis status: " << analysis_status << "\n";
-
     for (const auto& f : sorted) {
-        // clang-format off
         os << f.severity << " [" << f.rule_id << "] " << f.source_reg_name << " ("
            << f.source_domain << ")"
            << " -> " << f.dest_reg_name << " (" << f.dest_domain << ")";
-        // clang-format on
 
         if (f.waived)
             os << " [WAIVED]";
-        if (f.suppressed_by_false_path)
-            os << " [FALSE_PATH]";
-        if (f.suppressed_by_multicycle)
-            os << " [MC:" << f.multicycle_cycles << "x suppressed]";
-        else if (f.has_multicycle_exception)
+        if (f.has_multicycle_exception)
             os << " [MC:" << f.multicycle_cycles << "x]";
-        if (f.clock_relationship != clock::ClockRelationship::Unknown) {
-            os << " [clock:" << clock::clock_relationship_name(f.clock_relationship) << "]";
-        }
-        if (f.multi_bit_type != cdc::MultiBitCrossingType::None) {
-            const char* mbt_name = multi_bit_type_name(f.multi_bit_type);
-            if (mbt_name)
-                os << " [" << mbt_name << "]";
-        }
-        if (f.safety_status != cdc::SafetyStatus::Unknown) {
-            const char* tag = "";
-            switch (f.safety_status) {
-                case cdc::SafetyStatus::Candidate:
-                    tag = "CANDIDATE";
-                    break;
-                case cdc::SafetyStatus::VerifiedSafe:
-                    tag = "SAFE";
-                    break;
-                case cdc::SafetyStatus::VerifiedUnsafe:
-                    tag = "UNSAFE";
-                    break;
-                case cdc::SafetyStatus::Ambiguous:
-                    tag = "AMBIGUOUS";
-                    break;
-                default:
-                    break;
-            }
-            os << " [" << tag << "]";
-        }
 
         os << "\n  " << f.reason << "\n";
-
-        if (!f.safety_provenance.empty()) {
-            os << "  provenance: " << f.safety_provenance << "\n";
-        }
 
         if (!f.source_loc.file.empty()) {
             os << "  at " << f.source_loc.file << ":" << f.source_loc.line << "\n";
@@ -294,37 +130,24 @@ void Reporter::report_text(const std::vector<cdc::Finding>& findings, std::ostre
             os << "  waiver: " << f.waiver_justification;
             if (!f.waiver_owner.empty())
                 os << " (" << f.waiver_owner << ")";
-            if (!f.waiver_ticket.empty())
-                os << " [" << f.waiver_ticket << "]";
             os << "\n";
         }
     }
-
-    if (analysis_status == "incomplete") {
-        os << "\nWARNING: Analysis incomplete — some crossings may be missed due to path "
-              "traversal truncation.\n";
-    }
 }
 
-void Reporter::report_summary(const std::vector<cdc::Finding>& findings, std::ostream& os,
-                              const std::string& analysis_status) const {
+void Reporter::report_summary(const std::vector<cdc::Finding>& findings, std::ostream& os) const {
     auto c = count(findings);
-    os << "analysis_status=" << analysis_status << " ";
     if (c.total == 0) {
-        os << "findings=0\n";
+        os << "No CDC findings.\n";
         return;
     }
-    os << "findings=" << c.total;
+    os << c.total << " finding(s)";
     if (c.errors > 0)
-        os << " errors=" << c.errors;
+        os << ", " << c.errors << " error(s)";
     if (c.warnings > 0)
-        os << " warnings=" << c.warnings;
+        os << ", " << c.warnings << " warning(s)";
     if (c.waived > 0)
-        os << " waived=" << c.waived;
-    if (c.suppressed > 0)
-        os << " suppressed=" << c.suppressed;
-    if (c.multicycle_suppressed > 0)
-        os << " mc_suppressed=" << c.multicycle_suppressed;
+        os << ", " << c.waived << " waived";
     os << "\n";
 }
 
@@ -343,160 +166,6 @@ std::vector<cdc::Finding> Reporter::sorted_findings(const std::vector<cdc::Findi
                          return a.dest_reg_name < b.dest_reg_name;
                      });
     return sorted;
-}
-
-void Reporter::report_json(const std::vector<cdc::Finding>& findings,
-                           const analysis::CoverageResult& coverage,
-                           const analysis::SignoffResult& signoff, std::ostream& os,
-                           const std::string& analysis_status) const {
-    auto sorted = sorted_findings(findings);
-    os << "{\n"
-       << "  \"analysis_status\": \"" << escape_json(analysis_status) << "\",\n"
-       << "  \"finding_count\": " << sorted.size() << ",\n";
-
-    // Coverage
-    os << "  \"coverage\": {\n"
-       << "    \"total\": " << coverage.counts.total << ",\n"
-       << "    \"errors\": " << coverage.counts.errors << ",\n"
-       << "    \"warnings\": " << coverage.counts.warnings << ",\n"
-       << "    \"verified_safe\": " << coverage.counts.verified_safe << ",\n"
-       << "    \"verified_unsafe\": " << coverage.counts.verified_unsafe << ",\n"
-       << "    \"waived\": " << coverage.counts.waived << ",\n"
-       << "    \"suppressed\": " << coverage.counts.suppressed << "\n"
-       << "  },\n";
-
-    // Signoff
-    os << "  \"signoff\": {\n"
-       << "    \"status\": \"" << analysis::signoff_status_name(signoff.status) << "\",\n"
-       << "    \"reason\": \"" << escape_json(signoff.reason) << "\"\n"
-       << "  },\n";
-
-    os << "  \"findings\": [\n";
-    for (size_t i = 0; i < sorted.size(); ++i) {
-        const auto& f = sorted[i];
-        os << "    {\n"
-           << "      \"rule_id\": \"" << escape_json(f.rule_id) << "\",\n"
-           << "      \"rule_name\": \"" << escape_json(f.rule_name) << "\",\n"
-           << "      \"severity\": \"" << escape_json(f.severity) << "\",\n"
-           << "      \"waived\": " << (f.waived ? "true" : "false") << ",\n";
-
-        if (f.waived) {
-            os << "      \"waiver_justification\": \"" << escape_json(f.waiver_justification)
-               << "\",\n"
-               << "      \"waiver_owner\": \"" << escape_json(f.waiver_owner) << "\",\n";
-            if (!f.waiver_ticket.empty()) {
-                os << "      \"waiver_ticket\": \"" << escape_json(f.waiver_ticket) << "\",\n";
-            }
-        }
-
-        os << "      \"source\": \"" << escape_json(f.source_reg_name) << "\",\n"
-           << "      \"source_domain\": \"" << escape_json(f.source_domain) << "\",\n"
-           << "      \"dest\": \"" << escape_json(f.dest_reg_name) << "\",\n"
-           << "      \"dest_domain\": \"" << escape_json(f.dest_domain) << "\",\n"
-           << "      \"bus_width\": " << f.bus_width << ",\n"
-           << "      \"reason\": \"" << escape_json(f.reason) << "\",\n"
-           << "      \"is_gray_coded\": " << (f.is_gray_coded ? "true" : "false") << ",\n"
-           << "      \"has_handshake\": " << (f.has_handshake ? "true" : "false") << ",\n"
-           << "      \"source_module_path\": \"" << escape_json(f.source_module_path) << "\",\n"
-           << "      \"dest_module_path\": \"" << escape_json(f.dest_module_path) << "\",\n"
-           << "      \"crosses_module_boundary\": "
-           << (f.crosses_module_boundary ? "true" : "false") << ",\n"
-           << "      \"clock_relationship\": \""
-           << escape_json(clock::clock_relationship_name(f.clock_relationship)) << "\",\n";
-
-        if (f.safety_status != cdc::SafetyStatus::Unknown) {
-            const char* status_str = "unknown";
-            switch (f.safety_status) {
-                case cdc::SafetyStatus::Candidate:
-                    status_str = "candidate";
-                    break;
-                case cdc::SafetyStatus::VerifiedSafe:
-                    status_str = "verified_safe";
-                    break;
-                case cdc::SafetyStatus::VerifiedUnsafe:
-                    status_str = "verified_unsafe";
-                    break;
-                case cdc::SafetyStatus::Ambiguous:
-                    status_str = "ambiguous";
-                    break;
-                default:
-                    break;
-            }
-            os << "      \"safety_status\": \"" << status_str << "\",\n";
-            if (!f.safety_provenance.empty()) {
-                os << "      \"safety_provenance\": \"" << escape_json(f.safety_provenance)
-                   << "\",\n";
-            }
-        }
-
-        if (f.has_multicycle_exception) {
-            os << "      \"multicycle_cycles\": " << f.multicycle_cycles << ",\n"
-               << "      \"constraint_source\": \"" << escape_json(f.constraint_source) << "\",\n";
-        }
-
-        if (f.suppressed_by_false_path) {
-            os << "      \"suppressed_by_false_path\": true,\n"
-               << "      \"false_path_source\": \"" << escape_json(f.false_path_source) << "\",\n";
-        }
-
-        if (f.suppressed_by_multicycle) {
-            os << "      \"suppressed_by_multicycle\": true,\n"
-               << "      \"multicycle_source\": \"" << escape_json(f.multicycle_source) << "\",\n";
-        }
-
-        if (f.multi_bit_type != cdc::MultiBitCrossingType::None) {
-            const char* mbt = "unknown";
-            switch (f.multi_bit_type) {
-                case cdc::MultiBitCrossingType::Raw:
-                    mbt = "raw";
-                    break;
-                case cdc::MultiBitCrossingType::Synchronized:
-                    mbt = "synchronized";
-                    break;
-                case cdc::MultiBitCrossingType::StaticData:
-                    mbt = "static_data";
-                    break;
-                case cdc::MultiBitCrossingType::HandshakeControlled:
-                    mbt = "handshake_controlled";
-                    break;
-                case cdc::MultiBitCrossingType::GrayCoded:
-                    mbt = "gray_coded";
-                    break;
-                case cdc::MultiBitCrossingType::AsyncFifo:
-                    mbt = "async_fifo";
-                    break;
-                default:
-                    break;
-            }
-            os << "      \"multi_bit_type\": \"" << mbt << "\",\n";
-        }
-
-        if (!f.evidence_chain.empty()) {
-            os << "      \"evidence_chain\": [\n";
-            for (size_t j = 0; j < f.evidence_chain.size(); ++j) {
-                const auto& step = f.evidence_chain[j];
-                os << "        {\n"
-                   << "          \"step_type\": \"" << escape_json(step.step_type) << "\",\n"
-                   << "          \"description\": \"" << escape_json(step.description) << "\",\n"
-                   << "          \"result\": \"" << escape_json(step.result) << "\"\n"
-                   << "        }";
-                if (j + 1 < f.evidence_chain.size())
-                    os << ",";
-                os << "\n";
-            }
-            os << "      ],\n";
-        }
-
-        os << "      \"file\": \"" << escape_json(f.source_loc.file) << "\",\n"
-           << "      \"line\": " << f.source_loc.line << "\n"
-           << "    }";
-
-        if (i + 1 < sorted.size())
-            os << ",";
-        os << "\n";
-    }
-    os << "  ]\n"
-       << "}\n";
 }
 
 }  // namespace opencdc::report

@@ -17,15 +17,12 @@ struct CheckOptions {
     std::string constraints_path;
     std::string html_output_dir;
     bool verbose = false;
-    bool signoff_mode = false;
+    size_t num_threads = 0;
+    std::string save_baseline;
+    std::string compare_baseline;
     std::vector<std::string> disable_rules;
     std::vector<std::string> severity_overrides;
     std::vector<std::pair<std::string, std::string>> false_paths;
-    std::string save_baseline;
-    std::string compare_baseline;
-    std::string profile;
-    std::vector<std::string> include_dirs;
-    std::vector<std::string> defines;
 };
 
 enum class ExitCode : int {

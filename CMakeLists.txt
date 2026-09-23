@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(opencdc VERSION 0.5.0 LANGUAGES CXX)
+project(opencdc VERSION 0.4.1 LANGUAGES CXX)
 
 # Generate version.h from the project version — single source of truth.
 configure_file(cmake/version.h.in ${CMAKE_BINARY_DIR}/generated/opencdc/version.h @ONLY)
@@ -43,6 +43,16 @@ FetchContent_Declare(
     GIT_SHALLOW    ON
 )
 FetchContent_MakeAvailable(nlohmann_json)
+
+# yaml-cpp — configuration and constraints file parsing
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
+FetchContent_Declare(
+    yaml-cpp
+    GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+    GIT_TAG        0.8.0
+    GIT_SHALLOW    ON
+)
+FetchContent_MakeAvailable(yaml-cpp)
 
 add_subdirectory(src)
 

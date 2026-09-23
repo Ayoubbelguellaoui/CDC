@@ -1,15 +1,16 @@
+#include <gtest/gtest.h>
+
 #include "cdc/crossing.h"
+#include "clock/domain.h"
 #include "config/config.h"
 #include "ir/graph.h"
-#include "clock/domain.h"
-#include <gtest/gtest.h>
 
 using namespace opencdc::ir;
 using namespace opencdc::cdc;
 using namespace opencdc::clock;
 
 class Cdc007AdversarialTest : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     DomainExtractor domain_extractor;
     CrossingAnalyzer crossing_analyzer;
@@ -69,7 +70,8 @@ TEST_F(Cdc007AdversarialTest, BothNoResetTriggersCdc007) {
 
     bool found = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC007") found = true;
+        if (f.rule_id == "CDC007")
+            found = true;
     }
     EXPECT_TRUE(found);
 }
@@ -110,8 +112,7 @@ TEST_F(Cdc007AdversarialTest, StrictModeBothUnresetIsWarning) {
         if (f.rule_id == "CDC007" && f.severity == "warning")
             found_warning = true;
     }
-    EXPECT_TRUE(found_warning)
-        << "CDC007 should be warning when strict reset policy is enabled";
+    EXPECT_TRUE(found_warning) << "CDC007 should be warning when strict reset policy is enabled";
 }
 
 TEST_F(Cdc007AdversarialTest, DefaultModeBothUnresetIsInfo) {
@@ -131,8 +132,7 @@ TEST_F(Cdc007AdversarialTest, DefaultModeBothUnresetIsInfo) {
             found_warning = true;
     }
     EXPECT_TRUE(found_info) << "CDC007 should be info by default (advisory)";
-    EXPECT_FALSE(found_warning)
-        << "CDC007 should not be warning without strict reset policy";
+    EXPECT_FALSE(found_warning) << "CDC007 should not be warning without strict reset policy";
 }
 
 TEST_F(Cdc007AdversarialTest, StrictModeMixedResetStaysInfo) {
@@ -157,8 +157,7 @@ TEST_F(Cdc007AdversarialTest, StrictModeMixedResetStaysInfo) {
         if (f.rule_id == "CDC007" && f.severity == "warning")
             found_warning = true;
     }
-    EXPECT_TRUE(found_info)
-        << "CDC007 mixed-reset should stay info even with strict policy";
+    EXPECT_TRUE(found_info) << "CDC007 mixed-reset should stay info even with strict policy";
     EXPECT_FALSE(found_warning)
         << "CDC007 mixed-reset should not become warning under strict policy";
 }

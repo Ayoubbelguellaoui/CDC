@@ -1,12 +1,14 @@
 #include "clock/constraints.h"
+
+#include <gtest/gtest.h>
+
 #include "clock/relationship.h"
 #include "clock/resolve.h"
-#include <gtest/gtest.h>
 
 using namespace opencdc::clock;
 
 class ConstraintsTest : public ::testing::Test {
-protected:
+   protected:
     ConstraintsParser parser;
 };
 
@@ -21,9 +23,9 @@ clocks:
     divider: 2
     master_clock: clk_core
 )";
-    
+
     auto constraints = parser.parse_yaml(yaml);
-    
+
     EXPECT_EQ(constraints.clocks.size(), 2u);
     EXPECT_EQ(constraints.clocks[0].name, "clk_core");
     EXPECT_EQ(constraints.clocks[0].frequency_mhz, 100.0);
@@ -102,39 +104,39 @@ clock_groups:
 
 TEST_F(ConstraintsTest, IsFalsePath) {
     ClockConstraints constraints;
-    
+
     FalsePath fp;
     fp.from_clock = "clk_core";
     fp.to_clock = "clk_test";
     constraints.false_paths.push_back(fp);
-    
+
     EXPECT_TRUE(constraints.is_false_path("clk_core", "clk_test"));
     EXPECT_FALSE(constraints.is_false_path("clk_core", "clk_periph"));
 }
 
 TEST_F(ConstraintsTest, IsAsynchronous) {
     ClockConstraints constraints;
-    
+
     ClockGroup group1;
     group1.name = "group_a";
     group1.clocks = {"clk_core"};
     group1.asynchronous = true;
     group1.set_id = 0;
     constraints.clock_groups.push_back(group1);
-    
+
     ClockGroup group2;
     group2.name = "group_b";
     group2.clocks = {"clk_periph"};
     group2.asynchronous = true;
     group2.set_id = 0;
     constraints.clock_groups.push_back(group2);
-    
+
     EXPECT_TRUE(constraints.is_asynchronous("clk_core", "clk_periph"));
     EXPECT_FALSE(constraints.is_asynchronous("clk_core", "clk_test"));
 }
 
 class SdcReaderTest : public ::testing::Test {
-protected:
+   protected:
     SdcReader reader;
 };
 
@@ -143,9 +145,9 @@ TEST_F(SdcReaderTest, ParseCreateClock) {
 create_clock -name clk_core -period 10.0 [get_ports clk_core]
 create_clock -name clk_periph -period 20.0
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.clocks.size(), 2u);
     EXPECT_EQ(constraints.clocks[0].name, "clk_core");
     EXPECT_EQ(constraints.clocks[0].period_ns, 10.0);
@@ -156,9 +158,9 @@ TEST_F(SdcReaderTest, ParseGeneratedClock) {
     std::string sdc = R"(
 create_generated_clock -name clk_div2 -master_clock clk_core -divide_by 2 [get_pins pll/clk_out]
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.clocks.size(), 1u);
     EXPECT_TRUE(constraints.clocks[0].is_generated);
     EXPECT_EQ(constraints.clocks[0].master_clock, "clk_core");
@@ -169,9 +171,9 @@ TEST_F(SdcReaderTest, ParseFalsePath) {
     std::string sdc = R"(
 set_false_path -from [get_clocks clk_core] -to [get_clocks clk_test]
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.false_paths.size(), 1u);
     EXPECT_EQ(constraints.false_paths[0].from_clock, "clk_core");
     EXPECT_EQ(constraints.false_paths[0].to_clock, "clk_test");
@@ -181,9 +183,9 @@ TEST_F(SdcReaderTest, ParseClockGroups) {
     std::string sdc = R"(
 set_clock_groups -asynchronous -group [get_clocks clk_core] -group [get_clocks clk_periph]
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.clock_groups.size(), 2u);
     EXPECT_TRUE(constraints.clock_groups[0].asynchronous);
     EXPECT_TRUE(constraints.clock_groups[1].asynchronous);
@@ -195,9 +197,9 @@ TEST_F(SdcReaderTest, ParseMultiCyclePath) {
     std::string sdc = R"(
 set_multicycle_path 2 -from [get_clocks clk_slow] -to [get_clocks clk_fast]
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.multi_cycle_paths.size(), 1u);
     EXPECT_EQ(constraints.multi_cycle_paths[0].cycles, 2);
     EXPECT_EQ(constraints.multi_cycle_paths[0].from_clock, "clk_slow");
@@ -208,9 +210,9 @@ TEST_F(SdcReaderTest, CalculateFrequency) {
     std::string sdc = R"(
 create_clock -name clk_100mhz -period 10.0
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.clocks.size(), 1u);
     EXPECT_NEAR(constraints.clocks[0].frequency_mhz, 100.0, 0.1);
 }
@@ -221,9 +223,9 @@ TEST_F(SdcReaderTest, CommentsIgnored) {
 create_clock -name clk_core -period 10.0
 # Another comment
 )";
-    
+
     auto constraints = reader.parse_sdc_content(sdc);
-    
+
     EXPECT_EQ(constraints.clocks.size(), 1u);
 }
 
@@ -530,7 +532,9 @@ TEST_F(SdcReaderTest, ParseFalsePathGetPins) {
 }
 
 TEST_F(SdcReaderTest, ParseFalsePathThroughPin) {
-    std::string sdc = "set_false_path -from [get_clocks clk_a] -through [get_pins u_mux/Y] -to [get_clocks clk_b]\n";
+    std::string sdc =
+        "set_false_path -from [get_clocks clk_a] -through [get_pins u_mux/Y] -to [get_clocks "
+        "clk_b]\n";
 
     auto constraints = reader.parse_sdc_content(sdc);
     ASSERT_EQ(constraints.false_paths.size(), 1u);
@@ -553,8 +557,7 @@ TEST(RelationshipTest, IntegerFrequencyRatioIsNotSynchronous) {
     c.clock_map["clk_fast"] = a;
     c.clock_map["clk_slow"] = b;
     ResolveResult empty;
-    EXPECT_EQ(classify_relationship("clk_fast", "clk_slow", c, empty),
-              ClockRelationship::Unknown);
+    EXPECT_EQ(classify_relationship("clk_fast", "clk_slow", c, empty), ClockRelationship::Unknown);
 }
 
 TEST(RelationshipTest, GeneratedClockIsGenerated) {
@@ -570,8 +573,7 @@ TEST(RelationshipTest, GeneratedClockIsGenerated) {
     c.clock_map["clk_a"] = master;
     c.clock_map["clk_div"] = gen;
     ResolveResult empty;
-    EXPECT_EQ(classify_relationship("clk_div", "clk_a", c, empty),
-              ClockRelationship::Generated);
+    EXPECT_EQ(classify_relationship("clk_div", "clk_a", c, empty), ClockRelationship::Generated);
 }
 
 TEST_F(SdcReaderTest, ParseFalsePathMultipleThrough) {

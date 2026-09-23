@@ -25,7 +25,7 @@ inline std::vector<std::string> split_compact_kv(const std::string& line) {
         } else if (c == '"' || c == '\'') {
             quote = c;
             current += c;
-        } else if (c == ',' ) {
+        } else if (c == ',') {
             parts.push_back(current);
             current.clear();
         } else {

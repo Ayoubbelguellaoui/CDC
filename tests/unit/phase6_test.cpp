@@ -254,7 +254,8 @@ TEST_F(SignoffTest, AsicSignoffWaivedWarningsPass) {
 
 TEST_F(SignoffTest, AsicSignoffVerifiedSafeInfoPasses) {
     std::vector<Finding> findings;
-    findings.push_back(make_finding("CDC001", "info", "clk_a", "clk_b", SafetyStatus::VerifiedSafe));
+    findings.push_back(
+        make_finding("CDC001", "info", "clk_a", "clk_b", SafetyStatus::VerifiedSafe));
 
     Config cfg;
     auto result = engine.evaluate(findings, "complete", cfg, "asic_signoff");

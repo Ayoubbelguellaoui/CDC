@@ -113,11 +113,11 @@ static bool substring_match(const std::string& pattern, const std::string& value
         bool left_ok = (pos == 0) || lv[pos - 1] == '.' || lv[pos - 1] == '/' ||
                        lv[pos - 1] == ':' || lv[pos - 1] == ' ';
         size_t end = pos + lp.size();
-        bool right_ok = (end >= lv.size()) || lv[end] == '.' || lv[end] == '/' ||
-                        lv[end] == ':' || lv[end] == ' ' || lv[end] == '[';
+        bool right_ok = (end >= lv.size()) || lv[end] == '.' || lv[end] == '/' || lv[end] == ':' ||
+                        lv[end] == ' ' || lv[end] == '[';
         // Also allow '_' boundary only when both sides agree (avoid mod vs other_mod).
-        if (!left_ok && pos > 0 && lv[pos - 1] == '_' && (pos + lp.size() >= lv.size() ||
-                                                          lv[pos + lp.size()] != '_')) {
+        if (!left_ok && pos > 0 && lv[pos - 1] == '_' &&
+            (pos + lp.size() >= lv.size() || lv[pos + lp.size()] != '_')) {
             // Check pattern starts at segment start: preceding '_' must follow '.' or start.
             // "other_mod" contains "_mod" but pattern "mod" should not match mid-segment.
             left_ok = false;

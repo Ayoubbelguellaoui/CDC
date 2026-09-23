@@ -1,5 +1,7 @@
-#include <gtest/gtest.h>
 #include "clock/domain.h"
+
+#include <gtest/gtest.h>
+
 #include "ir/graph.h"
 
 using namespace opencdc::ir;
@@ -33,8 +35,10 @@ TEST(DomainTest, MultipleDomains) {
     const ClockDomain* dom_a = nullptr;
     const ClockDomain* dom_b = nullptr;
     for (const auto& d : result.domains) {
-        if (d.name == "clk_a") dom_a = &d;
-        if (d.name == "clk_b") dom_b = &d;
+        if (d.name == "clk_a")
+            dom_a = &d;
+        if (d.name == "clk_b")
+            dom_b = &d;
     }
     ASSERT_NE(dom_a, nullptr);
     ASSERT_NE(dom_b, nullptr);

@@ -65,8 +65,7 @@ bool pattern_matches(const std::string& pattern, const std::string& value) {
         std::transform(lv.begin(), lv.end(), lv.begin(),
                        [](unsigned char c) { return std::tolower(c); });
         auto is_boundary = [](char c) {
-            return c == '.' || c == '/' || c == '_' || c == '-' || c == ':' || c == ' ' ||
-                   c == '[';
+            return c == '.' || c == '/' || c == '_' || c == '-' || c == ':' || c == ' ' || c == '[';
         };
         size_t pos = 0;
         while ((pos = lv.find(lp, pos)) != std::string::npos) {

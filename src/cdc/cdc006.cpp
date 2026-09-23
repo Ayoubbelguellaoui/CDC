@@ -68,10 +68,11 @@ std::vector<Finding> Cdc006Analyzer::analyze(
                 f.bus_width = pred->width;
                 f.safety_status = SafetyStatus::VerifiedUnsafe;
                 f.safety_provenance = "Combinational logic between synchronizer stages";
-                f.reason = "Synchronizer chain " + chain_type + " at '" +
-                           stage->hier_name + "' has combinational logic between stages "
+                f.reason = "Synchronizer chain " + chain_type + " at '" + stage->hier_name +
+                           "' has combinational logic between stages "
                            "driven by cross-domain source '" +
-                           pred->hier_name + "'. "
+                           pred->hier_name +
+                           "'. "
                            "Combinational logic between synchronization stages defeats the "
                            "purpose of the synchronizer.";
                 findings.push_back(std::move(f));

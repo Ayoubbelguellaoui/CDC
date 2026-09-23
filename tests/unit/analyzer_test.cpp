@@ -1,8 +1,10 @@
 #include "analysis/analyzer.h"
+
 #include <gtest/gtest.h>
 #include <unistd.h>
-#include <fstream>
+
 #include <cstdio>
+#include <fstream>
 #include <string>
 
 using opencdc::analysis::AnalysisRequest;
@@ -13,7 +15,7 @@ static std::string fixture_path(const std::string& name) {
 }
 
 class AnalyzerTest : public ::testing::Test {
-protected:
+   protected:
     Analyzer analyzer;
 };
 
@@ -28,7 +30,8 @@ TEST_F(AnalyzerTest, UnsynchronizedCrossingReported) {
 
     bool has_cdc001 = false;
     for (const auto& f : result.findings) {
-        if (f.rule_id == "CDC001") has_cdc001 = true;
+        if (f.rule_id == "CDC001")
+            has_cdc001 = true;
     }
     EXPECT_TRUE(has_cdc001);
 }

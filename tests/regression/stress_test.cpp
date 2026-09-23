@@ -1,13 +1,15 @@
 #include <gtest/gtest.h>
-#include "frontend/slang_adapter.h"
-#include "clock/domain.h"
+
+#include <string>
+
+#include "cdc/cdc006.h"
 #include "cdc/crossing.h"
 #include "cdc/reconvergence.h"
-#include "cdc/cdc006.h"
 #include "cdc/waiver.h"
-#include "rules/rule.h"
+#include "clock/domain.h"
+#include "frontend/slang_adapter.h"
 #include "report/report.h"
-#include <string>
+#include "rules/rule.h"
 
 namespace cdc_clock = opencdc::clock;
 namespace cdc_ns = opencdc::cdc;
@@ -17,11 +19,10 @@ static std::string fixture_sv(const std::string& name) {
 }
 
 class StressTest : public ::testing::Test {
-protected:
+   protected:
     void SetUp() override {
         opencdc::frontend::SlangAdapter adapter;
-        fe = adapter.elaborate(
-            {fixture_sv("stress_test_system.sv")}, "stress_test_system");
+        fe = adapter.elaborate({fixture_sv("stress_test_system.sv")}, "stress_test_system");
         ASSERT_TRUE(fe.ok) << "Parse failed";
 
         cdc_clock::DomainExtractor de;
@@ -50,7 +51,8 @@ protected:
     int count_by_rule(const std::string& rule) const {
         int count = 0;
         for (const auto& f : findings) {
-            if (f.rule_id == rule) count++;
+            if (f.rule_id == rule)
+                count++;
         }
         return count;
     }
@@ -134,7 +136,8 @@ TEST_F(StressTest, WaiverConfigSuppresses) {
     auto remaining = engine.apply(findings);
     int waived_count = 0;
     for (const auto& f : remaining) {
-        if (f.waived && f.rule_id == "CDC001") waived_count++;
+        if (f.waived && f.rule_id == "CDC001")
+            waived_count++;
     }
     EXPECT_EQ(waived_count, 1);
 }
@@ -144,7 +147,8 @@ TEST_F(StressTest, AllClockDomainsDetected) {
 }
 
 TEST_F(StressTest, AllRulesTriggered) {
-    std::set<std::string> expected = {"CDC001", "CDC002", "CDC003", "CDC004", "CDC005", "CDC007", "CDC008"};
+    std::set<std::string> expected = {"CDC001", "CDC002", "CDC003", "CDC004",
+                                      "CDC005", "CDC007", "CDC008"};
     std::set<std::string> actual;
     for (const auto& f : findings) {
         actual.insert(f.rule_id);

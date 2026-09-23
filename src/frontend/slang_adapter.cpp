@@ -716,10 +716,9 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
 
                     for (const auto& [parent_name, parent_width] : parent_values) {
                         const ir::Node* parent_node = graph.find_node_by_name(parent_name);
-                        uint64_t parent_id = parent_node
-                                                 ? parent_node->id
-                                                 : graph.add_net(parent_name, parent_width, {}, p,
-                                                                 module_type);
+                        uint64_t parent_id = parent_node ? parent_node->id
+                                                         : graph.add_net(parent_name, parent_width,
+                                                                         {}, p, module_type);
 
                         if (child_port.direction == ArgumentDirection::Out) {
                             graph.add_edge(child_node->id, parent_id);
@@ -787,9 +786,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         const ir::Node* dst = graph.find_node_by_name(a.lhs);
                         uint64_t dst_id =
                             dst ? dst->id
-                                : (cr.clock == "comb" ? graph.add_net(a.lhs, a.lhs_width, ir_loc, p, module_type)
-                                                      : graph.add_register(a.lhs, cr.clock,
-                                                                           a.lhs_width, ir_loc, p, module_type));
+                                : (cr.clock == "comb"
+                                       ? graph.add_net(a.lhs, a.lhs_width, ir_loc, p, module_type)
+                                       : graph.add_register(a.lhs, cr.clock, a.lhs_width, ir_loc, p,
+                                                            module_type));
                         if (dst && cr.clock != "comb" && dst->kind != ir::NodeKind::Register) {
                             auto* mutable_dst = graph.find_node_mutable(dst_id);
                             if (mutable_dst) {
@@ -829,15 +829,17 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         if (a.is_multi_operand && a.logic_type != ir::LogicType::Unknown) {
                             const ir::Node* src = graph.find_node_by_name(a.rhs);
                             uint64_t src_id =
-                                src ? src->id : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
+                                src ? src->id
+                                    : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
                             auto it = comb_nodes.find(a.lhs);
                             if (it == comb_nodes.end()) {
                                 std::string comb_name = a.lhs + "$comb";
                                 std::vector<uint64_t> comb_inputs = {src_id};
                                 ir::LogicType comb_type =
                                     a.is_gray_transform ? ir::LogicType::GrayEncoder : a.logic_type;
-                                uint64_t comb_id = graph.add_combinational(
-                                    comb_name, comb_type, comb_inputs, a.lhs_width, {}, p, module_type);
+                                uint64_t comb_id =
+                                    graph.add_combinational(comb_name, comb_type, comb_inputs,
+                                                            a.lhs_width, {}, p, module_type);
                                 if (comb_id) {
                                     comb_nodes[a.lhs] = comb_id;
                                     graph.add_edge(comb_id, dst_id);
@@ -852,7 +854,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         } else {
                             const ir::Node* src = graph.find_node_by_name(a.rhs);
                             uint64_t src_id =
-                                src ? src->id : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
+                                src ? src->id
+                                    : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
                             if (src_id && dst_id)
                                 graph.add_edge(src_id, dst_id);
                         }
@@ -900,8 +903,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             if (existing_lhs) {
                 lhs_width = existing_lhs->width;
             }
-            uint64_t lhs_id =
-                existing_lhs ? existing_lhs->id : graph.add_net(lhs_name, lhs_width, {}, p, module_type);
+            uint64_t lhs_id = existing_lhs ? existing_lhs->id
+                                           : graph.add_net(lhs_name, lhs_width, {}, p, module_type);
             if (!existing_lhs) {
                 auto* mutable_lhs = graph.find_node_mutable(lhs_id);
                 if (mutable_lhs) {
@@ -913,18 +916,20 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 std::vector<uint64_t> input_ids;
                 for (const auto& [rhs_name, rhs_width] : rhs_ops) {
                     const ir::Node* src = graph.find_node_by_name(rhs_name);
-                    uint64_t src_id = src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p, module_type);
+                    uint64_t src_id =
+                        src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p, module_type);
                     input_ids.push_back(src_id);
                 }
                 std::string comb_name = lhs_name + "$comb";
-                uint64_t comb_id =
-                    graph.add_combinational(comb_name, logic_type, input_ids, lhs_width, {}, p, module_type);
+                uint64_t comb_id = graph.add_combinational(comb_name, logic_type, input_ids,
+                                                           lhs_width, {}, p, module_type);
                 if (comb_id)
                     graph.add_edge(comb_id, lhs_id);
             } else {
                 for (const auto& [rhs_name, rhs_width] : rhs_ops) {
                     const ir::Node* src = graph.find_node_by_name(rhs_name);
-                    uint64_t src_id = src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p, module_type);
+                    uint64_t src_id =
+                        src ? src->id : graph.add_net(rhs_name, rhs_width, {}, p, module_type);
                     if (src_id && lhs_id)
                         graph.add_edge(src_id, lhs_id);
                 }

@@ -24,8 +24,8 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     frontend::FrontendOptions fe_opts;
     fe_opts.include_dirs = request.include_dirs;
     fe_opts.defines = request.defines;
-    frontend::FrontendResult fe_result = adapter.elaborate(request.input_files, request.top_module,
-                                                           fe_opts);
+    frontend::FrontendResult fe_result =
+        adapter.elaborate(request.input_files, request.top_module, fe_opts);
     if (!fe_result.ok) {
         result.errors = std::move(fe_result.errors);
         result.analysis_status = "failed";
@@ -213,9 +213,9 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     crossing_analyzer.set_blackbox_registry(&blackbox_registry);
     crossing_analyzer.set_min_sync_stages(cfg.min_sync_stages);
     crossing_analyzer.set_module_tree(&module_tree);
-    auto findings = crossing_analyzer.analyze(result.graph, result.domains.domains,
-                                              result.domains.register_to_domain,
-                                              request.num_threads);
+    auto findings =
+        crossing_analyzer.analyze(result.graph, result.domains.domains,
+                                  result.domains.register_to_domain, request.num_threads);
 
     // Propagate value uncertainty downstream after crossing detection.
     crossing_analyzer.propagate_uncertainty(result.graph, findings);
@@ -298,19 +298,17 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     // 14. Compute coverage and signoff.
     CoverageEngine coverage_engine;
     result.coverage = coverage_engine.compute(result.findings, result.analysis_status);
-    coverage_engine.compute_crossing_coverage(result.coverage, result.graph,
-                                              result.domains.domains,
+    coverage_engine.compute_crossing_coverage(result.coverage, result.graph, result.domains.domains,
                                               result.domains.register_to_domain);
 
     SignoffEngine signoff_engine;
     result.signoff = signoff_engine.evaluate(result.findings, result.analysis_status, cfg,
-                                              request.profile.empty() ? "default" : request.profile);
+                                             request.profile.empty() ? "default" : request.profile);
 
     return result;
 }
 
-AnalysisResult Analyzer::run_incremental(AnalysisResult& previous,
-                                         const AnalysisRequest& request) {
+AnalysisResult Analyzer::run_incremental(AnalysisResult& previous, const AnalysisRequest& request) {
     if (!previous.graph.dirty()) {
         AnalysisResult keep = previous;
         keep.ok = true;

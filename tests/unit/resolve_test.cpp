@@ -1,12 +1,14 @@
-#include <gtest/gtest.h>
 #include "clock/resolve.h"
+
+#include <gtest/gtest.h>
+
 #include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::clock;
 
 class ClockResolverTest : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     ClockResolver resolver;
 };

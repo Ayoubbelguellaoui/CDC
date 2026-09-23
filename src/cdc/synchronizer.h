@@ -32,8 +32,7 @@ class SynchronizerMatcher {
 
     size_t chain_depth(uint64_t dest_reg_id, const ir::Graph& graph) const;
 
-    bool below_min_stages(uint64_t dest_reg_id, const ir::Graph& graph,
-                          int min_stages) const;
+    bool below_min_stages(uint64_t dest_reg_id, const ir::Graph& graph, int min_stages) const;
 
    private:
     std::string validate_stage_reset(const ir::Graph& graph, uint64_t stage_id,

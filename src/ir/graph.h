@@ -71,12 +71,7 @@ struct Node {
     bool is_control_signal = false;
 };
 
-enum class EdgeRole : uint8_t {
-    Data,
-    Control,
-    Clock,
-    Reset
-};
+enum class EdgeRole : uint8_t { Data, Control, Clock, Reset };
 
 struct Edge {
     uint64_t from_id;
@@ -106,8 +101,7 @@ class Graph {
     Graph() = default;
 
     uint64_t add_register(const std::string& hier_name, const std::string& clock_domain,
-                          uint32_t width, const SourceLoc& loc,
-                          const std::string& module_path = "",
+                          uint32_t width, const SourceLoc& loc, const std::string& module_path = "",
                           const std::string& module_type = "");
 
     uint64_t add_port(const std::string& hier_name, uint32_t width, const SourceLoc& loc,

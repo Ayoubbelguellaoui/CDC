@@ -1,14 +1,17 @@
 #include "report/report.h"
-#include "report/html_reporter.h"
-#include "cdc/crossing.h"
+
 #include <gtest/gtest.h>
 #include <unistd.h>
-#include <sstream>
-#include <fstream>
+
 #include <cstdio>
+#include <fstream>
+#include <sstream>
+
+#include "cdc/crossing.h"
+#include "report/html_reporter.h"
 
 class ReportTest : public ::testing::Test {
-protected:
+   protected:
     opencdc::report::Reporter reporter;
 
     opencdc::cdc::Finding make_finding(const std::string& rule, const std::string& sev,

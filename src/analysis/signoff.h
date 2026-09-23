@@ -25,8 +25,7 @@ struct SignoffResult {
 class SignoffEngine {
    public:
     SignoffResult evaluate(const std::vector<cdc::Finding>& findings,
-                           const std::string& analysis_status,
-                           const config::Config& cfg = {},
+                           const std::string& analysis_status, const config::Config& cfg = {},
                            const std::string& methodology = "default") const;
 };
 

@@ -1,15 +1,16 @@
-#include "cdc/pattern.h"
-#include "cdc/crossing.h"
-#include "ir/graph.h"
-#include "clock/domain.h"
 #include <gtest/gtest.h>
+
+#include "cdc/crossing.h"
+#include "cdc/pattern.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::cdc;
 using namespace opencdc::clock;
 
 class NamingAdversarialTest : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     PatternRecognizer recognizer;
 };

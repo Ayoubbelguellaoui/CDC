@@ -1,21 +1,23 @@
-#include "cdc/crossing.h"
-#include "ir/graph.h"
-#include "clock/domain.h"
 #include <gtest/gtest.h>
+
 #include <algorithm>
+
+#include "cdc/crossing.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::cdc;
 using namespace opencdc::clock;
 
 class ThreadDeterminismTest : public ::testing::Test {
-protected:
+   protected:
     void build_graph() {
         for (int i = 0; i < 20; ++i) {
-            uint64_t src = graph.add_register("mod.src_" + std::to_string(i), "clk_a", 1,
-                                               {"mod.sv", 5, 5});
-            uint64_t dst = graph.add_register("mod.dst_" + std::to_string(i), "clk_b", 1,
-                                               {"mod.sv", 6, 5});
+            uint64_t src =
+                graph.add_register("mod.src_" + std::to_string(i), "clk_a", 1, {"mod.sv", 5, 5});
+            uint64_t dst =
+                graph.add_register("mod.dst_" + std::to_string(i), "clk_b", 1, {"mod.sv", 6, 5});
             auto* s = graph.find_node_mutable(src);
             s->reset_signal = "rst_n";
             auto* d = graph.find_node_mutable(dst);

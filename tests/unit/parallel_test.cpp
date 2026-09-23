@@ -1,7 +1,9 @@
 #include "util/parallel.h"
+
 #include <gtest/gtest.h>
-#include <stdexcept>
+
 #include <atomic>
+#include <stdexcept>
 
 using namespace opencdc::util;
 
@@ -16,11 +18,10 @@ TEST(ThreadPoolTest, MultipleTasks) {
     std::atomic<int> counter{0};
     std::vector<std::future<void>> futures;
     for (int i = 0; i < 20; ++i) {
-        futures.push_back(pool.submit([&counter]() {
-            counter.fetch_add(1);
-        }));
+        futures.push_back(pool.submit([&counter]() { counter.fetch_add(1); }));
     }
-    for (auto& f : futures) f.get();
+    for (auto& f : futures)
+        f.get();
     EXPECT_EQ(counter.load(), 20);
 }
 
@@ -29,9 +30,7 @@ TEST(ThreadPoolTest, ConcurrentSubmitDuringShutdown) {
     {
         ThreadPool pool(4);
         for (int i = 0; i < 100; ++i) {
-            pool.submit([&completed]() {
-                completed.fetch_add(1);
-            });
+            pool.submit([&completed]() { completed.fetch_add(1); });
         }
     }
     EXPECT_EQ(completed.load(), 100);
@@ -69,9 +68,7 @@ TEST(ThreadSafeQueueTest, PushPopSize) {
 TEST(ParallelForTest, ProcessesAllItems) {
     std::vector<int> items = {1, 2, 3, 4, 5};
     std::atomic<int> sum{0};
-    parallel_for(items, [&](int& item) {
-        sum.fetch_add(item);
-    });
+    parallel_for(items, [&](int& item) { sum.fetch_add(item); });
     EXPECT_EQ(sum.load(), 15);
 }
 

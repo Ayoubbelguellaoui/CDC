@@ -975,18 +975,16 @@ void PatternRecognizer::analyze_and_annotate(ir::Graph& graph) {
     }
 }
 
-bool PatternRecognizer::verify_async_fifo(uint64_t src_id, uint64_t dst_id,
-                                           const ir::Graph& graph,
-                                           std::string& failure_reason) const {
+bool PatternRecognizer::verify_async_fifo(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+                                          std::string& failure_reason) const {
     std::lock_guard<std::mutex> lock(pattern_mutex_);
     ensure_patterns_locked(graph);
 
     for (auto& fifo : fifo_cache_) {
-        bool match =
-            (fifo.read_ptr_id == src_id && fifo.write_ptr_id == dst_id) ||
-            (fifo.write_ptr_id == src_id && fifo.read_ptr_id == dst_id) ||
-            (fifo.read_ptr_id == src_id || fifo.write_ptr_id == src_id ||
-             fifo.read_ptr_id == dst_id || fifo.write_ptr_id == dst_id);
+        bool match = (fifo.read_ptr_id == src_id && fifo.write_ptr_id == dst_id) ||
+                     (fifo.write_ptr_id == src_id && fifo.read_ptr_id == dst_id) ||
+                     (fifo.read_ptr_id == src_id || fifo.write_ptr_id == src_id ||
+                      fifo.read_ptr_id == dst_id || fifo.write_ptr_id == dst_id);
 
         if (!match)
             continue;

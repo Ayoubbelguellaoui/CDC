@@ -83,8 +83,7 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
             // the hazard must be reported regardless of sync chains.
             // Both sides must be synced to suppress — one synced + one unsynced
             // reconverging is still hazardous.
-            if (src->width <= 1 && has_sync_chain(a->dest_reg_id) &&
-                has_sync_chain(b->dest_reg_id))
+            if (src->width <= 1 && has_sync_chain(a->dest_reg_id) && has_sync_chain(b->dest_reg_id))
                 continue;
 
             // Bounded BFS: collect up to 16 register descendants per path (max 3 hops)

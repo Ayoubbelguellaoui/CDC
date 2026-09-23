@@ -316,7 +316,8 @@ size_t SynchronizerMatcher::chain_depth(uint64_t dest_reg_id, const ir::Graph& g
     bool has_cross_domain_pred = false;
     for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false)) {
         const ir::Node* pred = graph.find_node(pred_id);
-        if (pred && pred->kind == ir::NodeKind::Register && pred->clock_domain != dest->clock_domain) {
+        if (pred && pred->kind == ir::NodeKind::Register &&
+            pred->clock_domain != dest->clock_domain) {
             has_cross_domain_pred = true;
             break;
         }
@@ -348,7 +349,7 @@ size_t SynchronizerMatcher::chain_depth(uint64_t dest_reg_id, const ir::Graph& g
 }
 
 bool SynchronizerMatcher::below_min_stages(uint64_t dest_reg_id, const ir::Graph& graph,
-                                            int min_stages) const {
+                                           int min_stages) const {
     if (min_stages <= 1)
         return false;
     size_t depth = chain_depth(dest_reg_id, graph);

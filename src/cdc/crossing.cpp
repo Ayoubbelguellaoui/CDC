@@ -237,9 +237,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 EvidenceStep{"clock_domains",
                              "Clock domains: '" + src_dom->name + "' -> '" + dst_dom->name + "'",
                              "identified", src->loc.file});
-            f.evidence_chain.push_back(
-                EvidenceStep{"bus_width", "Bus width: " + std::to_string(src->width), "measured",
-                             src->loc.file});
+            f.evidence_chain.push_back(EvidenceStep{"bus_width",
+                                                    "Bus width: " + std::to_string(src->width),
+                                                    "measured", src->loc.file});
 
             SyncPattern crossing_sync = f.detected_sync;
 
@@ -274,35 +274,35 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 for (const auto& mcp : clock_constraints_->multi_cycle_paths) {
                     bool from_ok = mcp.from_clock.empty() ||
                                    clock::pattern_matches(mcp.from_clock, src_dom->name);
-                    bool to_ok = mcp.to_clock.empty() ||
-                                 clock::pattern_matches(mcp.to_clock, dst_dom->name);
+                    bool to_ok =
+                        mcp.to_clock.empty() || clock::pattern_matches(mcp.to_clock, dst_dom->name);
                     if (!from_ok || !to_ok)
                         continue;
                     if (mcp.from_clock.empty() && mcp.to_clock.empty())
                         continue;
-                        f.has_multicycle_exception = true;
-                        f.multicycle_cycles = mcp.cycles;
-                        f.constraint_source = "multicycle_path: " + mcp.from_clock + " -> " +
-                                              mcp.to_clock + " (" + std::to_string(mcp.cycles) +
-                                              " cycles)";
-                        if (multicycle_policy_ && multicycle_policy_->suppress_findings) {
-                            bool suppress = false;
-                            for (const auto& r : multicycle_policy_->suppress_rules) {
-                                if (r == "CDC001") {
-                                    suppress = true;
-                                    break;
-                                }
-                            }
-                            if (suppress) {
-                                f.severity = "info";
-                                f.suppressed_by_multicycle = true;
-                                f.multicycle_source = f.constraint_source;
-                                f.safety_status = SafetyStatus::Ambiguous;
-                                f.safety_provenance = "Suppressed by multicycle path constraint";
-                                multicycle_suppressed = true;
+                    f.has_multicycle_exception = true;
+                    f.multicycle_cycles = mcp.cycles;
+                    f.constraint_source = "multicycle_path: " + mcp.from_clock + " -> " +
+                                          mcp.to_clock + " (" + std::to_string(mcp.cycles) +
+                                          " cycles)";
+                    if (multicycle_policy_ && multicycle_policy_->suppress_findings) {
+                        bool suppress = false;
+                        for (const auto& r : multicycle_policy_->suppress_rules) {
+                            if (r == "CDC001") {
+                                suppress = true;
+                                break;
                             }
                         }
-                        break;
+                        if (suppress) {
+                            f.severity = "info";
+                            f.suppressed_by_multicycle = true;
+                            f.multicycle_source = f.constraint_source;
+                            f.safety_status = SafetyStatus::Ambiguous;
+                            f.safety_provenance = "Suppressed by multicycle path constraint";
+                            multicycle_suppressed = true;
+                        }
+                    }
+                    break;
                 }
             }
 
@@ -446,8 +446,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 nr.rule_name = "missing_reset";
                 // Strict reset policy escalates to warning only when NEITHER
                 // has reset; mixed (one side reset) stays advisory info.
-                bool both_unreset =
-                    src->reset_signal.empty() && dst->reset_signal.empty();
+                bool both_unreset = src->reset_signal.empty() && dst->reset_signal.empty();
                 bool strict_reset = reset_policy_ && reset_policy_->require_cdc_register_reset;
                 nr.severity = (strict_reset && both_unreset) ? "warning" : "info";
                 nr.source_reg_id = src_id;
@@ -675,13 +674,13 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
             continue;
         bool already_reported = false;
         for (const auto& f : findings) {
-            if ((f.source_reg_id == node.id || f.dest_reg_id == node.id) &&
-                f.rule_id != "CDC013") {
+            if ((f.source_reg_id == node.id || f.dest_reg_id == node.id) && f.rule_id != "CDC013") {
                 already_reported = true;
                 break;
             }
         }
-        if (already_reported || node.uncertainty_source.find("propagated from") == std::string::npos)
+        if (already_reported ||
+            node.uncertainty_source.find("propagated from") == std::string::npos)
             continue;
 
         Finding uf;
@@ -700,8 +699,8 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
                     node.uncertainty_source + ".";
         uf.safety_status = SafetyStatus::Candidate;
         uf.safety_provenance = "Value uncertainty propagation";
-        uf.evidence_chain.push_back(
-            EvidenceStep{"source", "Source: " + node.uncertainty_source, "identified", node.loc.file});
+        uf.evidence_chain.push_back(EvidenceStep{"source", "Source: " + node.uncertainty_source,
+                                                 "identified", node.loc.file});
         uf.evidence_chain.push_back(
             EvidenceStep{"propagation", "Propagated within domain '" + node.clock_domain + "'",
                          "propagated", node.loc.file});

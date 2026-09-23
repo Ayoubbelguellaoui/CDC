@@ -1,5 +1,6 @@
-#include <gtest/gtest.h>
 #include "ir/graph.h"
+
+#include <gtest/gtest.h>
 
 using namespace opencdc::ir;
 

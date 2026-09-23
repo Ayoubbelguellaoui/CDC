@@ -1,15 +1,16 @@
-#include "cdc/synchronizer.h"
-#include "cdc/crossing.h"
-#include "ir/graph.h"
-#include "clock/domain.h"
 #include <gtest/gtest.h>
+
+#include "cdc/crossing.h"
+#include "cdc/synchronizer.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::clock;
 using namespace opencdc::cdc;
 
 class SyncTest : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     SynchronizerMatcher matcher;
 };

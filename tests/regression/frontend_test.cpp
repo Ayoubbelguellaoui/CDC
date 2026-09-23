@@ -1,13 +1,14 @@
 #include <gtest/gtest.h>
-#include "frontend/slang_adapter.h"
-#include "clock/domain.h"
+
+#include <string>
+
 #include "cdc/crossing.h"
 #include "cdc/reconvergence.h"
 #include "cdc/waiver.h"
-#include "rules/rule.h"
+#include "clock/domain.h"
+#include "frontend/slang_adapter.h"
 #include "report/report.h"
-#include <gtest/gtest.h>
-#include <string>
+#include "rules/rule.h"
 
 using opencdc::ir::NodeKind;
 using opencdc::ir::ResetPolarity;
@@ -20,8 +21,7 @@ static std::string fixture_path(const std::string& name) {
 
 TEST(FrontendTest, CdcCrossingHasTwoRegisters) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto result = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(result.ok);
     EXPECT_EQ(result.graph.register_count(), 2u);
     EXPECT_GE(result.graph.edge_count(), 1u);
@@ -31,8 +31,7 @@ TEST(FrontendTest, AsyncResetEventListRolesClassifiedCorrectly) {
     // `@(posedge clk or negedge rst_n)`: the clock is the last non-reset
     // event and rst_n is the async reset — regardless of event order.
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("async_reset_2ff.sv")}, "async_reset_2ff");
+    auto result = adapter.elaborate({fixture_path("async_reset_2ff.sv")}, "async_reset_2ff");
     ASSERT_TRUE(result.ok);
 
     const auto* meta = result.graph.find_node_by_name("async_reset_2ff.meta");
@@ -46,26 +45,22 @@ TEST(FrontendTest, AsyncResetEventListRolesClassifiedCorrectly) {
 
 TEST(FrontendTest, SameDomainHasOneRegister) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("same_domain.sv")}, "simple_same_domain");
+    auto result = adapter.elaborate({fixture_path("same_domain.sv")}, "simple_same_domain");
     ASSERT_TRUE(result.ok);
     EXPECT_EQ(result.graph.register_count(), 1u);
 }
 
 TEST(FrontendTest, AlwaysCombIsNotRegister) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("always_comb.sv")}, "always_comb_model");
+    auto result = adapter.elaborate({fixture_path("always_comb.sv")}, "always_comb_model");
     ASSERT_TRUE(result.ok);
     EXPECT_EQ(result.graph.register_count(), 1u);
-    EXPECT_EQ(result.graph.find_node_by_name("always_comb_model.next_q")->kind,
-              NodeKind::Net);
+    EXPECT_EQ(result.graph.find_node_by_name("always_comb_model.next_q")->kind, NodeKind::Net);
 }
 
 TEST(FrontendTest, Sync2ffHasTwoRegisters) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("sync_2ff.sv")}, "sync_2ff");
+    auto result = adapter.elaborate({fixture_path("sync_2ff.sv")}, "sync_2ff");
     ASSERT_TRUE(result.ok);
     EXPECT_EQ(result.graph.register_count(), 2u);
     EXPECT_GE(result.graph.edge_count(), 2u);
@@ -73,16 +68,14 @@ TEST(FrontendTest, Sync2ffHasTwoRegisters) {
 
 TEST(FrontendTest, MissingTopModuleFails) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "nonexistent");
+    auto result = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "nonexistent");
     EXPECT_FALSE(result.ok);
     EXPECT_FALSE(result.errors.empty());
 }
 
 TEST(FrontendTest, CdcCrossingDomainsAreCorrect) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto result = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(result.ok);
 
     cdc_clock::DomainExtractor extractor;
@@ -94,8 +87,10 @@ TEST(FrontendTest, CdcCrossingDomainsAreCorrect) {
     const cdc_clock::ClockDomain* dom_a = nullptr;
     const cdc_clock::ClockDomain* dom_b = nullptr;
     for (const auto& d : dom_result.domains) {
-        if (d.name == "clk_a") dom_a = &d;
-        if (d.name == "clk_b") dom_b = &d;
+        if (d.name == "clk_a")
+            dom_a = &d;
+        if (d.name == "clk_b")
+            dom_b = &d;
     }
     ASSERT_NE(dom_a, nullptr);
     ASSERT_NE(dom_b, nullptr);
@@ -105,8 +100,7 @@ TEST(FrontendTest, CdcCrossingDomainsAreCorrect) {
 
 TEST(FrontendTest, SameDomainRegistersShareDomain) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("same_domain.sv")}, "simple_same_domain");
+    auto result = adapter.elaborate({fixture_path("same_domain.sv")}, "simple_same_domain");
     ASSERT_TRUE(result.ok);
 
     cdc_clock::DomainExtractor extractor;
@@ -119,8 +113,7 @@ TEST(FrontendTest, SameDomainRegistersShareDomain) {
 
 TEST(FrontendTest, MultiDomainThreeDomains) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("multi_domain.sv")}, "multi_domain");
+    auto result = adapter.elaborate({fixture_path("multi_domain.sv")}, "multi_domain");
     ASSERT_TRUE(result.ok);
     EXPECT_EQ(result.graph.register_count(), 3u);
 
@@ -133,8 +126,7 @@ TEST(FrontendTest, MultiDomainThreeDomains) {
 
 TEST(FrontendTest, Sync2ffRegistersSameDomain) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("sync_2ff.sv")}, "sync_2ff");
+    auto result = adapter.elaborate({fixture_path("sync_2ff.sv")}, "sync_2ff");
     ASSERT_TRUE(result.ok);
 
     cdc_clock::DomainExtractor extractor;
@@ -146,8 +138,7 @@ TEST(FrontendTest, Sync2ffRegistersSameDomain) {
 
 TEST(FrontendTest, SourceLocationsAreReal) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto result = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(result.ok);
 
     for (const auto& node : result.graph.nodes()) {
@@ -160,8 +151,7 @@ TEST(FrontendTest, SourceLocationsAreReal) {
 
 TEST(FrontendTest, ResetInfoExtracted) {
     opencdc::frontend::SlangAdapter adapter;
-    auto result = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto result = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(result.ok);
 
     for (const auto& node : result.graph.nodes()) {
@@ -175,8 +165,7 @@ TEST(FrontendTest, ResetInfoExtracted) {
 
 TEST(FrontendTest, CdcCrossingProducesOneFinding) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto fe = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -195,8 +184,7 @@ TEST(FrontendTest, CdcCrossingProducesOneFinding) {
 
 TEST(FrontendTest, SameDomainProducesNoFindings) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("same_domain.sv")}, "simple_same_domain");
+    auto fe = adapter.elaborate({fixture_path("same_domain.sv")}, "simple_same_domain");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -210,8 +198,7 @@ TEST(FrontendTest, SameDomainProducesNoFindings) {
 
 TEST(FrontendTest, Sync2ffNoError) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("sync_2ff.sv")}, "sync_2ff");
+    auto fe = adapter.elaborate({fixture_path("sync_2ff.sv")}, "sync_2ff");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -227,8 +214,7 @@ TEST(FrontendTest, Sync2ffNoError) {
 
 TEST(FrontendTest, MultiDomainProducesMultipleFindings) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("multi_domain.sv")}, "multi_domain");
+    auto fe = adapter.elaborate({fixture_path("multi_domain.sv")}, "multi_domain");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -242,8 +228,7 @@ TEST(FrontendTest, MultiDomainProducesMultipleFindings) {
 
 TEST(FrontendTest, Sync3ffNoError) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("sync_3ff.sv")}, "sync_3ff");
+    auto fe = adapter.elaborate({fixture_path("sync_3ff.sv")}, "sync_3ff");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -259,8 +244,7 @@ TEST(FrontendTest, Sync3ffNoError) {
 
 TEST(FrontendTest, SyncMisuseDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("sync_misuse.sv")}, "sync_misuse");
+    auto fe = adapter.elaborate({fixture_path("sync_misuse.sv")}, "sync_misuse");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -275,8 +259,7 @@ TEST(FrontendTest, SyncMisuseDetected) {
 
 TEST(FrontendTest, SyncMisuseExitCode) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("sync_misuse.sv")}, "sync_misuse");
+    auto fe = adapter.elaborate({fixture_path("sync_misuse.sv")}, "sync_misuse");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -301,8 +284,7 @@ TEST(FrontendTest, SyncMisuseExitCode) {
 
 TEST(FrontendTest, GatedClockNoFalseCrossing) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("gated_clock.sv")}, "gated_clock");
+    auto fe = adapter.elaborate({fixture_path("gated_clock.sv")}, "gated_clock");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -312,15 +294,15 @@ TEST(FrontendTest, GatedClockNoFalseCrossing) {
     auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
     bool has_cdc001 = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC001") has_cdc001 = true;
+        if (f.rule_id == "CDC001")
+            has_cdc001 = true;
     }
     EXPECT_FALSE(has_cdc001);
 }
 
 TEST(FrontendTest, GatedCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("gated_crossing.sv")}, "gated_crossing");
+    auto fe = adapter.elaborate({fixture_path("gated_crossing.sv")}, "gated_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -336,15 +318,15 @@ TEST(FrontendTest, GatedCrossingDetected) {
     // destination side too, not just the source.
     bool has_cdc004 = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC004") has_cdc004 = true;
+        if (f.rule_id == "CDC004")
+            has_cdc004 = true;
     }
     EXPECT_TRUE(has_cdc004);
 }
 
 TEST(FrontendTest, GatedClockResolvedInVerbose) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("gated_clock.sv")}, "gated_clock");
+    auto fe = adapter.elaborate({fixture_path("gated_clock.sv")}, "gated_clock");
     ASSERT_TRUE(fe.ok);
 
     bool found_root = false;
@@ -358,8 +340,7 @@ TEST(FrontendTest, GatedClockResolvedInVerbose) {
 
 TEST(FrontendTest, MuxedClockNoFalseCrossing) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("muxed_clock.sv")}, "muxed_clock");
+    auto fe = adapter.elaborate({fixture_path("muxed_clock.sv")}, "muxed_clock");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -372,8 +353,7 @@ TEST(FrontendTest, MuxedClockNoFalseCrossing) {
 
 TEST(FrontendTest, MuxedCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("muxed_crossing.sv")}, "muxed_crossing");
+    auto fe = adapter.elaborate({fixture_path("muxed_crossing.sv")}, "muxed_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -388,8 +368,7 @@ TEST(FrontendTest, MuxedCrossingDetected) {
 
 TEST(FrontendTest, ReconvergenceHazardDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("reconvergence_hazard.sv")}, "reconvergence_hazard");
+    auto fe = adapter.elaborate({fixture_path("reconvergence_hazard.sv")}, "reconvergence_hazard");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -406,8 +385,7 @@ TEST(FrontendTest, ReconvergenceHazardDetected) {
 
 TEST(FrontendTest, ReconvergenceSafeDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("reconvergence_safe.sv")}, "reconvergence_safe");
+    auto fe = adapter.elaborate({fixture_path("reconvergence_safe.sv")}, "reconvergence_safe");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -425,8 +403,7 @@ TEST(FrontendTest, ReconvergenceSafeDetected) {
 
 TEST(FrontendTest, WaiverSuppressesError) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto fe = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -457,8 +434,7 @@ TEST(FrontendTest, WaiverSuppressesError) {
 
 TEST(FrontendTest, DisableRuleSuppressesFinding) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto fe = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -476,8 +452,7 @@ TEST(FrontendTest, DisableRuleSuppressesFinding) {
 
 TEST(FrontendTest, SeverityOverrideChangesOutput) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto fe = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -499,8 +474,7 @@ TEST(FrontendTest, SeverityOverrideChangesOutput) {
 
 TEST(FrontendTest, ReportJsonEnvelopeFormat) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
+    auto fe = adapter.elaborate({fixture_path("cdc_crossing.sv")}, "simple_cdc_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -523,8 +497,7 @@ TEST(FrontendTest, ReportJsonEnvelopeFormat) {
 
 TEST(FrontendTest, MultiBitCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("multi_bit_crossing.sv")}, "multi_bit_crossing");
+    auto fe = adapter.elaborate({fixture_path("multi_bit_crossing.sv")}, "multi_bit_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -548,8 +521,7 @@ TEST(FrontendTest, MultiBitCrossingDetected) {
 
 TEST(FrontendTest, GrayCodedCrossingNoCdc002) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("gray_coded_crossing.sv")}, "gray_coded_crossing");
+    auto fe = adapter.elaborate({fixture_path("gray_coded_crossing.sv")}, "gray_coded_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -568,8 +540,8 @@ TEST(FrontendTest, GrayCodedCrossingNoCdc002) {
 
 TEST(FrontendTest, GatedClockCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("gated_crossing_cdc004.sv")}, "gated_crossing_cdc004");
+    auto fe =
+        adapter.elaborate({fixture_path("gated_crossing_cdc004.sv")}, "gated_crossing_cdc004");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -589,8 +561,7 @@ TEST(FrontendTest, GatedClockCrossingDetected) {
 
 TEST(FrontendTest, MissingResetDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("missing_reset_cdc007.sv")}, "missing_reset_cdc007");
+    auto fe = adapter.elaborate({fixture_path("missing_reset_cdc007.sv")}, "missing_reset_cdc007");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -629,8 +600,7 @@ TEST(FrontendTest, NewRulesRegisteredInEngine) {
 
 TEST(FrontendTest, WireCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("wire_crossing.sv")}, "wire_crossing");
+    auto fe = adapter.elaborate({fixture_path("wire_crossing.sv")}, "wire_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -641,8 +611,7 @@ TEST(FrontendTest, WireCrossingDetected) {
 
     bool found = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC001" &&
-            f.source_reg_name.find("src_ff") != std::string::npos &&
+        if (f.rule_id == "CDC001" && f.source_reg_name.find("src_ff") != std::string::npos &&
             f.dest_reg_name.find("dst_ff") != std::string::npos) {
             found = true;
         }
@@ -652,8 +621,7 @@ TEST(FrontendTest, WireCrossingDetected) {
 
 TEST(FrontendTest, CombinationalCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("comb_crossing.sv")}, "comb_crossing");
+    auto fe = adapter.elaborate({fixture_path("comb_crossing.sv")}, "comb_crossing");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -664,8 +632,7 @@ TEST(FrontendTest, CombinationalCrossingDetected) {
 
     bool found = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC001" &&
-            f.source_reg_name.find("src_reg") != std::string::npos &&
+        if (f.rule_id == "CDC001" && f.source_reg_name.find("src_reg") != std::string::npos &&
             f.dest_reg_name.find("dst_reg") != std::string::npos) {
             found = true;
         }
@@ -675,8 +642,7 @@ TEST(FrontendTest, CombinationalCrossingDetected) {
 
 TEST(FrontendTest, GatedClockStructurallyDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("gated_clock_struct.sv")}, "gated_clock_struct");
+    auto fe = adapter.elaborate({fixture_path("gated_clock_struct.sv")}, "gated_clock_struct");
     ASSERT_TRUE(fe.ok);
 
     bool has_gated = false;
@@ -684,8 +650,8 @@ TEST(FrontendTest, GatedClockStructurallyDetected) {
         if (node.kind == NodeKind::Register && node.clock_is_gated) {
             has_gated = true;
             size_t dot = node.root_clock.rfind('.');
-            std::string short_name = (dot != std::string::npos)
-                ? node.root_clock.substr(dot + 1) : node.root_clock;
+            std::string short_name =
+                (dot != std::string::npos) ? node.root_clock.substr(dot + 1) : node.root_clock;
             EXPECT_EQ(short_name, "clk");
         }
     }
@@ -694,15 +660,12 @@ TEST(FrontendTest, GatedClockStructurallyDetected) {
 
 TEST(FrontendTest, HierarchicalPortConnectionsPreserveCdcPath) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("hier_crossing.sv")}, "hier_crossing");
+    auto fe = adapter.elaborate({fixture_path("hier_crossing.sv")}, "hier_crossing");
     ASSERT_TRUE(fe.ok);
 
     const auto* source = fe.graph.find_node_by_name("hier_crossing.src_ff");
-    const auto* child_input = fe.graph.find_node_by_name(
-        "hier_crossing.u_sync.d_in");
-    const auto* child_stage = fe.graph.find_node_by_name(
-        "hier_crossing.u_sync.meta_ff");
+    const auto* child_input = fe.graph.find_node_by_name("hier_crossing.u_sync.d_in");
+    const auto* child_stage = fe.graph.find_node_by_name("hier_crossing.u_sync.meta_ff");
     ASSERT_NE(source, nullptr);
     ASSERT_NE(child_input, nullptr);
     ASSERT_NE(child_stage, nullptr);
@@ -720,8 +683,7 @@ TEST(FrontendTest, HierarchicalPortConnectionsPreserveCdcPath) {
 
 TEST(FrontendTest, GenerateBlockCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("generate_crossing.sv")}, "generate_crossing");
+    auto fe = adapter.elaborate({fixture_path("generate_crossing.sv")}, "generate_crossing");
     ASSERT_TRUE(fe.ok);
 
     EXPECT_GE(fe.graph.register_count(), 3u);
@@ -752,8 +714,7 @@ TEST(FrontendTest, GenerateBlockCrossingDetected) {
 
 TEST(FrontendTest, ComplexLvalueCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("complex_lv_crossing.sv")}, "complex_lv_crossing");
+    auto fe = adapter.elaborate({fixture_path("complex_lv_crossing.sv")}, "complex_lv_crossing");
     ASSERT_TRUE(fe.ok);
 
     EXPECT_GE(fe.graph.register_count(), 4u);
@@ -779,8 +740,7 @@ TEST(FrontendTest, ComplexLvalueCrossingDetected) {
 
 TEST(FrontendTest, PartSelectPreservesEdgeWidth) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("complex_lv_crossing.sv")}, "complex_lv_crossing");
+    auto fe = adapter.elaborate({fixture_path("complex_lv_crossing.sv")}, "complex_lv_crossing");
     ASSERT_TRUE(fe.ok);
 
     const auto* src = fe.graph.find_node_by_name("complex_lv_crossing.src_ff");
@@ -799,8 +759,7 @@ TEST(FrontendTest, PartSelectPreservesEdgeWidth) {
 
 TEST(FrontendTest, MultiInstanceDifferentClocksSeparateDomains) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("multi_instance_clock.sv")}, "multi_instance_clock");
+    auto fe = adapter.elaborate({fixture_path("multi_instance_clock.sv")}, "multi_instance_clock");
     ASSERT_TRUE(fe.ok);
     EXPECT_EQ(fe.graph.register_count(), 2u);
 
@@ -812,8 +771,10 @@ TEST(FrontendTest, MultiInstanceDifferentClocksSeparateDomains) {
     const cdc_clock::ClockDomain* dom_a = nullptr;
     const cdc_clock::ClockDomain* dom_b = nullptr;
     for (const auto& d : dr.domains) {
-        if (d.name == "clk_a") dom_a = &d;
-        if (d.name == "clk_b") dom_b = &d;
+        if (d.name == "clk_a")
+            dom_a = &d;
+        if (d.name == "clk_b")
+            dom_b = &d;
     }
     ASSERT_NE(dom_a, nullptr);
     ASSERT_NE(dom_b, nullptr);
@@ -823,8 +784,7 @@ TEST(FrontendTest, MultiInstanceDifferentClocksSeparateDomains) {
 
 TEST(FrontendTest, MultiInstanceSameClockSharesDomain) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("multi_instance_clock.sv")}, "multi_instance_clock");
+    auto fe = adapter.elaborate({fixture_path("multi_instance_clock.sv")}, "multi_instance_clock");
     ASSERT_TRUE(fe.ok);
 
     cdc_clock::DomainExtractor de;
@@ -833,15 +793,15 @@ TEST(FrontendTest, MultiInstanceSameClockSharesDomain) {
     EXPECT_EQ(dr.domains.size(), 2u);
     bool has_shared = false;
     for (const auto& d : dr.domains) {
-        if (d.register_ids.size() == 2) has_shared = true;
+        if (d.register_ids.size() == 2)
+            has_shared = true;
     }
     EXPECT_FALSE(has_shared) << "Two instances with different clocks should not share a domain";
 }
 
 TEST(FrontendTest, FuncCallCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("func_task_crossing.sv")}, "func_task_crossing");
+    auto fe = adapter.elaborate({fixture_path("func_task_crossing.sv")}, "func_task_crossing");
     ASSERT_TRUE(fe.ok);
 
     const auto* src = fe.graph.find_node_by_name("func_task_crossing.src_reg");
@@ -851,18 +811,23 @@ TEST(FrontendTest, FuncCallCrossingDetected) {
 
     bool path_exists = false;
     for (uint64_t succ : fe.graph.successors(src->id)) {
-        if (succ == dst->id) { path_exists = true; break; }
+        if (succ == dst->id) {
+            path_exists = true;
+            break;
+        }
     }
     for (uint64_t pred : fe.graph.predecessors(dst->id)) {
-        if (pred == src->id) { path_exists = true; break; }
+        if (pred == src->id) {
+            path_exists = true;
+            break;
+        }
     }
     EXPECT_TRUE(path_exists) << "Function call should not block CDC path from src to dst";
 }
 
 TEST(FrontendTest, TaskCallCrossingDetected) {
     opencdc::frontend::SlangAdapter adapter;
-    auto fe = adapter.elaborate(
-        {fixture_path("func_task_crossing.sv")}, "task_crossing");
+    auto fe = adapter.elaborate({fixture_path("func_task_crossing.sv")}, "task_crossing");
     ASSERT_TRUE(fe.ok);
 
     const auto* src = fe.graph.find_node_by_name("task_crossing.src_reg");
@@ -879,8 +844,7 @@ TEST(FrontendTest, TaskCallCrossingDetected) {
 
     bool found = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC001" &&
-            f.source_reg_name.find("src_reg") != std::string::npos) {
+        if (f.rule_id == "CDC001" && f.source_reg_name.find("src_reg") != std::string::npos) {
             found = true;
         }
     }
@@ -899,7 +863,8 @@ TEST(FrontendTest, TaskCallCrossingDetected) {
                 std::cerr << "EDGE: " << from->hier_name << " -> " << to->hier_name << std::endl;
         }
         for (const auto& f : findings) {
-            std::cerr << "FINDING: " << f.rule_id << " " << f.source_reg_name << " -> " << f.dest_reg_name << std::endl;
+            std::cerr << "FINDING: " << f.rule_id << " " << f.source_reg_name << " -> "
+                      << f.dest_reg_name << std::endl;
         }
     }
 

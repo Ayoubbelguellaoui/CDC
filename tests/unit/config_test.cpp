@@ -1,9 +1,12 @@
 #include "config/config.h"
-#include "analysis/trend.h"
+
 #include <gtest/gtest.h>
 #include <unistd.h>
-#include <string>
+
 #include <cstdio>
+#include <string>
+
+#include "analysis/trend.h"
 
 static std::string fixture_path(const std::string& name) {
     return std::string(FIXTURES_DIR) + "/config/" + name;
@@ -59,8 +62,7 @@ TEST(ConfigTest, ParseCommentsIgnored) {
         "  CDC001:\n"
         "    enabled: true\n"
         "    # severity comment\n"
-        "    severity: error\n"
-    );
+        "    severity: error\n");
 
     EXPECT_EQ(config.rules.size(), 1u);
     auto it = config.rules.find("CDC001");
@@ -85,8 +87,8 @@ TEST(ConfigTest, MalformedSeverityIgnored) {
     auto config = parser.parse_string(
         "rules:\n"
         "  CDC001:\n"
-        "    severity: banana\n"
-    , &error);
+        "    severity: banana\n",
+        &error);
 
     // yaml-cpp accepts any scalar; validation is permissive.
     // The rule is still parsed (severity set to "banana") — downstream
@@ -101,7 +103,8 @@ TEST(ConfigTest, MalformedSeverityWithValidField) {
         "rules:\n"
         "  CDC001:\n"
         "    enabled: true\n"
-        "    severity: banana\n", &error);
+        "    severity: banana\n",
+        &error);
 
     EXPECT_TRUE(config.rules.empty());
     EXPECT_FALSE(error.empty());
@@ -119,8 +122,7 @@ TEST(ConfigTest, ValidSeverityAccepted) {
     auto config = parser.parse_string(
         "rules:\n"
         "  CDC001:\n"
-        "    severity: warning\n"
-    );
+        "    severity: warning\n");
 
     auto it = config.rules.find("CDC001");
     ASSERT_NE(it, config.rules.end());
@@ -132,8 +134,7 @@ TEST(ConfigTest, FalsePathsParsed) {
     auto config = parser.parse_string(
         "false_paths:\n"
         "  - source: mod.src, dest: mod.dst\n"
-        "  - source: mod.a, dest: mod.b\n"
-    );
+        "  - source: mod.a, dest: mod.b\n");
 
     ASSERT_EQ(config.false_paths.size(), 2u);
     EXPECT_EQ(config.false_paths[0].source_reg, "mod.src");
@@ -146,8 +147,7 @@ TEST(ConfigTest, SuppressResetCrossingsParsed) {
     opencdc::config::ConfigParser parser;
     auto config = parser.parse_string(
         "output:\n"
-        "  suppress_reset_crossings: true\n"
-    );
+        "  suppress_reset_crossings: true\n");
 
     EXPECT_TRUE(config.suppress_reset_crossings);
 }
@@ -156,8 +156,7 @@ TEST(ConfigTest, OldCompactWaiverFormatCompat) {
     opencdc::config::ConfigParser parser;
     auto config = parser.parse_string(
         "waivers:\n"
-        "  - rule: CDC001, source: mod.src, dest: mod.dst, justification: \"Old format\"\n"
-    );
+        "  - rule: CDC001, source: mod.src, dest: mod.dst, justification: \"Old format\"\n");
 
     ASSERT_EQ(config.waivers.size(), 1u);
     EXPECT_EQ(config.waivers[0].rule_id, "CDC001");
@@ -170,8 +169,7 @@ TEST(ConfigTest, OldCompactFalsePathCompat) {
     opencdc::config::ConfigParser parser;
     auto config = parser.parse_string(
         "false_paths:\n"
-        "  - source: mod.src, dest: mod.dst\n"
-    );
+        "  - source: mod.src, dest: mod.dst\n");
 
     ASSERT_EQ(config.false_paths.size(), 1u);
     EXPECT_EQ(config.false_paths[0].source_reg, "mod.src");
@@ -186,8 +184,7 @@ TEST(ConfigTest, NewNestedWaiverFormat) {
         "    source: mod.a\n"
         "    dest: mod.b\n"
         "    justification: \"Valid\"\n"
-        "    owner: \"@team\"\n"
-    );
+        "    owner: \"@team\"\n");
 
     ASSERT_EQ(config.waivers.size(), 1u);
     EXPECT_EQ(config.waivers[0].rule_id, "CDC002");
@@ -205,8 +202,7 @@ TEST(ConfigTest, ClockGroupsNested) {
         "    clocks:\n"
         "      - clk_a\n"
         "      - clk_b\n"
-        "    exclusive: true\n"
-    );
+        "    exclusive: true\n");
 
     ASSERT_EQ(config.clock_groups.size(), 1u);
     EXPECT_EQ(config.clock_groups[0].clocks.size(), 2u);
@@ -223,8 +219,7 @@ TEST(ConfigTest, MixedNestedAndCompact) {
         "    source: mod.a\n"
         "    dest: mod.b\n"
         "false_paths:\n"
-        "  - source: mod.src, dest: mod.dst\n"
-    );
+        "  - source: mod.src, dest: mod.dst\n");
 
     ASSERT_EQ(config.waivers.size(), 1u);
     EXPECT_EQ(config.waivers[0].source_reg, "mod.a");
@@ -237,8 +232,7 @@ TEST(ConfigTest, CompactWaiverWithQuotedComma) {
     opencdc::config::ConfigParser parser;
     auto config = parser.parse_string(
         "waivers:\n"
-        "  - rule: CDC001, source: mod.src, dest: mod.dst, justification: \"safe, reviewed\"\n"
-    );
+        "  - rule: CDC001, source: mod.src, dest: mod.dst, justification: \"safe, reviewed\"\n");
 
     ASSERT_EQ(config.waivers.size(), 1u);
     EXPECT_EQ(config.waivers[0].justification, "safe, reviewed");

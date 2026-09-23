@@ -17,8 +17,8 @@ ResetDomainResult ResetDomainAnalyzer::extract_reset_domains(const ir::Graph& gr
             continue;
 
         std::string domain_key = node.reset_signal + "_" +
-                               std::to_string(static_cast<int>(node.reset_pol)) + "_" +
-                               (node.is_async_reset ? "async" : "sync");
+                                 std::to_string(static_cast<int>(node.reset_pol)) + "_" +
+                                 (node.is_async_reset ? "async" : "sync");
 
         auto it = domain_map.find(domain_key);
         if (it == domain_map.end()) {

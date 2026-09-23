@@ -118,8 +118,7 @@ CoverageResult CoverageEngine::compute(const std::vector<cdc::Finding>& findings
 }
 
 void CoverageEngine::compute_crossing_coverage(
-    CoverageResult& result, const ir::Graph& graph,
-    const std::vector<clock::ClockDomain>& domains,
+    CoverageResult& result, const ir::Graph& graph, const std::vector<clock::ClockDomain>& domains,
     const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
     auto& c = result.counts;
 

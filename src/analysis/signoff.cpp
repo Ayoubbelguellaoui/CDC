@@ -21,8 +21,7 @@ std::string signoff_status_name(SignoffStatus s) {
 }
 
 SignoffResult SignoffEngine::evaluate(const std::vector<cdc::Finding>& findings,
-                                      const std::string& analysis_status,
-                                      const config::Config& cfg,
+                                      const std::string& analysis_status, const config::Config& cfg,
                                       const std::string& methodology) const {
     SignoffResult result;
     result.methodology = methodology;
@@ -49,7 +48,7 @@ SignoffResult SignoffEngine::evaluate(const std::vector<cdc::Finding>& findings,
     if (strict_warnings) {
         // For ASIC/strict: warnings on critical rules are fatal.
         static const std::vector<std::string> critical_rules = {"CDC001", "CDC002", "CDC004",
-                                                               "CDC005", "CDC007"};
+                                                                "CDC005", "CDC007"};
         for (const auto& f : findings) {
             if (f.severity == "warning" && !f.waived &&
                 f.safety_status != cdc::SafetyStatus::VerifiedSafe) {

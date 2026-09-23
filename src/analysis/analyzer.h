@@ -52,8 +52,7 @@ class Analyzer {
 
     // Incremental re-analysis: returns previous findings if the graph is clean;
     // otherwise re-runs the full pipeline.
-    AnalysisResult run_incremental(AnalysisResult& previous,
-                                   const AnalysisRequest& request);
+    AnalysisResult run_incremental(AnalysisResult& previous, const AnalysisRequest& request);
 };
 
 }  // namespace opencdc::analysis

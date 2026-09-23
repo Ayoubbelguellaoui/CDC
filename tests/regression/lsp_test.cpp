@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
-#include "lsp/server.h"
+
 #include <chrono>
 #include <thread>
+
+#include "lsp/server.h"
 
 using opencdc::lsp::LspClient;
 using opencdc::lsp::LspServer;
@@ -53,13 +55,14 @@ TEST(LspTest, HandlesDidOpenCloseLifecycle) {
     ASSERT_TRUE(client.connect("127.0.0.1", port));
 
     // didOpen with valid params
-    std::string didOpen = client.send_request("textDocument/didOpen",
+    std::string didOpen = client.send_request(
+        "textDocument/didOpen",
         R"({"textDocument":{"uri":"file:///tmp/test.sv","text":"module top; endmodule"}})");
     EXPECT_NE(didOpen.find("\"result\""), std::string::npos);
 
     // didClose with valid params
     std::string didClose = client.send_request("textDocument/didClose",
-        R"({"textDocument":{"uri":"file:///tmp/test.sv"}})");
+                                               R"({"textDocument":{"uri":"file:///tmp/test.sv"}})");
     EXPECT_NE(didClose.find("\"result\""), std::string::npos);
 
     client.disconnect();
@@ -166,8 +169,7 @@ TEST(LspTest, CancelRequestAccepted) {
     EXPECT_NE(init.find("\"result\""), std::string::npos);
 
     // Send $/cancelRequest (notification, no response expected)
-    client.send_notification("$/cancelRequest",
-        R"({"id":1})");
+    client.send_notification("$/cancelRequest", R"({"id":1})");
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     // Server should still be running (cancel is a notification)

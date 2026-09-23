@@ -1,17 +1,18 @@
 #include "cdc/waiver.h"
+
 #include <gtest/gtest.h>
 #include <unistd.h>
+
 #include <fstream>
 
 using namespace opencdc::cdc;
 
 class WaiverTest : public ::testing::Test {
-protected:
+   protected:
     WaiverEngine engine;
 
-    Finding make_finding(const std::string& rule, const std::string& src,
-                         const std::string& dst, const std::string& src_dom,
-                         const std::string& dst_dom) {
+    Finding make_finding(const std::string& rule, const std::string& src, const std::string& dst,
+                         const std::string& src_dom, const std::string& dst_dom) {
         Finding f;
         f.rule_id = rule;
         f.source_reg_name = src;

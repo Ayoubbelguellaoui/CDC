@@ -1,9 +1,11 @@
+#include <gtest/gtest.h>
+
+#include <cstdio>
+#include <fstream>
+#include <string>
+
 #include "analysis/analyzer.h"
 #include "report/report.h"
-#include <gtest/gtest.h>
-#include <fstream>
-#include <cstdio>
-#include <string>
 
 using opencdc::analysis::AnalysisRequest;
 using opencdc::analysis::Analyzer;
@@ -13,7 +15,7 @@ static std::string fixture_path(const std::string& name) {
 }
 
 class AnalysisStatusTest : public ::testing::Test {
-protected:
+   protected:
     Analyzer analyzer;
 };
 
@@ -37,7 +39,8 @@ TEST_F(AnalysisStatusTest, TruncatedDesignReportsIncomplete) {
 
     bool has_cdc010 = false;
     for (const auto& f : result.findings) {
-        if (f.rule_id == "CDC010") has_cdc010 = true;
+        if (f.rule_id == "CDC010")
+            has_cdc010 = true;
     }
     if (has_cdc010) {
         EXPECT_EQ(result.analysis_status, "incomplete");

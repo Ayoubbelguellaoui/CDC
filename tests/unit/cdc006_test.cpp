@@ -1,22 +1,28 @@
 #include "cdc/cdc006.h"
-#include "cdc/synchronizer.h"
-#include "ir/graph.h"
-#include "clock/domain.h"
+
 #include <gtest/gtest.h>
+
+#include "cdc/synchronizer.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::clock;
 using namespace opencdc::cdc;
 
 class Cdc006Test : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     Cdc006Analyzer analyzer;
 
     std::vector<ClockDomain> make_domains() {
         std::vector<ClockDomain> d;
-        ClockDomain da; da.id = 1; da.name = "clk_a";
-        ClockDomain db; db.id = 2; db.name = "clk_b";
+        ClockDomain da;
+        da.id = 1;
+        da.name = "clk_a";
+        ClockDomain db;
+        db.id = 2;
+        db.name = "clk_b";
         d.push_back(da);
         d.push_back(db);
         return d;
@@ -26,8 +32,10 @@ protected:
 TEST_F(Cdc006Test, NoFinding_NoSyncChain) {
     uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"", 5, 5});
     uint64_t dst = graph.add_register("mod.dst", "clk_b", 1, {"", 6, 5});
-    auto* s = graph.find_node_mutable(src); s->reset_signal = "rst_n";
-    auto* d = graph.find_node_mutable(dst); d->reset_signal = "rst_n";
+    auto* s = graph.find_node_mutable(src);
+    s->reset_signal = "rst_n";
+    auto* d = graph.find_node_mutable(dst);
+    d->reset_signal = "rst_n";
     graph.add_edge(src, dst);
 
     auto findings = analyzer.analyze(graph, make_domains(), {});
@@ -38,9 +46,12 @@ TEST_F(Cdc006Test, NoFinding_DirectRegisterFeed) {
     uint64_t src = graph.add_register("mod.src_ff", "clk_a", 1, {"", 5, 5});
     uint64_t meta = graph.add_register("mod.dst_meta", "clk_b", 1, {"", 8, 5});
     uint64_t sync = graph.add_register("mod.dst_sync", "clk_b", 1, {"", 9, 5});
-    auto* s = graph.find_node_mutable(src); s->reset_signal = "rst_n";
-    auto* m = graph.find_node_mutable(meta); m->reset_signal = "rst_n";
-    auto* y = graph.find_node_mutable(sync); y->reset_signal = "rst_n";
+    auto* s = graph.find_node_mutable(src);
+    s->reset_signal = "rst_n";
+    auto* m = graph.find_node_mutable(meta);
+    m->reset_signal = "rst_n";
+    auto* y = graph.find_node_mutable(sync);
+    y->reset_signal = "rst_n";
     graph.add_edge(src, meta);
     graph.add_edge(meta, sync);
 
@@ -53,10 +64,14 @@ TEST_F(Cdc006Test, Finding_CombinationalBetweenStages) {
     uint64_t meta = graph.add_register("mod.dst_meta", "clk_b", 1, {"", 8, 5});
     uint64_t sync = graph.add_register("mod.dst_sync", "clk_b", 1, {"", 9, 5});
     uint64_t extra = graph.add_register("mod.extra_reg", "clk_b", 1, {"", 10, 5});
-    uint64_t comb = graph.add_combinational("mod.comb_logic", LogicType::And, {extra, meta}, 1, {"", 11, 1});
-    auto* s = graph.find_node_mutable(src); s->reset_signal = "rst_n";
-    auto* m = graph.find_node_mutable(meta); m->reset_signal = "rst_n";
-    auto* y = graph.find_node_mutable(sync); y->reset_signal = "rst_n";
+    uint64_t comb =
+        graph.add_combinational("mod.comb_logic", LogicType::And, {extra, meta}, 1, {"", 11, 1});
+    auto* s = graph.find_node_mutable(src);
+    s->reset_signal = "rst_n";
+    auto* m = graph.find_node_mutable(meta);
+    m->reset_signal = "rst_n";
+    auto* y = graph.find_node_mutable(sync);
+    y->reset_signal = "rst_n";
     graph.add_edge(src, meta);
     graph.add_edge(meta, sync);
     graph.add_edge(comb, sync);
@@ -72,7 +87,8 @@ TEST_F(Cdc006Test, NoFinding_SyncChainHasSinglePred) {
     uint64_t sync = graph.add_register("mod.dst_sync", "clk_b", 1, {"", 9, 5});
     uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"", 10, 5});
     for (uint64_t id : {src, meta, sync, dst}) {
-        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+        auto* n = graph.find_node_mutable(id);
+        n->reset_signal = "rst_n";
     }
     graph.add_edge(src, meta);
     graph.add_edge(meta, sync);
@@ -88,7 +104,8 @@ TEST_F(Cdc006Test, NoFinding_MultiPredNotSyncStage) {
     uint64_t dst2 = graph.add_register("mod.dst2_ff", "clk_a", 1, {"", 7, 5});
     uint64_t consumer = graph.add_register("mod.consumer_ff", "clk_b", 1, {"", 8, 5});
     for (uint64_t id : {src, dst1, dst2, consumer}) {
-        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+        auto* n = graph.find_node_mutable(id);
+        n->reset_signal = "rst_n";
     }
     graph.add_edge(src, consumer);
     graph.add_edge(dst1, consumer);
@@ -104,7 +121,8 @@ TEST_F(Cdc006Test, BypassPathAroundSyncDetected) {
     uint64_t sync = graph.add_register("mod.dst_sync", "clk_b", 1, {"", 9, 5});
     uint64_t dst = graph.add_register("mod.dst_ff", "clk_b", 1, {"", 10, 5});
     for (uint64_t id : {src, meta, sync, dst}) {
-        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+        auto* n = graph.find_node_mutable(id);
+        n->reset_signal = "rst_n";
     }
     graph.add_edge(src, meta);
     graph.add_edge(meta, sync);
@@ -117,7 +135,8 @@ TEST_F(Cdc006Test, BypassPathAroundSyncDetected) {
 
     bool found_cdc001 = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC001") found_cdc001 = true;
+        if (f.rule_id == "CDC001")
+            found_cdc001 = true;
     }
     EXPECT_TRUE(found_cdc001) << "Bypass path should generate CDC001";
 }
@@ -128,9 +147,11 @@ TEST_F(Cdc006Test, CombinationalBetweenStage2AndStage3) {
     uint64_t sync1 = graph.add_register("mod.dst_sync1", "clk_b", 1, {"", 9, 5});
     uint64_t sync2 = graph.add_register("mod.dst_sync2", "clk_b", 1, {"", 10, 5});
     uint64_t extra = graph.add_register("mod.extra_reg", "clk_b", 1, {"", 11, 5});
-    uint64_t comb = graph.add_combinational("mod.comb_logic", LogicType::And, {extra, sync1}, 1, {"", 12, 1});
+    uint64_t comb =
+        graph.add_combinational("mod.comb_logic", LogicType::And, {extra, sync1}, 1, {"", 12, 1});
     for (uint64_t id : {src, meta, sync1, sync2, extra}) {
-        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+        auto* n = graph.find_node_mutable(id);
+        n->reset_signal = "rst_n";
     }
     graph.add_edge(src, meta);
     graph.add_edge(meta, sync1);
@@ -141,7 +162,8 @@ TEST_F(Cdc006Test, CombinationalBetweenStage2AndStage3) {
 
     bool found_cdc006 = false;
     for (const auto& f : findings) {
-        if (f.rule_id == "CDC006") found_cdc006 = true;
+        if (f.rule_id == "CDC006")
+            found_cdc006 = true;
     }
     EXPECT_TRUE(found_cdc006)
         << "Combinational logic between stage2 and stage3 should trigger CDC006";

@@ -1,15 +1,16 @@
 // fix_regression_test.cpp — Regression tests for the 12 bug fixes.
 // Each test is labelled with the fix number it validates.
 
-#include "cdc/synchronizer.h"
-#include "cdc/pattern.h"
-#include "cdc/waiver.h"
-#include "cdc/crossing.h"
-#include "cdc/reconvergence.h"
-#include "ir/graph.h"
-#include "clock/domain.h"
-#include "util/string_util.h"
 #include <gtest/gtest.h>
+
+#include "cdc/crossing.h"
+#include "cdc/pattern.h"
+#include "cdc/reconvergence.h"
+#include "cdc/synchronizer.h"
+#include "cdc/waiver.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
+#include "util/string_util.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::clock;
@@ -21,11 +22,11 @@ using namespace opencdc::cdc;
 
 TEST(Fix1_SynchronizerPattern, TwoFFDetectedNotThreeFF) {
     Graph g;
-    uint64_t src  = g.add_register("top.src",  "clkA", 1, {});
+    uint64_t src = g.add_register("top.src", "clkA", 1, {});
     uint64_t meta = g.add_register("top.meta", "clkB", 1, {});
     uint64_t sync = g.add_register("top.sync", "clkB", 1, {});
     // Only src → meta → sync (2 stages in clkB)
-    g.add_edge(src,  meta);
+    g.add_edge(src, meta);
     g.add_edge(meta, sync);
 
     SynchronizerMatcher m;
@@ -36,13 +37,13 @@ TEST(Fix1_SynchronizerPattern, TwoFFDetectedNotThreeFF) {
 
 TEST(Fix1_SynchronizerPattern, ThreeFFDetectedCorrectly) {
     Graph g;
-    uint64_t src  = g.add_register("top.src",  "clkA", 1, {});
-    uint64_t m1   = g.add_register("top.m1",   "clkB", 1, {});
-    uint64_t m2   = g.add_register("top.m2",   "clkB", 1, {});
-    uint64_t m3   = g.add_register("top.m3",   "clkB", 1, {});
+    uint64_t src = g.add_register("top.src", "clkA", 1, {});
+    uint64_t m1 = g.add_register("top.m1", "clkB", 1, {});
+    uint64_t m2 = g.add_register("top.m2", "clkB", 1, {});
+    uint64_t m3 = g.add_register("top.m3", "clkB", 1, {});
     g.add_edge(src, m1);
-    g.add_edge(m1,  m2);
-    g.add_edge(m2,  m3);
+    g.add_edge(m1, m2);
+    g.add_edge(m2, m3);
 
     SynchronizerMatcher m;
     EXPECT_EQ(m.find_pattern_for_dest(m1, g), SyncPattern::ThreeFF)
@@ -61,11 +62,12 @@ TEST(Fix8_ClockGroupDedup, NoDuplicateFalsePaths) {
 
     auto add_if_new = [&](const std::string& a, const std::string& b) {
         for (const auto& fp : false_paths) {
-            if (fp.from_clock == a && fp.to_clock == b) return;
+            if (fp.from_clock == a && fp.to_clock == b)
+                return;
         }
         opencdc::clock::FalsePath fp;
         fp.from_clock = a;
-        fp.to_clock   = b;
+        fp.to_clock = b;
         false_paths.push_back(fp);
     };
 
@@ -86,9 +88,9 @@ TEST(Fix8_ClockGroupDedup, NoDuplicateFalsePaths) {
 TEST(Fix9_WaiverRegex, PreCompiledRegexStoredOnAdd) {
     WaiverEngine engine;
     Waiver w;
-    w.rule_id        = "CDC001";
+    w.rule_id = "CDC001";
     w.source_reg_name = "top\\.src.*";
-    w.match_type     = WaiverMatchType::Regex;
+    w.match_type = WaiverMatchType::Regex;
     ASSERT_TRUE(engine.add_waiver(w));
 
     const auto& stored = engine.waivers().front();
@@ -99,9 +101,9 @@ TEST(Fix9_WaiverRegex, PreCompiledRegexStoredOnAdd) {
 TEST(Fix9_WaiverRegex, InvalidRegexRejectedAtAddTime) {
     WaiverEngine engine;
     Waiver w;
-    w.rule_id        = "CDC001";
-    w.source_reg_name = "[invalid(regex";   // malformed
-    w.match_type     = WaiverMatchType::Regex;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "[invalid(regex";  // malformed
+    w.match_type = WaiverMatchType::Regex;
     EXPECT_FALSE(engine.add_waiver(w))
         << "BUG-7 regression: invalid regex must be rejected by add_waiver";
     EXPECT_TRUE(engine.waivers().empty());
@@ -114,10 +116,10 @@ TEST(Fix9_WaiverRegex, InvalidRegexRejectedAtAddTime) {
 TEST(Fix11_WaiverExpiry, ExpiredWaiverIsReported) {
     WaiverEngine engine;
     Waiver w;
-    w.rule_id        = "CDC001";
+    w.rule_id = "CDC001";
     w.source_reg_name = "top.src";
-    w.expiry         = "2000-01-01";   // definitely expired
-    w.match_type     = WaiverMatchType::Substring;
+    w.expiry = "2000-01-01";  // definitely expired
+    w.match_type = WaiverMatchType::Substring;
     ASSERT_TRUE(engine.add_waiver(w));
 
     std::vector<Finding> no_findings;
@@ -137,10 +139,10 @@ TEST(Fix11_WaiverExpiry, ExpiredWaiverIsReported) {
 TEST(Fix11_WaiverExpiry, UnexpiredUnusedWaiverIsReported) {
     WaiverEngine engine;
     Waiver w;
-    w.rule_id        = "CDC001";
+    w.rule_id = "CDC001";
     w.source_reg_name = "top.src";
-    w.expiry         = "2099-01-01";   // far future
-    w.match_type     = WaiverMatchType::Substring;
+    w.expiry = "2099-01-01";  // far future
+    w.match_type = WaiverMatchType::Substring;
     ASSERT_TRUE(engine.add_waiver(w));
 
     std::vector<Finding> no_findings;
@@ -214,4 +216,3 @@ TEST(Fix7_PathTraversal, NoCycleHang) {
     EXPECT_FALSE(result.paths.empty());
     EXPECT_EQ(result.paths[0].dst_reg_id, r2);
 }
-

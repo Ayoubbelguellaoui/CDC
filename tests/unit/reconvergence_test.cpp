@@ -1,15 +1,17 @@
 #include "cdc/reconvergence.h"
-#include "cdc/crossing.h"
-#include "ir/graph.h"
-#include "clock/domain.h"
+
 #include <gtest/gtest.h>
+
+#include "cdc/crossing.h"
+#include "clock/domain.h"
+#include "ir/graph.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::clock;
 using namespace opencdc::cdc;
 
 class ReconvergenceTest : public ::testing::Test {
-protected:
+   protected:
     Graph graph;
     DomainExtractor domain_extractor;
     CrossingAnalyzer crossing_analyzer;
@@ -53,7 +55,8 @@ TEST_F(ReconvergenceTest, SafeSingleBitNoHazard) {
     uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
     uint64_t dst1 = graph.add_register("mod.dst1", "clk_b", 1, {"mod.sv", 8, 5});
     uint64_t dst2 = graph.add_register("mod.dst2", "clk_b", 1, {"mod.sv", 9, 5});
-    uint64_t mux = graph.add_combinational("mod.mux", LogicType::Mux, {dst1, dst2}, 1, {"mod.sv", 11, 1});
+    uint64_t mux =
+        graph.add_combinational("mod.mux", LogicType::Mux, {dst1, dst2}, 1, {"mod.sv", 11, 1});
     uint64_t consumer = graph.add_register("mod.consumer", "clk_b", 1, {"mod.sv", 10, 5});
 
     graph.add_edge(src, dst1);
@@ -100,9 +103,11 @@ TEST_F(ReconvergenceTest, OnlyCDC001CrossingsFeedReconvergence) {
     uint64_t dst2 = graph.add_register("mod.dst2", "clk_b", 1, {"mod.sv", 9, 5});
     uint64_t consumer = graph.add_register("mod.consumer", "clk_b", 1, {"mod.sv", 10, 5});
 
-    auto* nsrc = graph.find_node_mutable(src); nsrc->reset_signal = "rst_n";
+    auto* nsrc = graph.find_node_mutable(src);
+    nsrc->reset_signal = "rst_n";
     for (auto id : {dst1, dst2, consumer}) {
-        auto* n = graph.find_node_mutable(id); n->reset_signal = "rst_n";
+        auto* n = graph.find_node_mutable(id);
+        n->reset_signal = "rst_n";
     }
 
     graph.add_edge(src, dst1);

@@ -21,7 +21,7 @@ RuleEngine::RuleEngine() {
     register_rule({"CDC006", "combinational_between_sync",
                    "Combinational logic between synchronizer stages", "error", true, "crossing",
                    "1.0.0"});
-    register_rule({"CDC007", "missing_reset", "CDC register without reset signal", "warning", true,
+    register_rule({"CDC007", "missing_reset", "CDC register without reset signal", "info", true,
                    "crossing", "1.0.0"});
     register_rule({"CDC008", "multi_domain_daisy_chain",
                    "Signal crosses 3+ clock domains in daisy chain", "warning", true, "crossing",
@@ -32,6 +32,15 @@ RuleEngine::RuleEngine() {
     register_rule({"CDC010", "path_traversal_truncated",
                    "Path traversal exceeded limit; some crossings may be missed", "warning", true,
                    "analysis", "1.0.0"});
+    register_rule({"CDC011", "pulse_crossing",
+                   "Pulse synchronizer crossing without proper 2FF chain", "warning", true,
+                   "crossing", "1.0.0"});
+    register_rule({"CDC012", "toggle_crossing",
+                   "Toggle synchronizer crossing without proper 2FF chain", "warning", true,
+                   "crossing", "1.0.0"});
+    register_rule({"CDC013", "unknown_propagation",
+                   "Value uncertainty propagated through unsynchronized crossing path", "warning",
+                   true, "crossing", "1.0.0"});
 }
 
 void RuleEngine::register_rule(const Rule& r) {

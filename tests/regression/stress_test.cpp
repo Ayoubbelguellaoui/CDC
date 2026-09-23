@@ -69,7 +69,10 @@ protected:
 };
 
 TEST_F(StressTest, TotalFindingCount) {
-    EXPECT_EQ(findings.size(), 34u);
+    // 34 baseline + 1 net from correctness fixes: intermediate gated/muxed
+    // clocks on crossing paths (CDC004/CDC005) and sequential (non-fanout)
+    // CDC008, minus blackbox/unary corrections via module_type tracking.
+    EXPECT_EQ(findings.size(), 35u);
 }
 
 TEST_F(StressTest, Cdc001_UnsynchronizedCrossing) {

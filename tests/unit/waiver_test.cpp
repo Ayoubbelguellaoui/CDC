@@ -1,5 +1,6 @@
 #include "cdc/waiver.h"
 #include <gtest/gtest.h>
+#include <unistd.h>
 #include <fstream>
 
 using namespace opencdc::cdc;
@@ -144,7 +145,7 @@ TEST_F(WaiverTest, MultipleWaivers) {
 }
 
 TEST_F(WaiverTest, LoadFromFile) {
-    std::string path = "/tmp/test_waivers.txt";
+    std::string path = "/tmp/test_waivers.txt-" + std::to_string(::getpid());
     {
         std::ofstream f(path);
         f << "# comment line\n";
@@ -239,7 +240,7 @@ TEST_F(WaiverTest, SpecificWaiverDoesNotMatchEmptyFindingField) {
 TEST_F(WaiverTest, LoadFromFileRejectsMissingRuleId) {
     // A WILDCARD/REGEX line missing its rule id field would otherwise match
     // every finding of every rule.
-    std::string path = "/tmp/test_waivers_norule.txt";
+    std::string path = "/tmp/test_waivers_norule.txt-" + std::to_string(::getpid());
     {
         std::ofstream f(path);
         f << "WILDCARD top.*.src top.*.dst\n";
@@ -263,7 +264,7 @@ TEST_F(WaiverTest, AddWaiverRejectsEmptyRuleId) {
 }
 
 TEST_F(WaiverTest, LoadFromFileEmptyFileFails) {
-    std::string path = "/tmp/test_waivers_empty.txt";
+    std::string path = "/tmp/test_waivers_empty.txt-" + std::to_string(::getpid());
     {
         std::ofstream f(path);
         f << "# only comments\n\n";

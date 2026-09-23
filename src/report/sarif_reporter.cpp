@@ -52,7 +52,7 @@ void SarifReporter::report(const std::vector<cdc::Finding>& findings,
        << "      \"tool\": {\n"
        << "        \"driver\": {\n"
        << "          \"name\": \"opencdc\",\n"
-       << "          \"version\": \"0.4.0\",\n"
+       << "          \"version\": \"0.4.1\",\n"
        << "          \"informationUri\": \"https://github.com/opencdc/opencdc\",\n"
        << "          \"rules\": [\n";
 

@@ -2,6 +2,8 @@
 
 #include <unordered_set>
 
+#include "config/config.h"
+
 namespace opencdc::cdc {
 
 ResetDomainResult ResetDomainAnalyzer::extract_reset_domains(const ir::Graph& graph) {
@@ -14,8 +16,9 @@ ResetDomainResult ResetDomainAnalyzer::extract_reset_domains(const ir::Graph& gr
         if (node.reset_signal.empty())
             continue;
 
-        std::string domain_key =
-            node.reset_signal + "_" + std::to_string(static_cast<int>(node.reset_pol));
+        std::string domain_key = node.reset_signal + "_" +
+                               std::to_string(static_cast<int>(node.reset_pol)) + "_" +
+                               (node.is_async_reset ? "async" : "sync");
 
         auto it = domain_map.find(domain_key);
         if (it == domain_map.end()) {
@@ -50,7 +53,8 @@ const ResetDomain* ResetDomainAnalyzer::find_domain_for_register(
 std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
     const ir::Graph& graph, const std::vector<ResetDomain>&,
     const std::vector<clock::ClockDomain>& clock_domains,
-    const std::unordered_map<uint64_t, size_t>& register_to_clock_domain) {
+    const std::unordered_map<uint64_t, size_t>& register_to_clock_domain,
+    const config::ResetPolicyConfig* policy) {
     std::vector<Finding> findings;
 
     auto reset_result = extract_reset_domains(graph);
@@ -101,7 +105,15 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
                 continue;
             const clock::ClockDomain* dst_clock = &clock_domains[clock_it->second];
 
-            if (src_clock->id == dst_clock->id)
+            if (src_clock->id == dst_clock->id) {
+                bool check_same = policy && policy->check_same_clock_reset_crossings;
+                if (!check_same)
+                    continue;
+            }
+
+            // Reset synchronizer suppression: dst with 2-stage same-reset chain.
+            if (policy && policy->detect_reset_synchronizer &&
+                has_reset_synchronizer(graph, dst_id, dst->reset_signal))
                 continue;
 
             Finding f;
@@ -121,11 +133,15 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
             bool async_crossing = src.is_async_reset || dst->is_async_reset;
             if (async_crossing) {
                 f.severity = "error";
+                f.safety_status = SafetyStatus::VerifiedUnsafe;
+                f.safety_provenance = "Async reset domain crossing without synchronization";
                 f.reason = "Async reset domain crossing: register '" + src.hier_name +
                            "' (async reset '" + src.reset_signal + "') feeds '" + dst->hier_name +
                            "' (reset '" + dst->reset_signal +
                            "') across clock domains without reset synchronization.";
             } else {
+                f.safety_status = SafetyStatus::VerifiedUnsafe;
+                f.safety_provenance = "Reset domain crossing without synchronization";
                 f.reason = "Reset domain crossing detected: register '" + src.hier_name +
                            "' uses reset '" + src.reset_signal + "' while register '" +
                            dst->hier_name + "' uses reset '" + dst->reset_signal +
@@ -137,6 +153,24 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
     }
 
     return findings;
+}
+
+bool ResetDomainAnalyzer::has_reset_synchronizer(const ir::Graph& graph, uint64_t dst_id,
+                                                 const std::string& reset_signal) const {
+    // Walk backwards: need 2 predecessor stages with same reset signal.
+    auto preds1 = graph.register_predecessors(dst_id, false);
+    for (uint64_t p1 : preds1) {
+        const ir::Node* n1 = graph.find_node(p1);
+        if (!n1 || n1->reset_signal != reset_signal)
+            continue;
+        auto preds2 = graph.register_predecessors(p1, false);
+        for (uint64_t p2 : preds2) {
+            const ir::Node* n2 = graph.find_node(p2);
+            if (n2 && n2->reset_signal == reset_signal)
+                return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace opencdc::cdc

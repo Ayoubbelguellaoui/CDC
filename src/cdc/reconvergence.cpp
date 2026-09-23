@@ -53,6 +53,11 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
     if (src_crossings.size() < 2)
         return findings;
 
+    // Perf guard: high-fanout sources (1k dests -> 500k pairs) are catastrophic.
+    // Cap pairs per source; excess pairs are skipped (documented truncation).
+    static constexpr size_t kMaxPairsPerSource = 10000;
+    size_t pair_count = 0;
+
     // Use the canonical SynchronizerMatcher rather than duplicating chain detection
     // inline. The previous lambda checked for independent successors rather than a
     // proper register chain (dest→s1→s2), which could suppress CDC003 incorrectly.
@@ -64,6 +69,8 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
 
     for (size_t i = 0; i < src_crossings.size(); ++i) {
         for (size_t j = i + 1; j < src_crossings.size(); ++j) {
+            if (++pair_count > kMaxPairsPerSource)
+                return findings;
             const Finding* a = src_crossings[i];
             const Finding* b = src_crossings[j];
 
@@ -74,8 +81,10 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
             // safe for single-bit sources. A multi-bit bus split across
             // independent synchronizers still reconverges with bit skew, so
             // the hazard must be reported regardless of sync chains.
-            if (src->width <= 1 &&
-                (has_sync_chain(a->dest_reg_id) || has_sync_chain(b->dest_reg_id)))
+            // Both sides must be synced to suppress — one synced + one unsynced
+            // reconverging is still hazardous.
+            if (src->width <= 1 && has_sync_chain(a->dest_reg_id) &&
+                has_sync_chain(b->dest_reg_id))
                 continue;
 
             // Bounded BFS: collect up to 16 register descendants per path (max 3 hops)

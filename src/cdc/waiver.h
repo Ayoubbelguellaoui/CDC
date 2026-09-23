@@ -2,6 +2,7 @@
 #define OPENCDC_CDC_WAIVER_H
 
 #include <memory>
+#include <mutex>
 #include <regex>
 #include <string>
 #include <vector>
@@ -56,6 +57,7 @@ class WaiverEngine {
    private:
     std::vector<Waiver> waivers_;
     WaiverMatchType default_match_type_ = WaiverMatchType::Substring;
+    mutable std::mutex mutex_;
 
     static bool is_expired(const std::string& expiry);
     static bool fields_match(const std::string& a, const std::string& b);

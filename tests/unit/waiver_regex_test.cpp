@@ -1,6 +1,7 @@
 #include "cdc/waiver.h"
 #include "cdc/crossing.h"
 #include <gtest/gtest.h>
+#include <unistd.h>
 #include <fstream>
 
 using namespace opencdc::cdc;
@@ -134,7 +135,7 @@ TEST_F(WaiverRegexTest, LoadFromFileWithWildcard) {
     std::string waiver_content = 
         "WILDCARD CDC001 top.*.src top.*.dst \"Test waiver\" @team\n";
     
-    std::string temp_file = "/tmp/test_waivers.txt";
+    std::string temp_file = "/tmp/test_waivers.txt-" + std::to_string(::getpid());
     std::ofstream file(temp_file);
     file << waiver_content;
     file.close();
@@ -150,7 +151,7 @@ TEST_F(WaiverRegexTest, LoadFromFileWithRegex) {
     std::string waiver_content = 
         "REGEX CDC001 top\\.\\w+\\.src top\\.\\w+\\.dst \"Test waiver\" @team\n";
     
-    std::string temp_file = "/tmp/test_waivers_regex.txt";
+    std::string temp_file = "/tmp/test_waivers_regex.txt-" + std::to_string(::getpid());
     std::ofstream file(temp_file);
     file << waiver_content;
     file.close();

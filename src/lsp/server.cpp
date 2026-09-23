@@ -459,11 +459,8 @@ void LspServer::server_loop() {
             port_ = ntohs(address.sin_port);
         }
     }
-    bound_port_ = port_;
-    { std::lock_guard<std::mutex> lock(startup_mutex_); }
-    startup_cv_.notify_all();
 
-    if (listen(listen_fd, 5) < 0) {
+    if (listen(listen_fd, 16) < 0) {
         close(listen_fd);
         {
             std::lock_guard<std::mutex> lock(socket_mutex_);
@@ -473,6 +470,12 @@ void LspServer::server_loop() {
         startup_cv_.notify_all();
         return;
     }
+
+    // Signal ready only after listen() succeeds — clients connecting on the
+    // notified port are otherwise refused intermittently.
+    bound_port_ = port_;
+    { std::lock_guard<std::mutex> lock(startup_mutex_); }
+    startup_cv_.notify_all();
 
     while (running_) {
         fd_set read_fds;
@@ -696,7 +699,11 @@ std::string LspServer::process_message(const std::string& message) {
             return is_notification ? "" : serialize_error(id, -32602, "Missing document URI");
         TextDocument doc;
         doc.uri = uri;
-        doc.text = params.value("text", std::string());
+        // LSP didSave: text is in params.text (string) or params.textDocument.text.
+        if (params.contains("text") && params["text"].is_string())
+            doc.text = params["text"].get<std::string>();
+        else if (document.contains("text") && document["text"].is_string())
+            doc.text = document["text"].get<std::string>();
         if (doc.text.empty()) {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = open_documents_.find(uri);

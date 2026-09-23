@@ -26,7 +26,8 @@ static std::string to_lower(const std::string& s) {
 }
 
 static std::string strip_quotes(const std::string& s) {
-    if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
+    if (s.size() >= 2 &&
+        ((s.front() == '"' && s.back() == '"') || (s.front() == '\'' && s.back() == '\'')))
         return s.substr(1, s.size() - 2);
     return s;
 }
@@ -131,13 +132,13 @@ static Config parse_legacy(const std::string& content, std::string* error) {
             size_t colon = trimmed.find(':');
             if (colon != std::string::npos) {
                 std::string key = to_lower(trim(trimmed.substr(0, colon)));
-                std::string value = to_lower(strip_quotes(trim(trimmed.substr(colon + 1))));
+                std::string raw_value = strip_quotes(trim(trimmed.substr(colon + 1)));
                 if (key == "format")
-                    config.output.format = value;
+                    config.output.format = to_lower(raw_value);
                 else if (key == "file")
-                    config.output.file = value;
+                    config.output.file = raw_value;
                 else if (key == "suppress_reset_crossings")
-                    config.suppress_reset_crossings = (value == "true");
+                    config.suppress_reset_crossings = (to_lower(raw_value) == "true");
             }
         } else if (current_section == "false_paths") {
             if (trimmed[0] == '-') {
@@ -279,7 +280,7 @@ static void parse_output_node(const YAML::Node& output_node, Config& config,
     if (!output_node || !output_node.IsMap())
         return;
     if (output_node["format"])
-        config.output.format = output_node["format"].as<std::string>();
+        config.output.format = to_lower(output_node["format"].as<std::string>());
     if (output_node["file"])
         config.output.file = output_node["file"].as<std::string>();
     if (output_node["suppress_reset_crossings"]) {
@@ -322,7 +323,39 @@ static void parse_false_paths_node(const YAML::Node& fp_node, Config& config) {
 }
 
 static void parse_clock_groups_node(const YAML::Node& cg_node, Config& config) {
-    if (!cg_node || !cg_node.IsMap())
+    if (!cg_node)
+        return;
+    // Accept both map form (name: {clocks: [...]}) and sequence form
+    // (- {clocks: [...], exclusive: true}).
+    if (cg_node.IsSequence()) {
+        for (const auto& grp_node : cg_node) {
+            if (!grp_node.IsMap())
+                continue;
+            ClockGroupConfig grp;
+            grp.exclusive = true;
+            if (grp_node["clocks"]) {
+                if (grp_node["clocks"].IsSequence()) {
+                    for (const auto& c : grp_node["clocks"])
+                        grp.clocks.push_back(c.as<std::string>());
+                } else if (grp_node["clocks"].IsScalar()) {
+                    std::string val = grp_node["clocks"].as<std::string>();
+                    std::istringstream ss(val);
+                    std::string clk;
+                    while (std::getline(ss, clk, ',')) {
+                        auto a = clk.find_first_not_of(" \t");
+                        auto b = clk.find_last_not_of(" \t");
+                        if (a != std::string::npos)
+                            grp.clocks.push_back(clk.substr(a, b - a + 1));
+                    }
+                }
+            }
+            if (grp_node["exclusive"])
+                grp.exclusive = to_lower(grp_node["exclusive"].as<std::string>()) == "true";
+            config.clock_groups.push_back(std::move(grp));
+        }
+        return;
+    }
+    if (!cg_node.IsMap())
         return;
     for (auto it = cg_node.begin(); it != cg_node.end(); ++it) {
         ClockGroupConfig grp;

@@ -6,13 +6,31 @@
 #include <unordered_map>
 #include <vector>
 
+#include "cdc/blackbox.h"
 #include "cdc/pattern.h"
 #include "cdc/synchronizer.h"
 #include "clock/constraints.h"
 #include "clock/domain.h"
+#include "clock/relationship.h"
+#include "clock/resolve.h"
+#include "config/config.h"
 #include "ir/graph.h"
+#include "ir/module_tree.h"
 
 namespace opencdc::cdc {
+
+enum class SafetyStatus { Unknown, Candidate, VerifiedSafe, VerifiedUnsafe, Ambiguous };
+
+enum class MultiBitCrossingType {
+    None,
+    Raw,
+    Synchronized,
+    StaticData,
+    HandshakeControlled,
+    GrayCoded,
+    AsyncFifo,
+    Unknown
+};
 
 struct CrossingPath {
     std::vector<uint64_t> node_ids;
@@ -24,6 +42,13 @@ struct ReconvergenceInfo {
     uint64_t common_source_id = 0;
     std::string common_source_name;
     std::string explanation;
+};
+
+struct EvidenceStep {
+    std::string step_type;
+    std::string description;
+    std::string result;
+    std::string source_file;
 };
 
 struct Finding {
@@ -44,6 +69,7 @@ struct Finding {
     bool waived = false;
     std::string waiver_justification;
     std::string waiver_owner;
+    std::string waiver_ticket;
     uint32_t bus_width = 1;
     bool is_gray_coded = false;
     bool has_handshake = false;
@@ -53,6 +79,17 @@ struct Finding {
     std::string source_module_path;
     std::string dest_module_path;
     bool crosses_module_boundary = false;
+    SafetyStatus safety_status = SafetyStatus::Unknown;
+    std::string safety_provenance;
+    bool suppressed_by_false_path = false;
+    std::string false_path_source;
+    bool suppressed_by_multicycle = false;
+    std::string multicycle_source;
+    clock::ClockRelationship clock_relationship = clock::ClockRelationship::Unknown;
+    MultiBitCrossingType multi_bit_type = MultiBitCrossingType::None;
+    std::vector<EvidenceStep> evidence_chain;
+    bool propagates_uncertainty = false;
+    std::string uncertainty_reason;
 };
 
 class CrossingAnalyzer {
@@ -70,6 +107,30 @@ class CrossingAnalyzer {
         clock_constraints_ = constraints;
     }
 
+    void set_reset_policy(const config::ResetPolicyConfig* policy) {
+        reset_policy_ = policy;
+    }
+
+    void set_multicycle_policy(const config::MulticyclePathPolicy* policy) {
+        multicycle_policy_ = policy;
+    }
+
+    void set_resolve_result(const clock::ResolveResult* resolve) {
+        resolve_result_ = resolve;
+    }
+
+    void set_blackbox_registry(const BlackBoxRegistry* registry) {
+        blackbox_registry_ = registry;
+    }
+
+    void set_min_sync_stages(int stages) {
+        min_sync_stages_ = stages;
+    }
+
+    void set_module_tree(const ir::ModuleTree* tree) {
+        module_tree_ = tree;
+    }
+
    private:
     const clock::ClockDomain* find_domain_for_node(
         uint64_t node_id, const std::vector<clock::ClockDomain>& domains,
@@ -79,9 +140,21 @@ class CrossingAnalyzer {
 
     bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
 
+    bool is_path_through_safe_blackbox(const ir::Graph& graph,
+                                       const std::vector<uint64_t>& path_node_ids) const;
+
     SynchronizerMatcher sync_matcher_;
     PatternRecognizer* pattern_recognizer_ = nullptr;
     const clock::ClockConstraints* clock_constraints_ = nullptr;
+    const config::ResetPolicyConfig* reset_policy_ = nullptr;
+    const config::MulticyclePathPolicy* multicycle_policy_ = nullptr;
+    const clock::ResolveResult* resolve_result_ = nullptr;
+    const BlackBoxRegistry* blackbox_registry_ = nullptr;
+    const ir::ModuleTree* module_tree_ = nullptr;
+    int min_sync_stages_ = 2;
+
+   public:
+    void propagate_uncertainty(ir::Graph& graph, std::vector<Finding>& findings) const;
 };
 
 }  // namespace opencdc::cdc

@@ -41,6 +41,7 @@ struct Node {
     std::string hier_name;
     std::string short_name;
     std::string module_path;
+    std::string module_type;
     NodeKind kind = NodeKind::Register;
     uint32_t width = 1;
     std::string clock_domain;
@@ -61,11 +62,26 @@ struct Node {
     bool is_gray_coded = false;
     bool is_handshake_signal = false;
     bool is_async_fifo_ptr = false;
+
+    // Uncertainty tracking (set by crossing analysis)
+    bool value_uncertain = false;
+    std::string uncertainty_source;
+
+    // Control signal classification (set by slang adapter)
+    bool is_control_signal = false;
+};
+
+enum class EdgeRole : uint8_t {
+    Data,
+    Control,
+    Clock,
+    Reset
 };
 
 struct Edge {
     uint64_t from_id;
     uint64_t to_id;
+    EdgeRole role = EdgeRole::Data;
 };
 
 struct ValidationResult {
@@ -91,19 +107,22 @@ class Graph {
 
     uint64_t add_register(const std::string& hier_name, const std::string& clock_domain,
                           uint32_t width, const SourceLoc& loc,
-                          const std::string& module_path = "");
+                          const std::string& module_path = "",
+                          const std::string& module_type = "");
 
     uint64_t add_port(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
-                      const std::string& module_path = "");
+                      const std::string& module_path = "", const std::string& module_type = "");
 
     uint64_t add_net(const std::string& hier_name, uint32_t width, const SourceLoc& loc,
-                     const std::string& module_path = "");
+                     const std::string& module_path = "", const std::string& module_type = "");
 
     uint64_t add_combinational(const std::string& hier_name, LogicType logic_type,
                                const std::vector<uint64_t>& inputs, uint32_t width,
-                               const SourceLoc& loc, const std::string& module_path = "");
+                               const SourceLoc& loc, const std::string& module_path = "",
+                               const std::string& module_type = "");
 
     void add_edge(uint64_t from_id, uint64_t to_id);
+    void add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role);
 
     const Node* find_node(uint64_t id) const;
     Node* find_node_mutable(uint64_t id);
@@ -161,6 +180,17 @@ class Graph {
         return generation_;
     }
 
+    bool dirty() const {
+        return dirty_;
+    }
+    void clear_dirty() {
+        dirty_ = false;
+    }
+    void mark_dirty() {
+        dirty_ = true;
+        ++generation_;
+    }
+
    private:
     std::vector<Node> nodes_;
     std::vector<Edge> edges_;
@@ -172,6 +202,7 @@ class Graph {
     uint64_t next_id_ = 1;
     uint64_t generation_ = 0;
     bool truncated_ = false;
+    bool dirty_ = false;
 };
 
 }  // namespace opencdc::ir

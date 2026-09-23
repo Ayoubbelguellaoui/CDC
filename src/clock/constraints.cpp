@@ -55,7 +55,30 @@ bool pattern_matches(const std::string& pattern, const std::string& value) {
         pattern.find('*') != std::string::npos || pattern.find('?') != std::string::npos;
 
     if (!has_wildcard) {
-        return value.find(pattern) != std::string::npos;
+        // Boundary-aware substring: must align on hierarchical boundaries
+        // ('.', '/', '_', '-', ':', ' ', '[') so "clk" matches "mod.clk_core_ff"
+        // but not "nclk"/"myclk".
+        std::string lp = pattern;
+        std::string lv = value;
+        std::transform(lp.begin(), lp.end(), lp.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        std::transform(lv.begin(), lv.end(), lv.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        auto is_boundary = [](char c) {
+            return c == '.' || c == '/' || c == '_' || c == '-' || c == ':' || c == ' ' ||
+                   c == '[';
+        };
+        size_t pos = 0;
+        while ((pos = lv.find(lp, pos)) != std::string::npos) {
+            bool left_ok = (pos == 0) || is_boundary(lv[pos - 1]);
+            size_t end = pos + lp.size();
+            bool right_ok = (end >= lv.size()) || is_boundary(lv[end]) ||
+                            std::isdigit(static_cast<unsigned char>(lv[end]));
+            if (left_ok && right_ok)
+                return true;
+            ++pos;
+        }
+        return false;
     }
 
     if (wildcard_match(pattern, value))
@@ -156,8 +179,24 @@ bool ClockConstraints::is_false_path(const std::string& from, const std::string&
 }
 
 bool ClockConstraints::is_asynchronous(const std::string& clk1, const std::string& clk2) const {
+    // Within-group: YAML single group listing explicit clocks. Require matches
+    // to DIFFERENT entries so one wildcard entry (e.g. "clk_*") does not make
+    // all its members async to each other (SDC -group semantics).
+    for (const auto& g : clock_groups) {
+        if (!g.asynchronous)
+            continue;
+        int idx_a = -1, idx_b = -1;
+        for (size_t i = 0; i < g.clocks.size(); ++i) {
+            if (pattern_matches(g.clocks[i], clk1) && idx_a < 0)
+                idx_a = static_cast<int>(i);
+            if (pattern_matches(g.clocks[i], clk2) && idx_b < 0)
+                idx_b = static_cast<int>(i);
+        }
+        if (idx_a >= 0 && idx_b >= 0 && idx_a != idx_b && clk1 != clk2)
+            return true;
+    }
     for (const auto& g1 : clock_groups) {
-        if (!g1.asynchronous && !g1.exclusive)
+        if (!g1.asynchronous)
             continue;
         for (const auto& g2 : clock_groups) {
             if (&g1 == &g2)
@@ -186,8 +225,15 @@ std::optional<ClockDefinition> ClockConstraints::get_clock(const std::string& na
     if (it != clock_map.end())
         return it->second;
 
+    // Exact-name fallback only — never bare-substring. A bare substring here
+    // makes get_clock("clk") return "clk_fast" (first linear-scan hit).
     for (const auto& clk : clocks) {
-        if (pattern_matches(clk.name, name)) {
+        if (iequals(clk.name, name)) {
+            return clk;
+        }
+        bool has_wildcard =
+            clk.name.find('*') != std::string::npos || clk.name.find('?') != std::string::npos;
+        if (has_wildcard && pattern_matches(clk.name, name)) {
             return clk;
         }
     }
@@ -629,9 +675,10 @@ void SdcReader::parse_set_clock_groups(const std::string& line, ClockConstraints
             } else {
                 // Bare clock name (e.g. `set_clock_groups -group clk1 -group clk2`)
                 std::string clk = tok;
-                if (clk.front() == '"' && clk.back() == '"')
+                if (clk.size() >= 2 && clk.front() == '"' && clk.back() == '"')
                     clk = clk.substr(1, clk.size() - 2);
-                current_group.clocks.push_back(clk);
+                if (!clk.empty())
+                    current_group.clocks.push_back(clk);
             }
         }
     }
@@ -785,6 +832,10 @@ static ClockConstraints parse_yaml_from_node(const YAML::Node& root) {
                     (item["from_clock"] ? item["from_clock"] : item["from"]).as<std::string>();
             if (item["to_clock"] || item["to"])
                 fp.to_clock = (item["to_clock"] ? item["to_clock"] : item["to"]).as<std::string>();
+            if (item["source_clock"])
+                fp.from_clock = item["source_clock"].as<std::string>();
+            if (item["dest_clock"])
+                fp.to_clock = item["dest_clock"].as<std::string>();
             if (item["from_reg"])
                 fp.from_reg = item["from_reg"].as<std::string>();
             if (item["to_reg"])
@@ -1104,7 +1155,10 @@ ClockConstraints ConstraintsParser::parse_file(const std::string& path, std::str
     std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
     ClockConstraints constraints;
-    if (path.size() >= 4 && path.substr(path.size() - 4) == ".sdc") {
+    std::string lower_path = path;
+    std::transform(lower_path.begin(), lower_path.end(), lower_path.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower_path.size() >= 4 && lower_path.substr(lower_path.size() - 4) == ".sdc") {
         SdcReader sdc_reader;
         constraints = sdc_reader.parse_sdc_content(content);
     } else {

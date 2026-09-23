@@ -14,14 +14,18 @@ namespace opencdc::util {
 inline std::vector<std::string> split_compact_kv(const std::string& line) {
     std::vector<std::string> parts;
     std::string current;
-    bool in_quotes = false;
+    char quote = 0;
 
     for (size_t i = 0; i < line.size(); ++i) {
         char c = line[i];
-        if (c == '"') {
-            in_quotes = !in_quotes;
+        if (quote) {
             current += c;
-        } else if (c == ',' && !in_quotes) {
+            if (c == quote && (i == 0 || line[i - 1] != '\\'))
+                quote = 0;
+        } else if (c == '"' || c == '\'') {
+            quote = c;
+            current += c;
+        } else if (c == ',' ) {
             parts.push_back(current);
             current.clear();
         } else {
@@ -44,15 +48,43 @@ inline std::vector<std::string> split_compact_kv(const std::string& line) {
 /// yaml-cpp handles those natively.
 inline std::string expand_compact_yaml(const std::string& content) {
     std::string result;
-    result.reserve(content.size());
+    result.reserve(content.size() + content.size() / 4);
 
     std::istringstream iss(content);
     std::string line;
 
     while (std::getline(iss, line)) {
-        // Detect compact list item: line contains "- key: value, key: value"
-        // We need: a dash, a key after it, and at least one more ", key:" outside quotes.
-        size_t dash_pos = line.find("- ");
+        // Strip CR for CRLF files and quote-aware trailing comments.
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        {
+            char quote = 0;
+            size_t comment = std::string::npos;
+            for (size_t i = 0; i < line.size(); ++i) {
+                char c = line[i];
+                if (quote) {
+                    if (c == quote && (i == 0 || line[i - 1] != '\\'))
+                        quote = 0;
+                } else if (c == '"' || c == '\'') {
+                    quote = c;
+                } else if (c == '#') {
+                    comment = i;
+                    break;
+                }
+            }
+            if (comment != std::string::npos)
+                line = line.substr(0, comment);
+        }
+        // Detect compact list item: line starts with optional indent + "- ".
+        // Anchor at start so "reason: a - b, foo: bar" is not rewritten.
+        size_t dash_pos = std::string::npos;
+        {
+            size_t i = 0;
+            while (i < line.size() && (line[i] == ' ' || line[i] == '\t'))
+                ++i;
+            if (i + 1 < line.size() && line[i] == '-' && line[i + 1] == ' ')
+                dash_pos = i;
+        }
         if (dash_pos == std::string::npos) {
             result += line + "\n";
             continue;
@@ -89,10 +121,12 @@ inline std::string expand_compact_yaml(const std::string& content) {
                 all_kv = false;
                 break;
             }
-            // Key must be a simple identifier (alphanumeric, underscore).
+            // Key must be a simple identifier (alphanumeric, underscore,
+            // dash, dot, slash for hierarchical names).
             std::string key = trimmed.substr(0, colon);
             for (char k : key) {
-                if (!std::isalnum(static_cast<unsigned char>(k)) && k != '_') {
+                if (!std::isalnum(static_cast<unsigned char>(k)) && k != '_' && k != '-' &&
+                    k != '.' && k != '/') {
                     all_kv = false;
                     break;
                 }

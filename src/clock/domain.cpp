@@ -9,6 +9,8 @@ namespace opencdc::clock {
 DomainResult DomainExtractor::extract(const ir::Graph& graph) {
     DomainResult result;
     std::unordered_map<std::string, size_t> domain_map;
+    // Reset per call so IDs are deterministic on resolver reuse.
+    next_domain_id_ = 0;
 
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register)
@@ -23,7 +25,7 @@ DomainResult DomainExtractor::extract(const ir::Graph& graph) {
 
         if (domain_name == "unknown" || domain_name.empty()) {
             result.warnings.push_back(
-                "Clock relationship unresolved for register '" + node.hier_name +
+                "Clock domain unresolved for register '" + node.hier_name +
                 "': analysis requires user annotation or additional clock information.");
             continue;
         }

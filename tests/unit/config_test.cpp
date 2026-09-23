@@ -1,6 +1,7 @@
 #include "config/config.h"
 #include "analysis/trend.h"
 #include <gtest/gtest.h>
+#include <unistd.h>
 #include <string>
 #include <cstdio>
 
@@ -258,7 +259,7 @@ TEST(TrendTest, BaselineRoundTripsDelimitersNewlinesAndDuplicates) {
     finding.waived = true;
     finding.waiver_justification = "why\n";
 
-    const std::string path = "/tmp/opencdc-trend-test.baseline";
+    const std::string path = "/tmp/opencdc-trend-test-" + std::to_string(::getpid()) + ".baseline";
     opencdc::analysis::TrendAnalyzer analyzer;
     analyzer.save_baseline("baseline:name\n", {finding, finding}, path);
     auto baseline = analyzer.load_baseline(path);

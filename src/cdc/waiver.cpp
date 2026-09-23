@@ -90,6 +90,8 @@ bool WaiverEngine::fields_match(const std::string& waiver_field, const std::stri
     // waives unrelated results.
     if (waiver_field.empty())
         return true;
+    if (waiver_field == "*")
+        return true;
     if (finding_field.empty())
         return false;
     return to_lower(waiver_field) == to_lower(finding_field);
@@ -98,9 +100,34 @@ bool WaiverEngine::fields_match(const std::string& waiver_field, const std::stri
 static bool substring_match(const std::string& pattern, const std::string& value) {
     if (pattern.empty())
         return true;
+    if (pattern == "*")
+        return true;
     if (value.empty())
         return false;
-    return to_lower(value).find(to_lower(pattern)) != std::string::npos;
+    // Hierarchical-boundary aware: match must align on '.'/'/'/'_' boundaries
+    // so "mod.src" does not match "other_mod.src_extra".
+    std::string lp = to_lower(pattern);
+    std::string lv = to_lower(value);
+    size_t pos = 0;
+    while ((pos = lv.find(lp, pos)) != std::string::npos) {
+        bool left_ok = (pos == 0) || lv[pos - 1] == '.' || lv[pos - 1] == '/' ||
+                       lv[pos - 1] == ':' || lv[pos - 1] == ' ';
+        size_t end = pos + lp.size();
+        bool right_ok = (end >= lv.size()) || lv[end] == '.' || lv[end] == '/' ||
+                        lv[end] == ':' || lv[end] == ' ' || lv[end] == '[';
+        // Also allow '_' boundary only when both sides agree (avoid mod vs other_mod).
+        if (!left_ok && pos > 0 && lv[pos - 1] == '_' && (pos + lp.size() >= lv.size() ||
+                                                          lv[pos + lp.size()] != '_')) {
+            // Check pattern starts at segment start: preceding '_' must follow '.' or start.
+            // "other_mod" contains "_mod" but pattern "mod" should not match mid-segment.
+            left_ok = false;
+        }
+        if (left_ok && right_ok)
+            return true;
+        // Strict: '_' does not count as boundary for overmatch prevention.
+        ++pos;
+    }
+    return false;
 }
 
 // Rule ids in this tool have the shape CDC001 (letter prefix + digits); "*"
@@ -225,18 +252,25 @@ bool WaiverEngine::add_waiver(const Waiver& w) {
         }
     }
 
+    std::lock_guard<std::mutex> lock(mutex_);
     waivers_.push_back(std::move(stored));
     return true;
 }
 
 std::vector<Finding> WaiverEngine::apply(const std::vector<Finding>& findings) const {
+    std::vector<Waiver> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot = waivers_;
+    }
     std::vector<Finding> result;
     for (auto f : findings) {
-        for (const auto& w : waivers_) {
+        for (const auto& w : snapshot) {
             if (matches(f, w)) {
                 f.waived = true;
                 f.waiver_justification = w.justification;
                 f.waiver_owner = w.owner;
+                f.waiver_ticket = w.ticket;
                 break;
             }
         }
@@ -246,14 +280,20 @@ std::vector<Finding> WaiverEngine::apply(const std::vector<Finding>& findings) c
 }
 
 std::vector<std::string> WaiverEngine::check_unused(const std::vector<Finding>& findings) const {
+    std::vector<Waiver> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot = waivers_;
+    }
     std::vector<std::string> warnings;
-    for (size_t i = 0; i < waivers_.size(); ++i) {
-        const auto& w = waivers_[i];
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        const auto& w = snapshot[i];
         bool used = false;
+        size_t match_count = 0;
         for (const auto& f : findings) {
             if (matches(f, w)) {
                 used = true;
-                break;
+                ++match_count;
             }
         }
         if (is_expired(w.expiry)) {
@@ -266,6 +306,11 @@ std::vector<std::string> WaiverEngine::check_unused(const std::vector<Finding>& 
             warnings.push_back("Waiver #" + std::to_string(i + 1) + " (rule=" + w.rule_id +
                                ", source=" + w.source_reg_name + ", dest=" + w.dest_reg_name +
                                ") did not match any finding");
+        } else if (match_count >= 10) {
+            warnings.push_back("Waiver #" + std::to_string(i + 1) + " (rule=" + w.rule_id +
+                               ", source=" + w.source_reg_name + ", dest=" + w.dest_reg_name +
+                               ") matched " + std::to_string(match_count) +
+                               " findings — may be overly broad");
         }
     }
     return warnings;
@@ -346,6 +391,19 @@ bool WaiverEngine::load_from_file(const std::string& path, std::string* error) {
             if (space != std::string::npos) {
                 rest = trim(rest.substr(space + 1));
             } else {
+                rest.clear();
+            }
+        }
+
+        // Parse optional ticket reference (TICKET-NNN or JIRA-NNN or #NNN pattern).
+        if (!rest.empty() && (rest[0] == 'T' || rest[0] == 't' || rest[0] == 'J' ||
+                              rest[0] == 'j' || rest[0] == '#')) {
+            size_t space = rest.find(' ');
+            if (space != std::string::npos) {
+                w.ticket = rest.substr(0, space);
+                rest = trim(rest.substr(space + 1));
+            } else {
+                w.ticket = rest;
                 rest.clear();
             }
         }

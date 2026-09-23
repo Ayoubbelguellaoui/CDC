@@ -63,11 +63,11 @@ ClockRelationship classify_relationship(const std::string& clk_a, const std::str
     if (clk_a == clk_b)
         return ClockRelationship::Same;
 
-    if (constraints.is_asynchronous(clk_a, clk_b))
-        return ClockRelationship::Asynchronous;
-
     if (is_exclusive_pair(constraints, clk_a, clk_b))
         return ClockRelationship::Exclusive;
+
+    if (constraints.is_asynchronous(clk_a, clk_b))
+        return ClockRelationship::Asynchronous;
 
     auto def_a = constraints.get_clock(clk_a);
     auto def_b = constraints.get_clock(clk_b);
@@ -89,6 +89,12 @@ ClockRelationship classify_relationship(const std::string& clk_a, const std::str
     auto it_a = resolver.clock_map.find(clk_a);
     auto it_b = resolver.clock_map.find(clk_b);
     if (it_a != resolver.clock_map.end() && it_b != resolver.clock_map.end()) {
+        // Same root, neither gated nor muxed => frequency-locked synchronous.
+        if (!it_a->second.is_gated && !it_a->second.is_muxed && !it_b->second.is_gated &&
+            !it_b->second.is_muxed && !it_a->second.root_clock.empty() &&
+            it_a->second.root_clock == it_b->second.root_clock) {
+            return ClockRelationship::Synchronous;
+        }
         if (it_a->second.is_gated && it_b->second.is_gated &&
             it_a->second.root_clock == it_b->second.root_clock) {
             return ClockRelationship::Related;
@@ -99,6 +105,13 @@ ClockRelationship classify_relationship(const std::string& clk_a, const std::str
             return ClockRelationship::Gated;
         if (it_a->second.is_muxed || it_b->second.is_muxed)
             return ClockRelationship::Muxed;
+    }
+
+    // Fallback: same root clock string => synchronous (e.g. resolver only
+    // populated root_clock without gated/muxed flags).
+    if (it_a != resolver.clock_map.end() && it_b != resolver.clock_map.end() &&
+        !it_a->second.root_clock.empty() && it_a->second.root_clock == it_b->second.root_clock) {
+        return ClockRelationship::Synchronous;
     }
 
     return ClockRelationship::Unknown;

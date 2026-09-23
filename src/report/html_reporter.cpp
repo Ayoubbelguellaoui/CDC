@@ -8,6 +8,7 @@
 #include <unordered_map>
 
 #include "opencdc/version.h"
+#include "report/report.h"
 
 namespace opencdc::report {
 
@@ -175,7 +176,11 @@ std::string HtmlReporter::generate_severity_chart(const std::vector<cdc::Finding
     html << "  <h3>By Severity</h3>\n";
     html << "  <div class=\"bar-chart\">\n";
 
-    for (const auto& [sev, count] : counts) {
+    // Deterministic order for stable reports.
+    std::vector<std::pair<std::string, int>> sorted(counts.begin(), counts.end());
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (const auto& [sev, count] : sorted) {
         int percent = active_count == 0
                           ? 0
                           : static_cast<int>(static_cast<size_t>(count) * 100 / active_count);
@@ -516,6 +521,16 @@ nav a:hover {
     color: var(--text-secondary);
 }
 
+.no-results {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-secondary);
+}
+
+tr.expanded td {
+    white-space: normal;
+}
+
 .no-findings .icon {
     font-size: 3em;
     margin-bottom: 10px;
@@ -551,6 +566,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const searchInput = document.getElementById('search-input');
     const severityFilter = document.getElementById('severity-filter');
     const ruleFilter = document.getElementById('rule-filter');
+    const safetyFilter = document.getElementById('safety-filter');
     const table = document.querySelector('.findings-table tbody');
     
     if (!table) return;
@@ -559,6 +575,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const searchTerm = searchInput ? searchInput.value.toLowerCase() : '';
         const severityValue = severityFilter ? severityFilter.value : '';
         const ruleValue = ruleFilter ? ruleFilter.value : '';
+        const safetyValue = safetyFilter ? safetyFilter.value : '';
         
         const rows = table.querySelectorAll('tr');
         let visibleCount = 0;
@@ -569,12 +586,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             row.classList.contains('severity-warning') ? 'warning' : 'info';
             const ruleCell = row.querySelector('.rule-id');
             const rule = ruleCell ? ruleCell.textContent : '';
+            const safetyCell = row.querySelector('.safety-status');
+            const safety = safetyCell ? safetyCell.textContent.toLowerCase().replace(/ /g, '_') : '';
             
             const matchesSearch = !searchTerm || text.includes(searchTerm);
             const matchesSeverity = !severityValue || severity === severityValue;
             const matchesRule = !ruleValue || rule === ruleValue;
+            const matchesSafety = !safetyValue || safety.includes(safetyValue);
             
-            if (matchesSearch && matchesSeverity && matchesRule) {
+            if (matchesSearch && matchesSeverity && matchesRule && matchesSafety) {
                 row.style.display = '';
                 visibleCount++;
             } else {
@@ -591,6 +611,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (searchInput) searchInput.addEventListener('input', filterRows);
     if (severityFilter) severityFilter.addEventListener('change', filterRows);
     if (ruleFilter) ruleFilter.addEventListener('change', filterRows);
+    if (safetyFilter) safetyFilter.addEventListener('change', filterRows);
     
     const rows = table.querySelectorAll('tr');
     rows.forEach(row => {
@@ -650,8 +671,9 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     index << "    <section class=\"findings-section\">\n";
     index << "      <h2>Recent Findings</h2>\n";
 
-    size_t recent_count = std::min(findings.size(), size_t(10));
-    std::vector<cdc::Finding> recent(findings.begin(), findings.begin() + recent_count);
+    auto sorted = Reporter::sorted_findings(findings);
+    size_t recent_count = std::min(sorted.size(), size_t(10));
+    std::vector<cdc::Finding> recent(sorted.begin(), sorted.begin() + recent_count);
     index << generate_findings_table(recent, options.include_source_snippets);
 
     index << "      <p style=\"text-align: center; margin-top: 20px;\">\n";
@@ -711,6 +733,13 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
         findings_file << "        <option value=\"" << escape_html(rule) << "\">"
                       << escape_html(rule) << "</option>\n";
     }
+    findings_file << "      </select>\n";
+    findings_file << "      <select id=\"safety-filter\">\n";
+    findings_file << "        <option value=\"\">All Safety</option>\n";
+    findings_file << "        <option value=\"verified_safe\">Verified Safe</option>\n";
+    findings_file << "        <option value=\"verified_unsafe\">Verified Unsafe</option>\n";
+    findings_file << "        <option value=\"ambiguous\">Ambiguous</option>\n";
+    findings_file << "        <option value=\"candidate\">Candidate</option>\n";
     findings_file << "      </select>\n";
     findings_file << "    </div>\n";
 

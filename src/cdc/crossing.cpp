@@ -8,6 +8,36 @@
 
 namespace opencdc::cdc {
 
+bool CrossingAnalyzer::is_path_through_safe_blackbox(
+    const ir::Graph& graph, const std::vector<uint64_t>& path_node_ids) const {
+    if (!blackbox_registry_)
+        return false;
+
+    for (uint64_t nid : path_node_ids) {
+        const ir::Node* node = graph.find_node(nid);
+        if (!node)
+            continue;
+        if (!node->module_type.empty()) {
+            const BlackBoxModel* by_type = blackbox_registry_->find(node->module_type);
+            if (by_type && by_type->properties.is_safe_crossing)
+                return true;
+            continue;
+        }
+        std::string mp = node->module_path;
+        const BlackBoxModel* model = blackbox_registry_->find(mp);
+        if (model && model->properties.is_safe_crossing)
+            return true;
+        auto slash = mp.find_last_of("/.");
+        if (slash != std::string::npos) {
+            std::string leaf = mp.substr(slash + 1);
+            model = blackbox_registry_->find(leaf);
+            if (model && model->properties.is_safe_crossing)
+                return true;
+        }
+    }
+    return false;
+}
+
 bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id,
                                                   const ir::Graph& graph) const {
     const ir::Node* src = graph.find_node(src_id);
@@ -85,6 +115,8 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             trunc.source_module_path = src->module_path;
             trunc.reason = "Path traversal truncated at " + std::to_string(path_result.max_paths) +
                            " paths from register '" + src->hier_name + "'.";
+            trunc.safety_status = SafetyStatus::Ambiguous;
+            trunc.safety_provenance = "Path traversal truncated — some crossings may be missed";
             local_findings.push_back(std::move(trunc));
         }
 
@@ -116,10 +148,10 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 ctx.destination_clock = dst_dom->name;
                 ctx.source_register = src->hier_name;
                 ctx.destination_register = dst->hier_name;
-                ctx.source_cell = src->hier_name;
-                ctx.destination_cell = dst->hier_name;
-                ctx.source_pin = src->hier_name;
-                ctx.destination_pin = dst->hier_name;
+                ctx.source_cell = "";
+                ctx.destination_cell = "";
+                ctx.source_pin = "";
+                ctx.destination_pin = "";
                 ctx.path_nodes.clear();
                 for (auto nid : reg_path.node_ids) {
                     const ir::Node* n = graph.find_node(nid);
@@ -128,8 +160,58 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 }
                 is_false_path = clock_constraints_->is_false_path(ctx);
             }
-            if (is_false_path)
+            if (is_false_path) {
+                // Record false-path suppression for auditability.
+                Finding sup;
+                sup.rule_id = "CDC001";
+                sup.rule_name = "unsynchronized_crossing";
+                sup.severity = "info";
+                sup.source_reg_id = src_id;
+                sup.dest_reg_id = dst_id;
+                sup.source_reg_name = src->hier_name;
+                sup.dest_reg_name = dst->hier_name;
+                sup.source_domain = src_dom->name;
+                sup.dest_domain = dst_dom->name;
+                sup.path.node_ids = reg_path.node_ids;
+                sup.source_loc = src->loc;
+                sup.bus_width = src->width;
+                sup.source_module_path = src->module_path;
+                sup.dest_module_path = dst->module_path;
+                sup.suppressed_by_false_path = true;
+                sup.false_path_source = "false_path constraint";
+                sup.reason = "Crossing suppressed by false-path constraint from '" +
+                             src->hier_name + "' to '" + dst->hier_name + "'.";
+                sup.safety_status = SafetyStatus::Ambiguous;
+                sup.safety_provenance = "Suppressed by false-path constraint";
+                local_findings.push_back(std::move(sup));
                 continue;
+            }
+
+            // Blackbox suppression: safe black box on path handles sync.
+            if (is_path_through_safe_blackbox(graph, reg_path.node_ids)) {
+                Finding bb;
+                bb.rule_id = "CDC001";
+                bb.rule_name = "unsynchronized_crossing";
+                bb.severity = "info";
+                bb.source_reg_id = src_id;
+                bb.dest_reg_id = dst_id;
+                bb.source_reg_name = src->hier_name;
+                bb.dest_reg_name = dst->hier_name;
+                bb.source_domain = src_dom->name;
+                bb.dest_domain = dst_dom->name;
+                bb.path.node_ids = reg_path.node_ids;
+                bb.source_loc = src->loc;
+                bb.bus_width = src->width;
+                bb.source_module_path = src->module_path;
+                bb.dest_module_path = dst->module_path;
+                bb.reason =
+                    "Crossing suppressed: path passes through safe black box "
+                    "module with built-in synchronization.";
+                bb.safety_status = SafetyStatus::VerifiedSafe;
+                bb.safety_provenance = "Path through safe black box module";
+                local_findings.push_back(std::move(bb));
+                continue;
+            }
 
             Finding f;
             f.rule_id = "CDC001";
@@ -143,12 +225,21 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             f.dest_domain = dst_dom->name;
             f.path.node_ids = reg_path.node_ids;
             f.source_loc = src->loc;
-            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph);
+            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph, true);
             f.bus_width = src->width;
             f.source_module_path = src->module_path;
             f.dest_module_path = dst->module_path;
             f.crosses_module_boundary = !src->module_path.empty() && !dst->module_path.empty() &&
                                         src->module_path != dst->module_path;
+
+            // Evidence chain for explainability (golden corpus expects clk_a/clk_b).
+            f.evidence_chain.push_back(
+                EvidenceStep{"clock_domains",
+                             "Clock domains: '" + src_dom->name + "' -> '" + dst_dom->name + "'",
+                             "identified", src->loc.file});
+            f.evidence_chain.push_back(
+                EvidenceStep{"bus_width", "Bus width: " + std::to_string(src->width), "measured",
+                             src->loc.file});
 
             SyncPattern crossing_sync = f.detected_sync;
 
@@ -163,27 +254,62 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                               src->is_handshake_signal || dst->is_handshake_signal;
 
             if (crossing_sync != SyncPattern::None) {
-                f.severity = "warning";
+                f.severity = "info";
+                f.safety_status = SafetyStatus::VerifiedSafe;
+                f.safety_provenance = "synchronizer chain detected at destination";
+            } else {
+                f.safety_status = SafetyStatus::VerifiedUnsafe;
+                f.safety_provenance = "No synchronizer chain detected on destination side";
+                f.propagates_uncertainty = true;
+                f.uncertainty_reason = "Unsynchronized crossing propagates unknown value";
             }
 
             f.reason = build_reason(f);
 
+            // Multicycle suppression when policy allows: emit info audit trail
+            // instead of error, otherwise just annotate. Supports partial
+            // constraints (from-only or to-only) as well as full pairs.
+            bool multicycle_suppressed = false;
             if (clock_constraints_) {
                 for (const auto& mcp : clock_constraints_->multi_cycle_paths) {
-                    if ((!mcp.from_clock.empty() && !mcp.to_clock.empty()) &&
-                        (clock::pattern_matches(mcp.from_clock, src_dom->name) &&
-                         clock::pattern_matches(mcp.to_clock, dst_dom->name))) {
+                    bool from_ok = mcp.from_clock.empty() ||
+                                   clock::pattern_matches(mcp.from_clock, src_dom->name);
+                    bool to_ok = mcp.to_clock.empty() ||
+                                 clock::pattern_matches(mcp.to_clock, dst_dom->name);
+                    if (!from_ok || !to_ok)
+                        continue;
+                    if (mcp.from_clock.empty() && mcp.to_clock.empty())
+                        continue;
                         f.has_multicycle_exception = true;
                         f.multicycle_cycles = mcp.cycles;
                         f.constraint_source = "multicycle_path: " + mcp.from_clock + " -> " +
                                               mcp.to_clock + " (" + std::to_string(mcp.cycles) +
                                               " cycles)";
+                        if (multicycle_policy_ && multicycle_policy_->suppress_findings) {
+                            bool suppress = false;
+                            for (const auto& r : multicycle_policy_->suppress_rules) {
+                                if (r == "CDC001") {
+                                    suppress = true;
+                                    break;
+                                }
+                            }
+                            if (suppress) {
+                                f.severity = "info";
+                                f.suppressed_by_multicycle = true;
+                                f.multicycle_source = f.constraint_source;
+                                f.safety_status = SafetyStatus::Ambiguous;
+                                f.safety_provenance = "Suppressed by multicycle path constraint";
+                                multicycle_suppressed = true;
+                            }
+                        }
                         break;
-                    }
                 }
             }
 
             local_findings.push_back(std::move(f));
+            if (multicycle_suppressed) {
+                continue;
+            }
 
             // NOTE: no early continue here — CDC002/004/005/007 are
             // independent of synchronizer presence. A synchronized crossing
@@ -225,7 +351,22 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 local_findings.push_back(std::move(mb));
             }
 
-            if (src->clock_is_gated || dst->clock_is_gated) {
+            // CDC004: gated clocks on endpoints or intermediates along the path.
+            const ir::Node* gated_hit = nullptr;
+            if (src->clock_is_gated)
+                gated_hit = src;
+            else if (dst->clock_is_gated)
+                gated_hit = dst;
+            else {
+                for (size_t k = 1; k + 1 < reg_path.node_ids.size(); ++k) {
+                    const ir::Node* n = graph.find_node(reg_path.node_ids[k]);
+                    if (n && n->kind == ir::NodeKind::Register && n->clock_is_gated) {
+                        gated_hit = n;
+                        break;
+                    }
+                }
+            }
+            if (gated_hit) {
                 const ir::Node* gated_src = src->clock_is_gated ? src : nullptr;
                 const ir::Node* gated_dst = dst->clock_is_gated ? dst : nullptr;
                 Finding gc;
@@ -262,8 +403,23 @@ std::vector<Finding> CrossingAnalyzer::analyze(
 
             bool src_muxed_no_reset = src->clock_is_muxed && src->reset_signal.empty();
             bool dst_muxed_no_reset = dst->clock_is_muxed && dst->reset_signal.empty();
-            if (src_muxed_no_reset || dst_muxed_no_reset) {
-                const ir::Node* muxed_node = src_muxed_no_reset ? src : dst;
+            const ir::Node* muxed_hit = nullptr;
+            if (src_muxed_no_reset)
+                muxed_hit = src;
+            else if (dst_muxed_no_reset)
+                muxed_hit = dst;
+            else {
+                for (size_t k = 1; k + 1 < reg_path.node_ids.size(); ++k) {
+                    const ir::Node* n = graph.find_node(reg_path.node_ids[k]);
+                    if (n && n->kind == ir::NodeKind::Register && n->clock_is_muxed &&
+                        n->reset_signal.empty()) {
+                        muxed_hit = n;
+                        break;
+                    }
+                }
+            }
+            if (muxed_hit) {
+                const ir::Node* muxed_node = muxed_hit;
                 Finding mr;
                 mr.rule_id = "CDC005";
                 mr.rule_name = "muxed_clock_no_reset";
@@ -288,7 +444,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 Finding nr;
                 nr.rule_id = "CDC007";
                 nr.rule_name = "missing_reset";
-                nr.severity = "warning";
+                // Strict reset policy escalates to warning only when NEITHER
+                // has reset; mixed (one side reset) stays advisory info.
+                bool both_unreset =
+                    src->reset_signal.empty() && dst->reset_signal.empty();
+                bool strict_reset = reset_policy_ && reset_policy_->require_cdc_register_reset;
+                nr.severity = (strict_reset && both_unreset) ? "warning" : "info";
                 nr.source_reg_id = src_id;
                 nr.dest_reg_id = dst_id;
                 nr.source_reg_name = src->hier_name;
@@ -342,7 +503,11 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         }
     }
 
-    // Daisy-chain detection (sequential — needs global visited set)
+    // Daisy-chain detection: sequential A->B->C ordering along a single
+    // path, not parallel fanout. DFS tracks the current path's domain
+    // sequence; only a path visiting >=3 distinct domains reports CDC008.
+    // Only true line starts (no cross-domain predecessors) report, so a
+    // 4-node line yields one finding, not one per intermediate node.
     std::unordered_set<uint64_t> reported_sources;
     for (const auto& src : graph.nodes()) {
         if (src.kind != ir::NodeKind::Register)
@@ -355,41 +520,80 @@ std::vector<Finding> CrossingAnalyzer::analyze(
         if (!src_dom)
             continue;
 
-        std::vector<uint64_t> domain_chain;
-        domain_chain.push_back(src.id);
-        std::unordered_set<uint64_t> visited;
-        std::unordered_set<size_t> visited_domain_ids;
-        visited.insert(src.id);
-        visited_domain_ids.insert(src_dom->id);
-
-        std::vector<uint64_t> stack;
-        stack.push_back(src.id);
-
-        while (!stack.empty()) {
-            uint64_t node_id = stack.back();
-            stack.pop_back();
-            for (uint64_t succ : graph.register_successors(node_id)) {
-                if (visited.count(succ))
-                    continue;
-                const ir::Node* succ_node = graph.find_node(succ);
-                if (!succ_node || succ_node->kind != ir::NodeKind::Register)
-                    continue;
-                const clock::ClockDomain* succ_dom =
-                    find_domain_for_node(succ, domains, register_to_domain);
-                if (!succ_dom)
-                    continue;
-                if (!visited_domain_ids.count(succ_dom->id)) {
-                    domain_chain.push_back(succ);
-                    visited_domain_ids.insert(succ_dom->id);
+        // Skip intermediate nodes: if any predecessor is in a different domain,
+        // this node is mid-line, not a chain start.
+        {
+            bool has_cross_pred = false;
+            for (uint64_t pred : graph.register_predecessors(src.id, false)) {
+                const clock::ClockDomain* pd =
+                    find_domain_for_node(pred, domains, register_to_domain);
+                if (pd && pd->id != src_dom->id) {
+                    has_cross_pred = true;
+                    break;
                 }
-                visited.insert(succ);
-                stack.push_back(succ);
+            }
+            if (has_cross_pred) {
+                reported_sources.insert(src.id);
+                continue;
+            }
+        }
+
+        // DFS along single paths (depth-limited to avoid blowup).
+        std::vector<uint64_t> best_chain;
+        std::vector<uint64_t> path = {src.id};
+        std::unordered_set<uint64_t> on_path = {src.id};
+        std::vector<size_t> dom_seq = {src_dom->id};
+        std::vector<std::vector<uint64_t>> stack_succs;
+        std::vector<size_t> stack_idx;
+        stack_succs.push_back(graph.register_successors(src.id));
+        stack_idx.push_back(0);
+
+        auto distinct_domains = [&]() {
+            std::unordered_set<size_t> s(dom_seq.begin(), dom_seq.end());
+            return s.size();
+        };
+
+        size_t guard = 0;
+        while (!stack_succs.empty() && guard++ < 100000) {
+            auto& succs = stack_succs.back();
+            size_t& idx = stack_idx.back();
+            if (idx >= succs.size()) {
+                stack_succs.pop_back();
+                stack_idx.pop_back();
+                if (!path.empty()) {
+                    path.pop_back();
+                    dom_seq.pop_back();
+                }
+                continue;
+            }
+            uint64_t succ = succs[idx++];
+            if (on_path.count(succ))
+                continue;
+            const ir::Node* succ_node = graph.find_node(succ);
+            if (!succ_node || succ_node->kind != ir::NodeKind::Register)
+                continue;
+            const clock::ClockDomain* succ_dom =
+                find_domain_for_node(succ, domains, register_to_domain);
+            if (!succ_dom)
+                continue;
+            path.push_back(succ);
+            dom_seq.push_back(succ_dom->id);
+            on_path.insert(succ);
+            if (distinct_domains() >= 3 && path.size() > best_chain.size())
+                best_chain = path;
+            if (path.size() < 8) {
+                stack_succs.push_back(graph.register_successors(succ));
+                stack_idx.push_back(0);
+            } else {
+                path.pop_back();
+                dom_seq.pop_back();
+                on_path.erase(succ);
             }
         }
 
         reported_sources.insert(src.id);
 
-        if (domain_chain.size() >= 3) {
+        if (best_chain.size() >= 3) {
             Finding dc;
             dc.rule_id = "CDC008";
             dc.rule_name = "multi_domain_daisy_chain";
@@ -399,9 +603,11 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             dc.source_domain = src_dom->name;
             dc.source_loc = src.loc;
             dc.bus_width = src.width;
+            dc.safety_status = SafetyStatus::Candidate;
+            dc.safety_provenance = "Sequential multi-domain path detected";
             std::string chain_desc;
-            for (size_t i = 0; i < domain_chain.size(); ++i) {
-                const ir::Node* n = graph.find_node(domain_chain[i]);
+            for (size_t i = 0; i < best_chain.size(); ++i) {
+                const ir::Node* n = graph.find_node(best_chain[i]);
                 if (n) {
                     if (!chain_desc.empty())
                         chain_desc += " -> ";
@@ -409,13 +615,98 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 }
             }
             dc.reason = "Register '" + src.hier_name + "' is part of a daisy chain crossing " +
-                        std::to_string(domain_chain.size() - 1) + " clock domains: " + chain_desc +
+                        std::to_string(best_chain.size() - 1) + " clock domains: " + chain_desc +
                         ".";
             findings.push_back(std::move(dc));
         }
     }
 
     return findings;
+}
+
+void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
+                                             std::vector<Finding>& findings) const {
+    for (const auto& f : findings) {
+        if (!f.propagates_uncertainty || f.dest_reg_id == 0)
+            continue;
+        ir::Node* dest = graph.find_node_mutable(f.dest_reg_id);
+        if (!dest)
+            continue;
+        dest->value_uncertain = true;
+        if (dest->uncertainty_source.empty())
+            dest->uncertainty_source = f.uncertainty_reason;
+    }
+
+    std::vector<uint64_t> work;
+    for (const ir::Node& node : graph.nodes()) {
+        if (node.value_uncertain)
+            work.push_back(node.id);
+    }
+    size_t hops = 0;
+    while (!work.empty() && hops < ir::MAX_PATH_DEPTH) {
+        ++hops;
+        std::vector<uint64_t> next;
+        for (uint64_t id : work) {
+            const ir::Node* node = graph.find_node(id);
+            if (!node)
+                continue;
+            auto mark = [&](uint64_t succ) {
+                ir::Node* n = graph.find_node_mutable(succ);
+                if (!n || n->value_uncertain)
+                    return;
+                if (n->clock_domain != node->clock_domain)
+                    return;
+                n->value_uncertain = true;
+                n->uncertainty_source = "propagated from '" + node->hier_name + "'";
+                next.push_back(succ);
+            };
+            for (uint64_t succ : graph.successors(id))
+                mark(succ);
+            for (uint64_t rsucc : graph.register_successors(id, false))
+                mark(rsucc);
+        }
+        work = std::move(next);
+    }
+
+    // Emit CDC013 findings for registers that became uncertain due to
+    // propagation (not from direct crossing detection).
+    for (const ir::Node& node : graph.nodes()) {
+        if (!node.value_uncertain || node.kind != ir::NodeKind::Register)
+            continue;
+        bool already_reported = false;
+        for (const auto& f : findings) {
+            if ((f.source_reg_id == node.id || f.dest_reg_id == node.id) &&
+                f.rule_id != "CDC013") {
+                already_reported = true;
+                break;
+            }
+        }
+        if (already_reported || node.uncertainty_source.find("propagated from") == std::string::npos)
+            continue;
+
+        Finding uf;
+        uf.rule_id = "CDC013";
+        uf.rule_name = "unknown_propagation";
+        uf.severity = "warning";
+        uf.source_reg_id = node.id;
+        uf.source_reg_name = node.hier_name;
+        uf.source_domain = node.clock_domain;
+        uf.path.node_ids.push_back(node.id);
+        uf.source_loc = node.loc;
+        uf.bus_width = node.width;
+        uf.propagates_uncertainty = true;
+        uf.uncertainty_reason = node.uncertainty_source;
+        uf.reason = "Register '" + node.hier_name + "' has uncertain value due to " +
+                    node.uncertainty_source + ".";
+        uf.safety_status = SafetyStatus::Candidate;
+        uf.safety_provenance = "Value uncertainty propagation";
+        uf.evidence_chain.push_back(
+            EvidenceStep{"source", "Source: " + node.uncertainty_source, "identified", node.loc.file});
+        uf.evidence_chain.push_back(
+            EvidenceStep{"propagation", "Propagated within domain '" + node.clock_domain + "'",
+                         "propagated", node.loc.file});
+        findings.push_back(std::move(uf));
+    }
 }
 
 }  // namespace opencdc::cdc

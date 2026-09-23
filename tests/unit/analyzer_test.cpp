@@ -1,5 +1,6 @@
 #include "analysis/analyzer.h"
 #include <gtest/gtest.h>
+#include <unistd.h>
 #include <fstream>
 #include <cstdio>
 #include <string>
@@ -50,7 +51,8 @@ TEST_F(AnalyzerTest, Clean2ffSynchronizerHasNoError) {
 // constraints file is passed (the pre-P1 bug attached constraints only
 // when --constraints was present).
 TEST_F(AnalyzerTest, ConfigOnlyFalsePathSuppressesCrossing) {
-    const std::string cfg_path = "/tmp/opencdc_analyzer_cfg.yaml";
+    const std::string cfg_path =
+        "/tmp/opencdc_analyzer_cfg_" + std::to_string(::getpid()) + ".yaml";
     {
         std::ofstream cfg(cfg_path);
         cfg << "false_paths:\n"

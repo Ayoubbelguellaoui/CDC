@@ -23,6 +23,10 @@ struct CheckOptions {
     std::vector<std::string> disable_rules;
     std::vector<std::string> severity_overrides;
     std::vector<std::pair<std::string, std::string>> false_paths;
+    bool signoff_mode = false;
+    std::string profile;
+    std::vector<std::string> include_dirs;
+    std::vector<std::string> defines;
 };
 
 enum class ExitCode : int {

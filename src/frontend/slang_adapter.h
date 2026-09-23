@@ -32,6 +32,12 @@ struct ClockResetInfo {
     bool is_async_reset = false;
 };
 
+struct FrontendOptions {
+    std::vector<std::string> include_dirs;
+    std::vector<std::string> defines;
+    bool allow_user_annotation = true;
+};
+
 struct FrontendResult {
     ir::Graph graph;
     std::vector<std::string> errors;
@@ -43,13 +49,15 @@ class SlangAdapter {
     SlangAdapter();
     ~SlangAdapter();
 
-    FrontendResult elaborate(const std::vector<std::string>& files, const std::string& top_module);
+    FrontendResult elaborate(const std::vector<std::string>& files, const std::string& top_module,
+                             const FrontendOptions& options = {});
 
    private:
     void walk_instance(const slang::ast::InstanceSymbol& inst, ir::Graph& graph,
                        const std::string& prefix);
 
-    void walk_scope(const slang::ast::Scope& scope, ir::Graph& graph, const std::string& prefix);
+    void walk_scope(const slang::ast::Scope& scope, ir::Graph& graph, const std::string& prefix,
+                    const std::string& module_type);
 
     ClockResetInfo extract_clock_reset(const slang::ast::ProceduralBlockSymbol& proc) const;
 
@@ -68,6 +76,7 @@ class SlangAdapter {
                                                  const ir::Graph& graph);
 
     std::unique_ptr<slang::SourceManager> source_manager_;
+    bool allow_user_annotation_ = true;
 };
 
 }  // namespace opencdc::frontend

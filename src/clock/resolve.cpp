@@ -262,6 +262,14 @@ ClockInfo ClockResolver::trace_clock(const std::string& clock_name, const ir::Gr
 ResolveResult ClockResolver::resolve(const ir::Graph& graph) {
     ResolveResult result;
 
+    // Reset mutable caches so reuse on a second graph cannot return stale data.
+    port_names_.clear();
+    short_port_names_.clear();
+    port_names_built_ = false;
+    port_by_name_.clear();
+    short_to_hier_.clear();
+    port_index_built_ = false;
+
     std::unordered_set<std::string> seen_clocks;
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register)

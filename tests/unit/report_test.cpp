@@ -2,6 +2,7 @@
 #include "report/html_reporter.h"
 #include "cdc/crossing.h"
 #include <gtest/gtest.h>
+#include <unistd.h>
 #include <sstream>
 #include <fstream>
 #include <cstdio>
@@ -164,7 +165,7 @@ TEST(HtmlReportTest, OptionsAndFiltersAreRendered) {
     finding.source_loc.line = 7;
 
     opencdc::report::HtmlReportOptions options;
-    options.output_dir = "/tmp/opencdc-html-test";
+    options.output_dir = "/tmp/opencdc-html-test-" + std::to_string(::getpid());
     options.include_source_snippets = false;
     options.dark_mode = true;
     options.custom_css = ".custom-test { color: red; }";
@@ -233,7 +234,7 @@ TEST(HtmlReportTest, SafetyFilterIsRendered) {
     finding.safety_status = opencdc::cdc::SafetyStatus::VerifiedUnsafe;
 
     opencdc::report::HtmlReportOptions options;
-    options.output_dir = "/tmp/opencdc-html-safety-test";
+    options.output_dir = "/tmp/opencdc-html-safety-test-" + std::to_string(::getpid());
     options.include_source_snippets = false;
     opencdc::report::HtmlReporter reporter;
     reporter.generate_report({finding}, options);

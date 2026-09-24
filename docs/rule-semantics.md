@@ -9,7 +9,7 @@ This document defines the intent, violation conditions, required evidence, safe 
 | **Intent** | Detect register-to-register paths crossing clock domains without a synchronizer chain. |
 | **Violation** | A register in domain A drives a register in domain B with no 2FF/3FF synchronizer chain on the destination side. |
 | **Required Evidence** | Cross-domain register path (verified by `CrossingAnalyzer`), no `SyncPattern::TwoFF` or `SyncPattern::ThreeFF` detected at destination. |
-| **Safe Conditions** | Synchronizer chain present (downgraded to warning), false-path constraint, multicycle path constraint (configurable), gray-code/handshake/FIFO crossing, waived. |
+| **Safe Conditions** | Synchronizer chain present (downgraded to `info` with `verified_safe`), false-path constraint, multicycle path constraint (configurable), gray-code/handshake/FIFO crossing, waived. |
 | **Exemptions** | None — always emitted (but severity varies). |
 | **Constraint Interaction** | `false_paths` suppresses. `multi_cycle_path` suppresses when `multicycle_path_policy.suppress_rules` includes CDC001 (default: yes). |
 | **False-Positive Risk** | Low. Only fires on verified cross-domain register paths. |
@@ -35,7 +35,7 @@ This document defines the intent, violation conditions, required evidence, safe 
 | **Intent** | Detect single-source fanout through independent synchronizer paths that reconverge. |
 | **Violation** | Register fans out to ≥2 cross-domain destinations, paths reconverge at a downstream register. |
 | **Required Evidence** | Fanout source with ≥2 cross-domain successors, BFS-traced reconvergence within bounds. |
-| **Safe Conditions** | Source width ≤ 1 AND destination has sync chain (TwoFF or ThreeFF). |
+| **Safe Conditions** | Source width ≤ 1 AND both destination paths have sync chains (TwoFF or ThreeFF). |
 | **Exemptions** | Single-bit sources with sync chains on both paths. |
 | **Constraint Interaction** | False-path suppresses individual crossings; reconvergence may still be detected on non-false-path paths. |
 | **False-Positive Risk** | Medium. BFS truncation (16 nodes, 3 hops) may miss reconvergence beyond bounds. |
@@ -84,10 +84,10 @@ This document defines the intent, violation conditions, required evidence, safe 
 
 | Attribute | Description |
 |-----------|-------------|
-| **Intent** | Detect CDC crossing where both registers lack a reset signal. |
-| **Violation** | Both source and destination registers have empty `reset_signal`. |
-| **Required Evidence** | `reset_signal.empty()` on both registers. |
-| **Safe Conditions** | At least one register has a reset signal. |
+| **Intent** | Detect CDC crossing where either register lacks a reset signal. |
+| **Violation** | Source or destination register has empty `reset_signal` (`info`; `warning` only when `reset_policy.require_cdc_register_reset` is true AND both are empty). |
+| **Required Evidence** | `reset_signal.empty()` on either register. |
+| **Safe Conditions** | Both registers have reset signals. |
 | **Exemptions** | None. |
 | **Constraint Interaction** | False-path suppresses. |
 | **Policy Interaction** | Default severity is `info` (advisory). When `reset_policy.require_cdc_register_reset: true`, severity upgrades to `warning` and `safety_status` becomes `verified_unsafe`. Mixed-reset case (one register has reset) is always `info` regardless of policy. |

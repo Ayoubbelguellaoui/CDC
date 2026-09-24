@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "lsp/socket_compat.h"
+
 namespace opencdc {
 namespace lsp {
 
@@ -62,7 +64,10 @@ class LspServer {
     void start(int port = 0);
     void stop();
 
-    void set_publish_diagnostics_callback(PublishDiagnosticsCallback callback);
+    void set_publish_diagnostics_callback(PublishDiagnosticsCallback callback) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        publish_callback_ = std::move(callback);
+    }
 
     void did_open(const TextDocument& document);
     void did_change(const TextDocument& document);
@@ -72,24 +77,31 @@ class LspServer {
     std::vector<Diagnostic> analyze_document(const std::string& uri, const std::string& content);
 
     void set_top_module(const std::string& module) {
+        std::lock_guard<std::mutex> lock(mutex_);
         top_module_ = module;
     }
     void set_config_path(const std::string& path) {
+        std::lock_guard<std::mutex> lock(mutex_);
         config_path_ = path;
     }
     void set_waiver_path(const std::string& path) {
+        std::lock_guard<std::mutex> lock(mutex_);
         waiver_path_ = path;
     }
     void set_constraints_path(const std::string& path) {
+        std::lock_guard<std::mutex> lock(mutex_);
         constraints_path_ = path;
     }
     void set_allow_remote(bool allow) {
+        std::lock_guard<std::mutex> lock(mutex_);
         allow_remote_ = allow;
     }
     void set_bind_address(const std::string& addr) {
+        std::lock_guard<std::mutex> lock(mutex_);
         bind_address_ = addr;
     }
     void set_analysis_timeout(int seconds) {
+        std::lock_guard<std::mutex> lock(cancel_mutex_);
         analysis_timeout_sec_ = seconds;
     }
 
@@ -137,8 +149,8 @@ class LspServer {
     std::atomic<int> bound_port_{0};
     std::mutex startup_mutex_;
     std::condition_variable startup_cv_;
-    int socket_fd_ = -1;
-    int client_fd_ = -1;
+    compat::socket_t socket_fd_ = compat::kInvalidSocket;
+    compat::socket_t client_fd_ = compat::kInvalidSocket;
     std::mutex socket_mutex_;
 
     // D3: Per-document cancellation (shared_ptr to prevent iterator invalidation)
@@ -162,8 +174,8 @@ class LspClient {
     std::string send_request(const std::string& method, const std::string& params);
 
    private:
-    bool write_all(int fd, const char* data, size_t len);
-    int socket_fd_ = -1;
+    bool write_all(compat::socket_t fd, const char* data, size_t len);
+    compat::socket_t socket_fd_ = compat::kInvalidSocket;
 };
 
 }  // namespace lsp

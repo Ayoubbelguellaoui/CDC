@@ -1,7 +1,10 @@
+#include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include "analysis/analyzer.h"
@@ -42,7 +45,8 @@ static void print_usage(const char* prog) {
         << "  --incdir <dir>       Add Verilog include directory. Repeatable.\n"
         << "  --define <NAME[=V]>  Predefine a macro (value defaults to 1). Repeatable.\n"
         << "  --save-baseline <f>  Save findings baseline to file for trend comparison\n"
-        << "  --compare-baseline <f> Compare current findings against saved baseline\n"
+        << "  --compare-baseline <f> Compare against saved baseline (diff and exit;\n"
+        << "                         report output and --save-baseline are skipped)\n"
         << "  --verbose            Enable verbose output\n"
         << "\nlsp options:\n"
         << "  --top <module>       Top module name (required by analysis)\n"
@@ -93,6 +97,7 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.constraints_path = argv[++i];
         } else if (arg == "--format" && i + 1 < argc) {
             opts.format = argv[++i];
+            opts.format_explicit = true;
         } else if (arg == "--out" && i + 1 < argc) {
             opts.output_path = argv[++i];
         } else if (arg == "--html-dir" && i + 1 < argc) {
@@ -116,6 +121,12 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
                     std::cerr << "Error: --jobs must be >= 0\n";
                     return -1;
                 }
+                // Cap thread count: parallel_for/map already cap by items.size(),
+                // but a huge --jobs with a large design would still spawn
+                // thousands of threads and OOM.
+                constexpr int kMaxThreads = 64;
+                if (n > kMaxThreads)
+                    n = kMaxThreads;
                 opts.num_threads = static_cast<size_t>(n);
             } catch (const std::exception&) {
                 std::cerr << "Error: --jobs requires a valid integer\n";
@@ -139,9 +150,11 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.compare_baseline = argv[++i];
         } else if (arg == "--false-path" && i + 1 < argc) {
             std::string fp = argv[++i];
-            auto colon = fp.find(':');
-            if (colon != std::string::npos && colon > 0 && colon + 1 < fp.size() &&
-                fp.find(':', colon + 1) == std::string::npos) {
+            // Split on the LAST colon so hierarchies/paths containing ':'
+            // (Windows drive letters, IPv6) still parse: src may contain
+            // colons, dest is the tail segment.
+            auto colon = fp.rfind(':');
+            if (colon != std::string::npos && colon > 0 && colon + 1 < fp.size()) {
                 opts.false_paths.push_back({fp.substr(0, colon), fp.substr(colon + 1)});
             } else {
                 std::cerr << "Error: --false-path requires non-empty src:dest format\n";
@@ -150,6 +163,14 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
         } else if (!arg.empty() && arg[0] != '-') {
             opts.input_files.push_back(arg);
             files_found = true;
+        } else if (arg == "--top" || arg == "--config" || arg == "--waiver" ||
+                   arg == "--constraints" || arg == "--format" || arg == "--out" ||
+                   arg == "--html-dir" || arg == "--disable-rule" || arg == "--severity" ||
+                   arg == "--jobs" || arg == "--profile" || arg == "--incdir" || arg == "+incdir" ||
+                   arg == "--define" || arg == "+define" || arg == "--save-baseline" ||
+                   arg == "--compare-baseline" || arg == "--false-path") {
+            std::cerr << "Error: option '" << arg << "' requires a value\n";
+            return -1;
         } else {
             std::cerr << "Error: unknown option '" << arg << "'\n";
             return -1;
@@ -204,6 +225,13 @@ int run(int argc, const char* argv[]) {
             else if (arg == "--help" || arg == "-h") {
                 print_usage(argv[0]);
                 return static_cast<int>(ExitCode::OK);
+            } else if (arg == "--port" || arg == "--top" || arg == "--config" ||
+                       arg == "--waiver" || arg == "--constraints") {
+                std::cerr << "Error: option '" << arg << "' requires a value\n";
+                return static_cast<int>(ExitCode::INPUT_ERROR);
+            } else {
+                std::cerr << "Error: unknown option '" << arg << "' for 'lsp'\n";
+                return static_cast<int>(ExitCode::INPUT_ERROR);
             }
         }
 
@@ -253,7 +281,7 @@ int run(int argc, const char* argv[]) {
         config_output_format = parsed_cfg.output.format;
         config_output_file = parsed_cfg.output.file;
     }
-    if (opts.format == "json" && !config_output_format.empty()) {
+    if (!opts.format_explicit && !config_output_format.empty()) {
         opts.format = config_output_format;
     }
     if (opts.output_path.empty() && opts.html_output_dir.empty() && !config_output_file.empty()) {
@@ -324,8 +352,20 @@ int run(int argc, const char* argv[]) {
         std::cerr << "No CDC crossings detected.\n";
     }
 
-    // Baseline comparison: report diffs and exit.
+    // Baseline comparison: report diffs and exit (no report files written,
+    // --save-baseline is ignored in this mode).
     if (!opts.compare_baseline.empty()) {
+        if (!opts.save_baseline.empty()) {
+            std::cerr << "Warning: --save-baseline is ignored with --compare-baseline\n";
+        }
+        {
+            std::ifstream probe(opts.compare_baseline);
+            if (!probe.is_open()) {
+                std::cerr << "Error: could not open baseline file: " << opts.compare_baseline
+                          << "\n";
+                return static_cast<int>(ExitCode::INPUT_ERROR);
+            }
+        }
         analysis::TrendAnalyzer trend;
         auto report = trend.compare(opts.compare_baseline, findings);
         std::cerr << "Baseline comparison (" << opts.compare_baseline << "):\n"
@@ -348,18 +388,28 @@ int run(int argc, const char* argv[]) {
     // Save baseline for future comparison.
     if (!opts.save_baseline.empty()) {
         analysis::TrendAnalyzer trend;
-        trend.save_baseline(opts.top_module, findings, opts.save_baseline);
-        if (opts.verbose) {
+        std::string baseline_error;
+        if (!trend.save_baseline(opts.top_module, findings, opts.save_baseline, &baseline_error)) {
+            std::cerr << "Warning: could not save baseline to " << opts.save_baseline
+                      << (baseline_error.empty() ? "" : ": " + baseline_error) << "\n";
+        } else if (opts.verbose) {
             std::cerr << "Baseline saved to " << opts.save_baseline << "\n";
         }
     }
 
     report::Reporter reporter;
 
+    // Atomic report write: render into a temp file, then rename, so a crash
+    // never leaves a truncated --out artifact behind.
+    std::string out_tmp;
     std::ofstream out_file;
     std::ostream* out = &std::cout;
+    if (!opts.output_path.empty() && opts.format == "html") {
+        std::cerr << "Warning: --out is ignored with --format html (use --html-dir)\n";
+    }
     if (opts.format != "html" && !opts.output_path.empty()) {
-        out_file.open(opts.output_path);
+        out_tmp = opts.output_path + ".tmp";
+        out_file.open(out_tmp, std::ios::binary | std::ios::trunc);
         if (!out_file.is_open()) {
             std::cerr << "Error: could not open output file: " << opts.output_path << "\n";
             return static_cast<int>(ExitCode::INPUT_ERROR);
@@ -390,6 +440,24 @@ int run(int argc, const char* argv[]) {
         }
     } else {
         reporter.report_json(findings, *out, analysis.analysis_status);
+    }
+
+    if (out == &out_file) {
+        out_file.flush();
+        if (!out_file) {
+            std::cerr << "Error: failed while writing output file: " << opts.output_path << "\n";
+            std::remove(out_tmp.c_str());
+            return static_cast<int>(ExitCode::INPUT_ERROR);
+        }
+        out_file.close();
+        std::error_code ec;
+        std::filesystem::rename(out_tmp, opts.output_path, ec);
+        if (ec) {
+            std::cerr << "Error: could not publish output file: " << opts.output_path << " ("
+                      << ec.message() << ")\n";
+            std::remove(out_tmp.c_str());
+            return static_cast<int>(ExitCode::INPUT_ERROR);
+        }
     }
 
     if (opts.signoff_mode) {

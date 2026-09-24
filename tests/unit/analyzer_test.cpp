@@ -1,11 +1,12 @@
 #include "analysis/analyzer.h"
 
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include <cstdio>
 #include <fstream>
 #include <string>
+
+#include "util/temp_file.h"
 
 using opencdc::analysis::AnalysisRequest;
 using opencdc::analysis::Analyzer;
@@ -54,8 +55,7 @@ TEST_F(AnalyzerTest, Clean2ffSynchronizerHasNoError) {
 // constraints file is passed (the pre-P1 bug attached constraints only
 // when --constraints was present).
 TEST_F(AnalyzerTest, ConfigOnlyFalsePathSuppressesCrossing) {
-    const std::string cfg_path =
-        "/tmp/opencdc_analyzer_cfg_" + std::to_string(::getpid()) + ".yaml";
+    const std::string cfg_path = opencdc::util::unique_temp_path("opencdc_analyzer_cfg_", ".yaml");
     {
         std::ofstream cfg(cfg_path);
         cfg << "false_paths:\n"
@@ -160,12 +160,69 @@ TEST_F(AnalyzerTest, MissingResetAdversarialFixture) {
 
 TEST_F(AnalyzerTest, NonexistentFileReportsError) {
     AnalysisRequest req;
-    req.input_files = {"/tmp/nonexistent_file_12345.sv"};
+    req.input_files = {opencdc::util::unique_temp_path("nonexistent_file_12345", ".sv")};
     req.top_module = "test";
 
     auto result = analyzer.run(req);
     EXPECT_FALSE(result.ok);
     EXPECT_EQ(result.analysis_status, "failed");
+}
+
+TEST_F(AnalyzerTest, IncrementalDirtyReanalyzesGraph) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("cdc_crossing.sv")};
+    req.top_module = "simple_cdc_crossing";
+
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok);
+    ASSERT_FALSE(result.findings.empty());
+    const size_t n = result.findings.size();
+
+    // Mutate the stored graph: incremental must re-run analysis stages on it
+    // (not re-elaborate from files) and return fresh findings.
+    result.graph.mark_dirty();
+    auto again = analyzer.run_incremental(result, req);
+    EXPECT_TRUE(again.ok);
+    EXPECT_EQ(again.analysis_status, "complete");
+    EXPECT_EQ(again.findings.size(), n);
+}
+
+TEST_F(AnalyzerTest, InvalidIncdirReportsError) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("cdc_crossing.sv")};
+    req.top_module = "simple_cdc_crossing";
+    req.include_dirs = {opencdc::util::unique_temp_path("definitely_not_a_dir_xyz")};
+
+    auto result = analyzer.run(req);
+    EXPECT_FALSE(result.ok);
+    ASSERT_FALSE(result.errors.empty());
+    EXPECT_NE(result.errors[0].find("nclude directory"), std::string::npos);
+}
+
+TEST_F(AnalyzerTest, InvalidDefineReportsError) {
+    AnalysisRequest req;
+    req.input_files = {fixture_path("cdc_crossing.sv")};
+    req.top_module = "simple_cdc_crossing";
+    req.defines = {"9BAD-NAME!"};
+
+    auto result = analyzer.run(req);
+    EXPECT_FALSE(result.ok);
+    ASSERT_FALSE(result.errors.empty());
+    EXPECT_NE(result.errors[0].find("macro"), std::string::npos);
+}
+
+TEST_F(AnalyzerTest, FunctionBoundaryGraySuppressesCdc002) {
+    // gray <= bin2gray(bin): gray transform through a function call must be
+    // recognized so CDC002 does not fire on the crossing.
+    AnalysisRequest req;
+    req.input_files = {fixture_path("gray_func_crossing.sv")};
+    req.top_module = "gray_func_crossing";
+
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors[0]);
+    for (const auto& f : result.findings) {
+        EXPECT_NE(f.rule_id, "CDC002") << f.source_reg_name << " -> " << f.dest_reg_name;
+    }
 }
 
 TEST_F(AnalyzerTest, IncrementalNoChangesKeepsFindings) {

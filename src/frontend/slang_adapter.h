@@ -41,6 +41,7 @@ struct FrontendOptions {
 struct FrontendResult {
     ir::Graph graph;
     std::vector<std::string> errors;
+    std::vector<std::string> warnings;
     bool ok = false;
 };
 
@@ -77,6 +78,11 @@ class SlangAdapter {
 
     std::unique_ptr<slang::SourceManager> source_manager_;
     bool allow_user_annotation_ = true;
+    // Non-fatal elaboration notes (e.g. skipped unknown-clock blocks).
+    std::vector<std::string> frontend_warnings_;
+    // Recursion depth guard for instance/generate nesting (walk_* recursion).
+    size_t scope_depth_ = 0;
+    static constexpr size_t kMaxScopeDepth = 64;
 };
 
 }  // namespace opencdc::frontend

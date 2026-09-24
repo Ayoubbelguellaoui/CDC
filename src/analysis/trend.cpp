@@ -1,10 +1,9 @@
 #include "analysis/trend.h"
 
-#include <dirent.h>
-#include <sys/stat.h>
-
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -162,12 +161,18 @@ std::unordered_map<std::string, cdc::Finding> TrendAnalyzer::build_finding_map(
     return map;
 }
 
-void TrendAnalyzer::save_baseline(const std::string& name,
+bool TrendAnalyzer::save_baseline(const std::string& name,
                                   const std::vector<cdc::Finding>& findings,
-                                  const std::string& filepath) {
-    std::ofstream file(filepath);
-    if (!file.is_open())
-        return;
+                                  const std::string& filepath, std::string* error) {
+    // Atomic write via temp file + rename so a crash never leaves a
+    // truncated baseline behind.
+    std::string tmp = filepath + ".tmp";
+    std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+    if (!file.is_open()) {
+        if (error)
+            *error = "cannot open file for writing";
+        return false;
+    }
 
     file << "BASELINE64:" << hex_encode(name) << "\n";
     file << "TIMESTAMP:" << std::time(nullptr) << "\n";
@@ -206,6 +211,23 @@ void TrendAnalyzer::save_baseline(const std::string& name,
         file << serialize_finding(f);
     }
     file << "FINDINGS_END\n";
+    file.flush();
+    if (!file) {
+        if (error)
+            *error = "failed while writing file";
+        std::remove(tmp.c_str());
+        return false;
+    }
+    file.close();
+    // Best-effort atomic publish; fall back to direct write on filesystems
+    // where rename is unavailable.
+    if (std::rename(tmp.c_str(), filepath.c_str()) != 0) {
+        if (error)
+            *error = "failed to publish baseline file";
+        std::remove(tmp.c_str());
+        return false;
+    }
+    return true;
 }
 
 Baseline TrendAnalyzer::load_baseline(const std::string& filepath) {
@@ -330,22 +352,22 @@ TrendReport TrendAnalyzer::compare(const std::string& baseline_file,
 std::vector<Baseline> TrendAnalyzer::list_baselines(const std::string& directory) {
     std::vector<Baseline> baselines;
 
-    DIR* dir = opendir(directory.c_str());
-    if (!dir)
+    std::error_code ec;
+    std::filesystem::directory_iterator it(directory, ec);
+    if (ec)
         return baselines;
 
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != nullptr) {
-        std::string filename = entry->d_name;
+    for (const auto& entry : it) {
+        if (!entry.is_regular_file(ec) || ec)
+            continue;
+        std::string filename = entry.path().filename().string();
         if (filename.find(".baseline") != std::string::npos && filename.size() > 8) {
-            Baseline b = load_baseline(directory + "/" + filename);
+            Baseline b = load_baseline(entry.path().string());
             if (!b.name.empty()) {
                 baselines.push_back(std::move(b));
             }
         }
     }
-
-    closedir(dir);
 
     std::sort(baselines.begin(), baselines.end(),
               [](const Baseline& a, const Baseline& b) { return a.timestamp > b.timestamp; });

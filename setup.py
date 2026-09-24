@@ -16,7 +16,7 @@ def cmake_version():
     """Read the version from the root CMakeLists.txt — single source of truth."""
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, 'CMakeLists.txt'), 'r', encoding='utf-8') as f:
-        m = re.search(r'project\s*\(\s*opencdc\s+VERSION\s+(\S+)', f.read())
+        m = re.search(r'project\s*\(\s*opencdc\s+VERSION\s+([0-9][^)\s]*)', f.read())
     if not m:
         raise RuntimeError('cannot find project(opencdc VERSION ...) in CMakeLists.txt')
     return m.group(1)
@@ -29,9 +29,12 @@ class CMakeExtension(Extension):
 class CMakeBuild(build_ext):
     def run(self):
         try:
-            _ = subprocess.check_output(['cmake', '--version'])
+            out = subprocess.check_output(['cmake', '--version']).decode()
         except OSError:
             raise RuntimeError("CMake must be installed to build OpenCDC")
+        m = re.search(r'cmake version (\d+)\.(\d+)', out)
+        if not m or (int(m.group(1)), int(m.group(2))) < (3, 28):
+            raise RuntimeError("OpenCDC requires CMake >= 3.28, got: " + out.splitlines()[0])
 
         for ext in self.extensions:
             self.build_extension(ext)
@@ -56,7 +59,13 @@ class CMakeBuild(build_ext):
 
         subprocess.check_call(['cmake', ext.sourcedir] + cmake_args,
                               cwd=self.build_temp)
-        subprocess.check_call(['cmake', '--build', '.'] + build_args,
+        parallel_args = ['--parallel']
+        try:
+            import multiprocessing
+            parallel_args += [str(multiprocessing.cpu_count())]
+        except NotImplementedError:
+            pass
+        subprocess.check_call(['cmake', '--build', '.'] + build_args + parallel_args,
                               cwd=self.build_temp)
 
 setup(
@@ -65,7 +74,8 @@ setup(
     author='OpenCDC Contributors',
     author_email='opencdc@example.com',
     description='Open-source static analysis tool for Clock Domain Crossing issues',
-    long_description=open('README.md', encoding='utf-8').read(),
+    long_description=open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         'README.md'), encoding='utf-8').read(),
     long_description_content_type='text/markdown',
     url='https://github.com/opencdc/opencdc',
     ext_modules=[CMakeExtension('opencdc')],
@@ -81,7 +91,7 @@ setup(
         'Intended Audience :: Science/Research',
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.7',
+        'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',

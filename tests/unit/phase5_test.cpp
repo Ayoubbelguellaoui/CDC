@@ -1,5 +1,4 @@
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include <fstream>
 
@@ -9,6 +8,7 @@
 #include "clock/domain.h"
 #include "ir/graph.h"
 #include "rules/rule.h"
+#include "util/temp_file.h"
 
 using namespace opencdc::ir;
 using namespace opencdc::cdc;
@@ -127,7 +127,7 @@ TEST_F(Phase5Test, WaiverTicketTransferredToFinding) {
 
 TEST_F(Phase5Test, WaiverTicketInFileParsing) {
     // Create a temp waiver file with ticket
-    std::string path = "/tmp/phase5_waiver_ticket_" + std::to_string(::getpid()) + ".txt";
+    std::string path = opencdc::util::unique_temp_path("phase5_waiver_ticket_", ".txt");
     {
         std::ofstream out(path);
         out << "CDC001 top.src top.dst clk_a clk_b \"test waiver\" @alice #TICKET-789\n";

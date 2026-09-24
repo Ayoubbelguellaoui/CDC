@@ -1,10 +1,12 @@
 #include "report/html_reporter.h"
 
-#include <sys/stat.h>
-
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <sstream>
+#include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 
 #include "opencdc/version.h"
@@ -13,10 +15,35 @@
 namespace opencdc::report {
 
 void HtmlReporter::ensure_directory_exists(const std::string& path) {
+    if (path.empty()) {
+        throw std::runtime_error("Refusing to create a report in an empty path");
+    }
     std::error_code ec;
     std::filesystem::create_directories(path, ec);
     if (ec) {
         throw std::runtime_error("Failed to create directory: " + path + " (" + ec.message() + ")");
+    }
+}
+
+// Crash-consistent write: content lands via temp file + atomic rename, so a
+// crash never leaves a truncated report artifact behind.
+static void write_file_atomic(const std::string& path, const std::string& content) {
+    std::string tmp = path + ".tmp";
+    {
+        std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+        if (!file.is_open()) {
+            throw std::runtime_error("Cannot open " + tmp + " for writing");
+        }
+        file << content;
+        file.flush();
+        if (!file) {
+            throw std::runtime_error("Failed while writing " + tmp);
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        throw std::runtime_error("Failed to publish " + path + " (" + ec.message() + ")");
     }
 }
 
@@ -134,7 +161,9 @@ std::string HtmlReporter::generate_findings_table(const std::vector<cdc::Finding
         html << "      <td class=\"reason-cell\">" << escape_html(f.reason) << "</td>\n";
         html << "      <td class=\"location-cell\">";
         if (include_source_snippets && !f.source_loc.file.empty()) {
-            html << escape_html(f.source_loc.file) << ":" << f.source_loc.line;
+            html << escape_html(f.source_loc.file);
+            if (f.source_loc.line > 0)
+                html << ":" << f.source_loc.line;
         }
         html << "</td>\n";
         html << "      <td>";
@@ -551,13 +580,26 @@ footer {
             "\n/* Explicit dark mode */\n:root { --bg-primary: #1a1a1a; --bg-secondary: #2d2d2d; "
             "--text-primary: #e0e0e0; --text-secondary: #a0a0a0; --border-color: #404040; }\n";
     }
-    css += options.custom_css;
-
-    std::ofstream file(options.output_dir + "/style.css");
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot open " + options.output_dir + "/style.css for writing");
+    // Custom CSS is embedded verbatim into a locally-viewed report. Strip
+    // @import and url(...) directives (case-insensitive): they let a shared
+    // report exfiltrate data or pull remote content when opened in a browser.
+    {
+        std::istringstream lines(options.custom_css);
+        std::string line;
+        while (std::getline(lines, line)) {
+            std::string lower = line;
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (lower.find("@import") != std::string::npos ||
+                lower.find("url(") != std::string::npos) {
+                continue;
+            }
+            css += line;
+            css += "\n";
+        }
     }
-    file << css;
+
+    write_file_atomic(options.output_dir + "/style.css", css);
 }
 
 void HtmlReporter::write_js(const HtmlReportOptions& options) {
@@ -622,11 +664,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 )JS";
 
-    std::ofstream file(options.output_dir + "/script.js");
-    if (!file.is_open()) {
-        throw std::runtime_error("Cannot open " + options.output_dir + "/script.js for writing");
-    }
-    file << js;
+    write_file_atomic(options.output_dir + "/script.js", js);
 }
 
 void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
@@ -636,10 +674,7 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     write_css(options);
     write_js(options);
 
-    std::ofstream index(options.output_dir + "/index.html");
-    if (!index.is_open()) {
-        throw std::runtime_error("Failed to write index.html in " + options.output_dir);
-    }
+    std::ostringstream index;
     index << "<!DOCTYPE html>\n";
     index << "<html lang=\"en\">\n";
     index << "<head>\n";
@@ -688,11 +723,9 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     index << "  <script src=\"script.js\"></script>\n";
     index << "</body>\n";
     index << "</html>\n";
+    write_file_atomic(options.output_dir + "/index.html", index.str());
 
-    std::ofstream findings_file(options.output_dir + "/findings.html");
-    if (!findings_file.is_open()) {
-        throw std::runtime_error("Failed to write findings.html in " + options.output_dir);
-    }
+    std::ostringstream findings_file;
     findings_file << "<!DOCTYPE html>\n";
     findings_file << "<html lang=\"en\">\n";
     findings_file << "<head>\n";
@@ -745,7 +778,10 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
 
     findings_file << "    <section class=\"findings-section\">\n";
     findings_file << "      <h2>" << findings.size() << " Findings</h2>\n";
-    findings_file << generate_findings_table(findings, options.include_source_snippets);
+    // Same deterministic order as the dashboard table (index.html), not
+    // analysis insertion order.
+    findings_file << generate_findings_table(Reporter::sorted_findings(findings),
+                                             options.include_source_snippets);
     findings_file
         << "      <p class=\"no-results\" style=\"display:none\">No matching findings.</p>\n";
     findings_file << "    </section>\n";
@@ -757,6 +793,7 @@ void HtmlReporter::generate_report(const std::vector<cdc::Finding>& findings,
     findings_file << "  <script src=\"script.js\"></script>\n";
     findings_file << "</body>\n";
     findings_file << "</html>\n";
+    write_file_atomic(options.output_dir + "/findings.html", findings_file.str());
 }
 
 }  // namespace opencdc::report

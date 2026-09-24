@@ -113,7 +113,8 @@ TEST_F(RuleEngineTest, MultipleFindingsMixedRules) {
 TEST_F(RuleEngineTest, IsEnabledDefault) {
     EXPECT_TRUE(engine.is_enabled("CDC001"));
     EXPECT_TRUE(engine.is_enabled("CDC003"));
-    EXPECT_TRUE(engine.is_enabled("CDC999"));
+    EXPECT_FALSE(engine.is_enabled("CDC999"))
+        << "unknown rules are disabled, never silently enabled";
 }
 
 TEST_F(RuleEngineTest, IsEnabledAfterDisable) {

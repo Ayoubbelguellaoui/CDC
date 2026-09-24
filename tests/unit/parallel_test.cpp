@@ -3,7 +3,9 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 
 using namespace opencdc::util;
 
@@ -63,6 +65,25 @@ TEST(ThreadSafeQueueTest, PushPopSize) {
     EXPECT_TRUE(q.try_pop(val));
     EXPECT_EQ(val, 20);
     EXPECT_FALSE(q.try_pop(val));
+}
+
+TEST(ThreadSafeQueueTest, WaitPopBlocksUntilPush) {
+    ThreadSafeQueue<int> q;
+    std::thread producer([&q] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        q.push(42);
+    });
+    int val = 0;
+    EXPECT_TRUE(q.wait_pop(val));
+    EXPECT_EQ(val, 42);
+    producer.join();
+}
+
+TEST(ThreadSafeQueueTest, WaitPopShutdownUnblocks) {
+    ThreadSafeQueue<int> q;
+    q.shutdown();
+    int val = 0;
+    EXPECT_FALSE(q.wait_pop(val));
 }
 
 TEST(ParallelForTest, ProcessesAllItems) {

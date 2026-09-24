@@ -6,6 +6,7 @@
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <vector>
 
 #include "util/string_util.h"
 
@@ -166,6 +167,106 @@ bool WaiverEngine::fields_match_wildcard(const std::string& pattern, const std::
     return wildcard_match(pattern, value);
 }
 
+// Max user-supplied regex length and complexity guards against ReDoS
+// (e.g. `(a+)+$` causes exponential regex_match per finding). Compile-once
+// + regex_error rejection already exist; these caps close the remainder.
+static constexpr size_t kMaxRegexPatternLength = 256;
+static constexpr size_t kMaxRegexQuantifiers = 10;
+
+static bool is_safe_regex_pattern(const std::string& pattern) {
+    if (pattern.size() > kMaxRegexPatternLength)
+        return false;
+    // Scan for nested quantifiers: '(' ... ('+'/'*'/'{') ... ')' followed by
+    // ('+'/'*'/'{'). Unescaped only; '\\' escapes next char.
+    size_t quantifiers = 0;
+    struct Frame {
+        bool has_quant = false;
+        bool has_pipe = false;
+    };
+    std::vector<Frame> stack;
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        char c = pattern[i];
+        if (c == '\\') {
+            ++i;  // skip escaped char
+            // Count escaped quantifier as literal, not a quantifier.
+            // Also count the backslash pass for quantifier budget: no.
+            continue;
+        }
+        if (c == '(') {
+            stack.push_back({});
+            // Skip non-capturing/lookaround prefixes "(?:", "(?=", "(?!", "(?<name>", "(?P<name>"
+            // so the '?' is not mistaken for an inner quantifier.
+            if (i + 1 < pattern.size() && pattern[i + 1] == '?') {
+                size_t j = i + 1;
+                ++j;  // skip '?'
+                if (j < pattern.size() &&
+                    (pattern[j] == ':' || pattern[j] == '=' || pattern[j] == '!')) {
+                    i = j;  // outer loop ++i moves past it
+                } else if (j < pattern.size() && pattern[j] == '<') {
+                    while (j < pattern.size() && pattern[j] != '>')
+                        ++j;
+                    if (j < pattern.size())
+                        i = j;
+                } else if (j < pattern.size() && pattern[j] == 'P' && j + 1 < pattern.size() &&
+                           pattern[j + 1] == '<') {
+                    j += 2;
+                    while (j < pattern.size() && pattern[j] != '>')
+                        ++j;
+                    if (j < pattern.size())
+                        i = j;
+                } else {
+                    // Bare "(?" — invalid regex; leave i so the '?' is treated
+                    // as a quantifier below and std::regex rejects it at compile.
+                }
+            }
+        } else if (c == ')') {
+            if (!stack.empty()) {
+                Frame f = stack.back();
+                stack.pop_back();
+                // Look ahead for quantifier applied to the group.
+                size_t j = i + 1;
+                if (j < pattern.size() && (pattern[j] == '+' || pattern[j] == '*' ||
+                                           pattern[j] == '?' || pattern[j] == '{')) {
+                    // Nested quantifier (e.g. (a+)+, (a?)+) or quantified
+                    // alternation (e.g. (a|aa)+, (.*|b)*) — both ReDoS risks.
+                    if (f.has_quant || f.has_pipe)
+                        return false;
+                    ++quantifiers;
+                }
+            }
+        } else if (c == '+' || c == '*' || c == '?' || c == '{') {
+            ++quantifiers;
+            if (!stack.empty())
+                stack.back().has_quant = true;
+            if (quantifiers > kMaxRegexQuantifiers)
+                return false;
+        } else if (c == '|') {
+            // Alternation branch for the innermost group: quantified alternation
+            // with overlapping branches (a|aa)+ is exponential — reject at close.
+            if (!stack.empty())
+                stack.back().has_pipe = true;
+        } else if (c == '[') {
+            // Skip character class [...] (may contain unescaped parens).
+            ++i;
+            if (i < pattern.size() && pattern[i] == '^')
+                ++i;
+            if (i < pattern.size() && pattern[i] == ']')
+                ++i;
+            for (; i < pattern.size(); ++i) {
+                if (pattern[i] == '\\') {
+                    ++i;
+                    continue;
+                }
+                if (pattern[i] == ']')
+                    break;
+            }
+        }
+    }
+    if (quantifiers > kMaxRegexQuantifiers)
+        return false;
+    return true;
+}
+
 // fields_match_regex: legacy path — only reached if a Regex waiver somehow
 // has no pre-compiled regex (e.g. waivers added directly without add_waiver).
 // The normal path in matches() uses Waiver::source_regex / dest_regex instead.
@@ -174,8 +275,10 @@ bool WaiverEngine::fields_match_regex(const std::string& pattern, const std::str
         return true;
     if (value.empty())
         return false;
+    if (!is_safe_regex_pattern(pattern))
+        return to_lower(pattern) == to_lower(value);
     try {
-        std::regex re(pattern, std::regex::icase);
+        std::regex re(pattern, std::regex::icase | std::regex::optimize);
         return std::regex_match(value, re);
     } catch (const std::regex_error&) {
         return to_lower(pattern) == to_lower(value);
@@ -240,13 +343,20 @@ bool WaiverEngine::add_waiver(const Waiver& w) {
     Waiver stored = w;
     if (w.match_type == WaiverMatchType::Regex) {
         // Compile regex once at add time — not per match call.
+        // Enforce length/complexity caps before compiling to block ReDoS.
         try {
-            if (!w.source_reg_name.empty())
-                stored.source_regex =
-                    std::make_shared<std::regex>(w.source_reg_name, std::regex::icase);
-            if (!w.dest_reg_name.empty())
-                stored.dest_regex =
-                    std::make_shared<std::regex>(w.dest_reg_name, std::regex::icase);
+            if (!w.source_reg_name.empty()) {
+                if (!is_safe_regex_pattern(w.source_reg_name))
+                    return false;
+                stored.source_regex = std::make_shared<std::regex>(
+                    w.source_reg_name, std::regex::icase | std::regex::optimize);
+            }
+            if (!w.dest_reg_name.empty()) {
+                if (!is_safe_regex_pattern(w.dest_reg_name))
+                    return false;
+                stored.dest_regex = std::make_shared<std::regex>(
+                    w.dest_reg_name, std::regex::icase | std::regex::optimize);
+            }
         } catch (const std::regex_error&) {
             return false;
         }
@@ -416,14 +526,20 @@ bool WaiverEngine::load_from_file(const std::string& path, std::string* error) {
             // Validate regex patterns at load time so we fail early on bad patterns.
             if (w.match_type == WaiverMatchType::Regex) {
                 try {
-                    if (!w.source_reg_name.empty())
-                        std::regex(w.source_reg_name, std::regex::icase);
-                    if (!w.dest_reg_name.empty())
-                        std::regex(w.dest_reg_name, std::regex::icase);
+                    if (!w.source_reg_name.empty()) {
+                        if (!is_safe_regex_pattern(w.source_reg_name))
+                            throw std::regex_error(std::regex_constants::error_complexity);
+                        std::regex(w.source_reg_name, std::regex::icase | std::regex::optimize);
+                    }
+                    if (!w.dest_reg_name.empty()) {
+                        if (!is_safe_regex_pattern(w.dest_reg_name))
+                            throw std::regex_error(std::regex_constants::error_complexity);
+                        std::regex(w.dest_reg_name, std::regex::icase | std::regex::optimize);
+                    }
                 } catch (const std::regex_error&) {
                     if (first_error.empty())
                         first_error = "waiver line " + std::to_string(line_no) +
-                                      ": invalid regular expression";
+                                      ": invalid or unsafe regular expression";
                     continue;
                 }
             }

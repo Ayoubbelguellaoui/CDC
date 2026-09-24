@@ -5,6 +5,10 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <stdexcept>
+#include <string>
+#include <vector>
+
 #include "analysis/trend.h"
 #include "cdc/crossing.h"
 #include "cdc/pattern.h"
@@ -76,10 +80,13 @@ void init_graph_bindings(py::module& m) {
     py::class_<ir::Graph>(m, "Graph")
         .def(py::init<>())
         .def("add_register", &ir::Graph::add_register, py::arg("hier_name"),
-             py::arg("clock_domain"), py::arg("width") = 1, py::arg("loc") = ir::SourceLoc{})
+             py::arg("clock_domain"), py::arg("width") = 1, py::arg("loc") = ir::SourceLoc{},
+             py::arg("module_path") = "", py::arg("module_type") = "")
         .def("add_port", &ir::Graph::add_port, py::arg("hier_name"), py::arg("width") = 1,
-             py::arg("loc") = ir::SourceLoc{})
-        .def("add_edge", &ir::Graph::add_edge, py::arg("from_id"), py::arg("to_id"))
+             py::arg("loc") = ir::SourceLoc{}, py::arg("module_path") = "",
+             py::arg("module_type") = "")
+        .def("add_edge", static_cast<void (ir::Graph::*)(uint64_t, uint64_t)>(&ir::Graph::add_edge),
+             py::arg("from_id"), py::arg("to_id"))
         .def(
             "find_node",
             [](const ir::Graph& g, uint64_t id) {
@@ -136,7 +143,8 @@ void init_cdc_bindings(py::module& m) {
     py::class_<cdc::CrossingAnalyzer>(m, "CrossingAnalyzer")
         .def(py::init<>())
         .def("analyze", &cdc::CrossingAnalyzer::analyze, py::arg("graph"), py::arg("domains"),
-             py::arg("register_to_domain"), py::arg("num_threads") = 0);
+             py::arg("register_to_domain"), py::arg("num_threads") = 0,
+             py::call_guard<py::gil_scoped_release>());
 
     py::class_<cdc::PatternRecognizer>(m, "PatternRecognizer")
         .def(py::init<>())
@@ -146,7 +154,8 @@ void init_cdc_bindings(py::module& m) {
         .def("is_gray_coded", &cdc::PatternRecognizer::is_gray_coded)
         .def("is_handshake_signal", &cdc::PatternRecognizer::is_handshake_signal)
         .def("is_async_fifo_ptr", &cdc::PatternRecognizer::is_async_fifo_ptr)
-        .def("analyze_and_annotate", &cdc::PatternRecognizer::analyze_and_annotate);
+        .def("analyze_and_annotate", &cdc::PatternRecognizer::analyze_and_annotate,
+             py::call_guard<py::gil_scoped_release>());
 }
 
 void init_clock_bindings(py::module& m) {
@@ -179,7 +188,10 @@ void init_clock_bindings(py::module& m) {
         .def_readwrite("clocks", &clock::ClockConstraints::clocks)
         .def_readwrite("false_paths", &clock::ClockConstraints::false_paths)
         .def_readwrite("multi_cycle_paths", &clock::ClockConstraints::multi_cycle_paths)
-        .def("is_false_path", &clock::ClockConstraints::is_false_path)
+        .def("is_false_path",
+             static_cast<bool (clock::ClockConstraints::*)(const std::string&, const std::string&)
+                             const>(&clock::ClockConstraints::is_false_path),
+             py::arg("from"), py::arg("to"))
         .def("is_asynchronous", &clock::ClockConstraints::is_asynchronous);
 
     py::class_<clock::ConstraintsParser>(m, "ConstraintsParser")
@@ -208,7 +220,8 @@ void init_report_bindings(py::module& m) {
     py::class_<report::HtmlReporter>(m, "HtmlReporter")
         .def(py::init<>())
         .def("generate_report", &report::HtmlReporter::generate_report, py::arg("findings"),
-             py::arg("options") = report::HtmlReportOptions{});
+             py::arg("options") = report::HtmlReportOptions{},
+             py::call_guard<py::gil_scoped_release>());
 }
 
 void init_analysis_bindings(py::module& m) {
@@ -237,11 +250,21 @@ void init_analysis_bindings(py::module& m) {
 
     py::class_<analysis::TrendAnalyzer>(m, "TrendAnalyzer")
         .def(py::init<>())
-        .def("save_baseline", &analysis::TrendAnalyzer::save_baseline)
+        .def("save_baseline",
+             [](analysis::TrendAnalyzer& self, const std::string& name,
+                const std::vector<cdc::Finding>& findings, const std::string& filepath) {
+                 std::string error;
+                 bool ok = self.save_baseline(name, findings, filepath, &error);
+                 if (!ok)
+                     throw std::runtime_error("save_baseline failed: " + error);
+             })
         .def("load_baseline", &analysis::TrendAnalyzer::load_baseline)
         .def("compare", static_cast<analysis::TrendReport (analysis::TrendAnalyzer::*)(
                             const analysis::Baseline&, const std::vector<cdc::Finding>&)>(
                             &analysis::TrendAnalyzer::compare))
+        .def("compare_with_file", static_cast<analysis::TrendReport (analysis::TrendAnalyzer::*)(
+                                      const std::string&, const std::vector<cdc::Finding>&)>(
+                                      &analysis::TrendAnalyzer::compare))
         .def("list_baselines", &analysis::TrendAnalyzer::list_baselines)
         .def("delete_baseline", &analysis::TrendAnalyzer::delete_baseline);
 }
@@ -262,13 +285,21 @@ PYBIND11_MODULE(opencdc, m) {
         .def_readwrite("config_path", &CheckOptions::config_path)
         .def_readwrite("output_path", &CheckOptions::output_path)
         .def_readwrite("format", &CheckOptions::format)
+        .def_readwrite("format_explicit", &CheckOptions::format_explicit)
         .def_readwrite("waiver_path", &CheckOptions::waiver_path)
         .def_readwrite("constraints_path", &CheckOptions::constraints_path)
         .def_readwrite("html_output_dir", &CheckOptions::html_output_dir)
         .def_readwrite("verbose", &CheckOptions::verbose)
+        .def_readwrite("num_threads", &CheckOptions::num_threads)
+        .def_readwrite("save_baseline", &CheckOptions::save_baseline)
+        .def_readwrite("compare_baseline", &CheckOptions::compare_baseline)
         .def_readwrite("disable_rules", &CheckOptions::disable_rules)
         .def_readwrite("severity_overrides", &CheckOptions::severity_overrides)
-        .def_readwrite("false_paths", &CheckOptions::false_paths);
+        .def_readwrite("false_paths", &CheckOptions::false_paths)
+        .def_readwrite("signoff_mode", &CheckOptions::signoff_mode)
+        .def_readwrite("profile", &CheckOptions::profile)
+        .def_readwrite("include_dirs", &CheckOptions::include_dirs)
+        .def_readwrite("defines", &CheckOptions::defines);
 
     py::enum_<ExitCode>(m, "ExitCode")
         .value("OK", ExitCode::OK)
@@ -276,8 +307,20 @@ PYBIND11_MODULE(opencdc, m) {
         .value("INPUT_ERROR", ExitCode::INPUT_ERROR)
         .value("INTERNAL_ERROR", ExitCode::INTERNAL_ERROR);
 
-    m.def("run", &run, py::arg("argc"), py::arg("argv"),
-          "Run OpenCDC analysis from command line arguments");
+    // argc/argv cannot be built from Python args, so take a plain list
+    // (argv[0] + args) instead of binding ::run directly. Releases the GIL:
+    // elaboration + analysis can take seconds on large designs.
+    m.def(
+        "run",
+        [](const std::vector<std::string>& args) {
+            py::gil_scoped_release release;
+            std::vector<const char*> argv;
+            argv.reserve(args.size());
+            for (const auto& a : args)
+                argv.push_back(a.c_str());
+            return run(static_cast<int>(argv.size()), argv.data());
+        },
+        py::arg("args"), "Run OpenCDC analysis from command line arguments");
 }
 
 }  // namespace python

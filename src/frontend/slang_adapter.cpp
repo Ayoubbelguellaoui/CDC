@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -159,7 +161,31 @@ using FormalMap = std::unordered_map<std::string, std::pair<std::string, uint32_
 
 static void collect_named_values(const Expression& expr, const std::string& prefix,
                                  std::vector<std::pair<std::string, uint32_t>>& out,
-                                 const FormalMap& formal_map = {}) {
+                                 const FormalMap& formal_map = {});
+
+// Map a call-site actual to signal names. Output arguments arrive wrapped
+// as Assignment expressions (slang represents `task(a, out_sig)` outputs
+// that way); only the driven lvalue names a signal. Scoped to call-actual
+// mapping so general operand collection (ports, continuous assigns) keeps
+// its long-standing behavior.
+static void collect_actual_values(const Expression& actual, const std::string& prefix,
+                                  std::vector<std::pair<std::string, uint32_t>>& vals,
+                                  const FormalMap& subst = {}) {
+    if (actual.kind == ExpressionKind::Assignment) {
+        // Output actual: the driven lvalue is the signal. (Caller-side
+        // signals need no formal substitution.)
+        auto& asgn = static_cast<const AssignmentExpression&>(actual);
+        auto lhs = extract_lvalue(asgn.left(), prefix);
+        if (lhs)
+            vals.push_back(*lhs);
+        return;
+    }
+    collect_named_values(actual, prefix, vals, subst);
+}
+
+static void collect_named_values(const Expression& expr, const std::string& prefix,
+                                 std::vector<std::pair<std::string, uint32_t>>& out,
+                                 const FormalMap& formal_map) {
     if (expr.kind == ExpressionKind::NamedValue) {
         auto& nv = static_cast<const NamedValueExpression&>(expr);
         std::string raw_name = sv_to_string(nv.symbol.name);
@@ -219,6 +245,126 @@ static void collect_named_values(const Expression& expr, const std::string& pref
         auto& conv = static_cast<const ConversionExpression&>(expr);
         collect_named_values(conv.operand(), prefix, out, formal_map);
     }
+}
+
+// Shared NamedValue symbol of a gray-xor `x ^ (x >> 1)`; nullptr otherwise.
+// Same predicate as is_gray_xor_structure, but also reports *which* signal
+// so function-boundary analysis can match it against formal arguments.
+static const Symbol* gray_xor_shared_symbol(const Expression& expr) {
+    if (!is_gray_xor_structure(expr))
+        return nullptr;
+    auto& binary = static_cast<const BinaryExpression&>(expr);
+    if (binary.left().kind == ExpressionKind::NamedValue)
+        return &static_cast<const NamedValueExpression&>(binary.left()).symbol;
+    return &static_cast<const NamedValueExpression&>(binary.right()).symbol;
+}
+
+// Does user function `call` compute `x ^ (x >> 1)` over one of its formals,
+// where that formal is (transitively) fed by a named signal? Covers
+// `gray <= bin2gray(bin)` without inlining the whole dataflow, including
+// nested calls (`outer(x)` calling `inner(x)`), up to a small depth.
+// `subst` maps enclosing-scope formal names to concrete signal names so
+// inner actuals that reference outer formals resolve transitively.
+static bool call_computes_gray_of_named(const CallExpression& call, const std::string& prefix,
+                                        const FormalMap& subst, size_t depth) {
+    if (call.isSystemCall() || depth > 4)
+        return false;
+    auto* sub_ptr = std::get_if<const SubroutineSymbol*>(&call.subroutine);
+    if (!sub_ptr || !*sub_ptr)
+        return false;
+    const SubroutineSymbol* sub = *sub_ptr;
+    auto formals = sub->getArguments();
+    auto actuals = call.arguments();
+    if (formals.empty() || actuals.empty())
+        return false;
+
+    // Map formal name -> concrete signal fed at this call site. Only the
+    // first named operand is tracked (documented multi-operand limitation).
+    FormalMap local;
+    for (size_t i = 0; i < formals.size() && i < actuals.size(); ++i) {
+        std::vector<std::pair<std::string, uint32_t>> vals;
+        collect_actual_values(*actuals[i], prefix, vals, subst);
+        if (!vals.empty())
+            local[sv_to_string(formals[i]->name)] = vals[0];
+    }
+
+    // Candidate result expressions: `return <expr>;` and assignments to the
+    // function return variable. Bounded walk (no loops/recursion).
+    std::vector<const Expression*> candidates;
+    std::vector<std::pair<const Statement*, size_t>> work = {{&sub->getBody(), 0}};
+    std::string return_name = sv_to_string(sub->name);
+    while (!work.empty() && candidates.size() < 32) {
+        auto [stmt, stmt_depth] = work.back();
+        work.pop_back();
+        if (!stmt || stmt_depth > 8)
+            continue;
+        switch (stmt->kind) {
+            case StatementKind::Block: {
+                auto& blk = static_cast<const BlockStatement&>(*stmt);
+                work.emplace_back(&blk.body, stmt_depth + 1);
+                break;
+            }
+            case StatementKind::List: {
+                auto& list = static_cast<const StatementList&>(*stmt);
+                for (auto* st : list.list)
+                    work.emplace_back(st, stmt_depth + 1);
+                break;
+            }
+            case StatementKind::Return: {
+                auto& ret = static_cast<const ReturnStatement&>(*stmt);
+                if (ret.expr)
+                    candidates.push_back(ret.expr);
+                break;
+            }
+            case StatementKind::ExpressionStatement: {
+                auto& es = static_cast<const ExpressionStatement&>(*stmt);
+                if (es.expr.kind == ExpressionKind::Assignment) {
+                    auto& asgn = static_cast<const AssignmentExpression&>(es.expr);
+                    if (asgn.left().kind == ExpressionKind::NamedValue) {
+                        auto& lhs = static_cast<const NamedValueExpression&>(asgn.left()).symbol;
+                        if (sv_to_string(lhs.name) == return_name || &lhs == sub->returnValVar)
+                            candidates.push_back(&asgn.right());
+                    }
+                } else if (es.expr.kind == ExpressionKind::Call) {
+                    // Nested call as a bare statement: its output formals may
+                    // feed this function's result indirectly; approximate by
+                    // treating a nested gray-computing call as a candidate.
+                    // (Deeper dataflow through task outputs is out of scope.)
+                    candidates.push_back(&es.expr);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    auto is_formal = [&](const Symbol* sym) {
+        for (auto* f : formals) {
+            if (sym == f)
+                return true;
+        }
+        return false;
+    };
+    for (const Expression* cand : candidates) {
+        if (const Symbol* shared = gray_xor_shared_symbol(*cand)) {
+            if (is_formal(shared) && local.find(sv_to_string(shared->name)) != local.end())
+                return true;
+        } else if (cand->kind == ExpressionKind::Call) {
+            auto& inner = static_cast<const CallExpression&>(*cand);
+            if (call_computes_gray_of_named(inner, prefix, local, depth + 1))
+                return true;
+        }
+    }
+    return false;
+}
+
+// Does user function `call` compute `x ^ (x >> 1)` over one of its formals,
+// where that formal is fed by a named signal at the call site? Covers
+// `gray <= bin2gray(bin)` without inlining the whole dataflow: the outer
+// assignment is tagged as a gray transform of the actuals.
+static bool function_computes_gray(const CallExpression& call, const std::string& prefix) {
+    return call_computes_gray_of_named(call, prefix, {}, 0);
 }
 
 static void collect_assigns(const Statement& stmt, const std::string& prefix,
@@ -291,6 +437,16 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                             logic_type = ir::LogicType::Xor;
                         }
                         is_multi_operand = true;
+                    } else if (assign.right().kind == ExpressionKind::Call) {
+                        // User function on the RHS (e.g. gray <= bin2gray(bin)):
+                        // attribute a gray transform computed inside the function
+                        // body to this assignment so the encoder node is built.
+                        auto& call = static_cast<const CallExpression&>(assign.right());
+                        if (function_computes_gray(call, prefix)) {
+                            is_gray_transform = true;
+                            logic_type = ir::LogicType::Xor;
+                            is_multi_operand = true;
+                        }
                     }
 
                     if (rhs_ops.empty()) {
@@ -322,7 +478,7 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                         for (size_t i = 0; i < formals.size() && i < actuals.size(); ++i) {
                             std::string formal_name = sv_to_string(formals[i]->name);
                             std::vector<std::pair<std::string, uint32_t>> vals;
-                            collect_named_values(*actuals[i], prefix, vals);
+                            collect_actual_values(*actuals[i], prefix, vals);
                             if (!vals.empty()) {
                                 fmap[formal_name] = vals[0];
                             }
@@ -468,12 +624,27 @@ std::string SlangAdapter::event_signal_name(const TimingControl& event) const {
     }
     std::string text(
         buf.substr(range.start().offset(), range.end().offset() - range.start().offset()));
-    // Trim whitespace.
-    size_t b = text.find_first_not_of(" \t\r\n");
-    if (b == std::string::npos)
+    // Trim leading/trailing whitespace, drop inner whitespace (source slices
+    // like "clk " vs "clk" must not become distinct domains), and strip
+    // a trailing [digits] bit-select ("clk[0]" vs "clk"), mirroring
+    // is_reset_name. Interior brackets belong to generate-block indices
+    // ("gen[0].clk" stays distinct from "gen[1].clk").
+    std::string compact;
+    for (char c : text) {
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
+            compact += c;
+    }
+    if (compact.empty())
         return "";
-    size_t e = text.find_last_not_of(" \t\r\n");
-    return text.substr(b, e - b + 1);
+    size_t lb = compact.rfind('[');
+    if (lb != std::string::npos && compact.back() == ']') {
+        bool digits = lb + 1 < compact.size() - 1;
+        for (size_t i = lb + 1; digits && i + 1 < compact.size(); ++i)
+            digits = std::isdigit(static_cast<unsigned char>(compact[i])) != 0;
+        if (digits)
+            compact = compact.substr(0, lb);
+    }
+    return compact;
 }
 
 ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& proc) const {
@@ -544,7 +715,20 @@ std::optional<ir::SourceLoc> SlangAdapter::to_source_loc(const slang::SourceLoca
     if (!loc || !source_manager_)
         return std::nullopt;
     ir::SourceLoc result;
-    result.file = sv_to_string(source_manager_->getFileName(loc));
+    std::string file = sv_to_string(source_manager_->getFileName(loc));
+    // Prefer cwd-relative paths in reports (less absolute-path leakage into
+    // JSON/SARIF/HTML) when the file is under the working directory.
+    // Cached once: cwd never changes during elaboration.
+    static const std::string cwd_prefix = [] {
+        std::error_code ec;
+        std::string cwd = std::filesystem::current_path(ec).string();
+        if (!ec && !cwd.empty() && cwd.back() != '/')
+            cwd += '/';
+        return ec ? std::string() : cwd;
+    }();
+    if (!cwd_prefix.empty() && file.compare(0, cwd_prefix.size(), cwd_prefix) == 0)
+        file = file.substr(cwd_prefix.size());
+    result.file = std::move(file);
     result.line = source_manager_->getLineNumber(loc);
     result.col = source_manager_->getColumnNumber(loc);
     return result;
@@ -560,6 +744,34 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     FrontendResult result;
     Compilation compilation;
     allow_user_annotation_ = options.allow_user_annotation;
+    frontend_warnings_.clear();
+    scope_depth_ = 0;
+
+    // Fail fast on bad frontend options with actionable errors instead of
+    // cryptic slang diagnostics downstream.
+    for (const auto& dir : options.include_dirs) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec) || ec) {
+            result.errors.push_back("Invalid include directory (not a directory): " + dir);
+            result.ok = false;
+            return result;
+        }
+    }
+    for (const auto& def : options.defines) {
+        std::string name = def.substr(0, def.find('='));
+        bool valid =
+            !name.empty() && (std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_');
+        for (size_t i = 1; valid && i < name.size(); ++i) {
+            char c = name[i];
+            valid = std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+        }
+        if (!valid) {
+            result.errors.push_back("Invalid macro definition (expected NAME or NAME=value): " +
+                                    def);
+            result.ok = false;
+            return result;
+        }
+    }
 
     slang::parsing::PreprocessorOptions pp;
     for (const auto& dir : options.include_dirs) {
@@ -655,6 +867,7 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
         result.errors = validation.errors;
         return result;
     }
+    result.warnings = std::move(frontend_warnings_);
     result.ok = true;
     return result;
 }
@@ -669,6 +882,12 @@ void SlangAdapter::walk_instance(const InstanceSymbol& inst, ir::Graph& graph,
 
 void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                               const std::string& p, const std::string& module_type) {
+    if (scope_depth_ >= kMaxScopeDepth) {
+        frontend_warnings_.push_back("Scope nesting exceeds " + std::to_string(kMaxScopeDepth) +
+                                     " levels at '" + p + "'; deeper hierarchy skipped");
+        return;
+    }
+    ++scope_depth_;
     for (auto& member : scope.members()) {
         switch (member.kind) {
             case SymbolKind::Port: {
@@ -763,8 +982,15 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                         cr = extract_clock_reset(proc);
                         // Skip blocks with no recoverable clock so "unknown" never
                         // becomes a real domain name — applies to all clocked block types
-                        // including AlwaysLatch.
+                        // including AlwaysLatch. Surfaced as a warning (not silent)
+                        // so missed crossings can be investigated.
                         if (cr.clock == "unknown") {
+                            auto opt_wloc = to_source_loc(proc.location);
+                            std::string where =
+                                opt_wloc ? (opt_wloc->file + ":" + std::to_string(opt_wloc->line))
+                                         : p;
+                            frontend_warnings_.push_back(
+                                "Skipped procedural block with unrecoverable clock at " + where);
                             break;
                         }
                         if (!p.empty() && cr.clock.find('.') == std::string::npos &&
@@ -795,12 +1021,18 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                             if (mutable_dst) {
                                 mutable_dst->kind = ir::NodeKind::Register;
                                 mutable_dst->clock_domain = cr.clock;
-                                mutable_dst->width = a.lhs_width;
-                                mutable_dst->loc = ir_loc;
+                                // Preserve earlier info: keep the widest width, the
+                                // first-seen location, and OR sticky flags instead of
+                                // overwriting them with this driver's values.
+                                if (a.lhs_width > mutable_dst->width)
+                                    mutable_dst->width = a.lhs_width;
+                                if (mutable_dst->loc.file.empty())
+                                    mutable_dst->loc = ir_loc;
                                 mutable_dst->reset_signal = cr.reset;
                                 mutable_dst->reset_pol = cr.reset_pol;
                                 mutable_dst->is_async_reset = cr.is_async_reset;
-                                mutable_dst->is_gray_coded = a.is_gray_transform;
+                                mutable_dst->is_gray_coded =
+                                    mutable_dst->is_gray_coded || a.is_gray_transform;
                                 if (mutable_dst->module_type.empty())
                                     mutable_dst->module_type = module_type;
                                 if (allow_user_annotation_)
@@ -898,9 +1130,11 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
         }
 
         if (!rhs_ops.empty()) {
-            uint32_t lhs_width = 1;
+            // Prefer the declared LHS width; fall back to the existing node's
+            // width only when the extractor yielded nothing useful.
+            uint32_t lhs_width = (lhs->second != 0) ? lhs->second : 1;
             const ir::Node* existing_lhs = graph.find_node_by_name(lhs_name);
-            if (existing_lhs) {
+            if (existing_lhs && existing_lhs->width > lhs_width) {
                 lhs_width = existing_lhs->width;
             }
             uint64_t lhs_id = existing_lhs ? existing_lhs->id
@@ -956,6 +1190,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             }
         }
     }
+    --scope_depth_;
 }
 
 void SlangAdapter::resolve_clocks(ir::Graph& graph) {
@@ -1013,12 +1248,22 @@ bool SlangAdapter::is_top_level_input(const std::string& hier_name, const ir::Gr
 
 std::string SlangAdapter::trace_to_top_level_source(const std::string& clock_name,
                                                     const ir::Graph& graph) {
-    // Build top-level port index once (Port nodes with exactly 1 dot).
-    static thread_local std::unordered_set<std::string> tl_top_level_ports;
-    static thread_local uint64_t tl_generation = UINT64_MAX;
+    // Build top-level port index once per graph (Port nodes with exactly 1 dot).
+    // Keyed by graph identity AND generation: two Graph instances can share a
+    // generation number, and mutating a graph bumps its generation.
+    struct CacheEntry {
+        uint64_t generation = UINT64_MAX;
+        size_t node_count = 0;
+        std::unordered_set<std::string> ports;
+    };
+    static thread_local std::unordered_map<const ir::Graph*, CacheEntry> tl_cache;
+    if (tl_cache.size() > 16)
+        tl_cache.clear();  // bound memory; keys are raw pointers to dead graphs
+    CacheEntry& entry = tl_cache[&graph];
     uint64_t cur_gen = graph.generation();
-    if (cur_gen != tl_generation) {
-        tl_top_level_ports.clear();
+    size_t cur_count = graph.nodes().size();
+    if (entry.generation != cur_gen || entry.node_count != cur_count) {
+        entry.ports.clear();
         for (const auto& node : graph.nodes()) {
             if (node.kind != ir::NodeKind::Port)
                 continue;
@@ -1027,24 +1272,31 @@ std::string SlangAdapter::trace_to_top_level_source(const std::string& clock_nam
                 if (c == '.')
                     dots++;
             if (dots == 1)
-                tl_top_level_ports.insert(node.hier_name);
+                entry.ports.insert(node.hier_name);
         }
-        tl_generation = cur_gen;
+        entry.generation = cur_gen;
+        entry.node_count = cur_count;
     }
+    std::unordered_set<std::string>& tl_top_level_ports = entry.ports;
 
     const ir::Node* start = graph.find_node_by_name(clock_name);
     if (!start) {
+        // Deterministic tie-break: smallest hierarchical name wins instead of
+        // graph insertion order, so duplicate leaf names classify identically
+        // across runs.
+        const ir::Node* best = nullptr;
         for (const auto& node : graph.nodes()) {
             if (node.hier_name == clock_name) {
-                start = &node;
-                break;
+                best = &node;
+                break;  // exact match is unambiguous
             }
             size_t dot = node.hier_name.rfind('.');
             if (dot != std::string::npos && node.hier_name.substr(dot + 1) == clock_name) {
-                start = &node;
-                break;
+                if (!best || node.hier_name < best->hier_name)
+                    best = &node;
             }
         }
+        start = best;
     }
     if (!start)
         return clock_name;

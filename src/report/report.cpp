@@ -55,7 +55,7 @@ static const char* multi_bit_type_name(cdc::MultiBitCrossingType t) {
         case cdc::MultiBitCrossingType::StaticData:
             return "static_data";
         case cdc::MultiBitCrossingType::HandshakeControlled:
-            return "handshake";
+            return "handshake_controlled";
         case cdc::MultiBitCrossingType::GrayCoded:
             return "gray_coded";
         case cdc::MultiBitCrossingType::AsyncFifo:
@@ -91,7 +91,9 @@ ReportCounts Reporter::count(const std::vector<cdc::Finding>& findings) const {
 
 bool Reporter::has_unsuppressed_errors(const std::vector<cdc::Finding>& findings) const {
     for (const auto& f : findings) {
-        if (!f.waived && f.severity == "error")
+        if (f.waived || f.suppressed_by_false_path || f.suppressed_by_multicycle)
+            continue;
+        if (f.severity == "error")
             return true;
     }
     return false;

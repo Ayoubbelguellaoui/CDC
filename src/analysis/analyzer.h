@@ -51,8 +51,14 @@ class Analyzer {
     AnalysisResult run(const AnalysisRequest& request);
 
     // Incremental re-analysis: returns previous findings if the graph is clean;
-    // otherwise re-runs the full pipeline.
+    // otherwise re-runs the analysis stages on a copy of the mutated graph
+    // (no re-elaboration from files, so caller-side graph edits take effect).
     AnalysisResult run_incremental(AnalysisResult& previous, const AnalysisRequest& request);
+
+   private:
+    // Steps 2-14 of the pipeline on an already-elaborated graph.
+    AnalysisResult run_on_graph(ir::Graph graph, const AnalysisRequest& request,
+                                config::Config cfg);
 };
 
 }  // namespace opencdc::analysis

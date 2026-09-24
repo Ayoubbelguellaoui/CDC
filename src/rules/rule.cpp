@@ -75,7 +75,7 @@ std::optional<Rule> RuleEngine::find_rule(const std::string& rule_id) const {
 bool RuleEngine::is_enabled(const std::string& rule_id) const {
     auto it = rule_index_.find(rule_id);
     if (it == rule_index_.end())
-        return true;
+        return false;  // unknown rules are disabled, never silently enabled
     return rules_[it->second].enabled;
 }
 
@@ -84,6 +84,7 @@ std::vector<Finding> RuleEngine::filter(const std::vector<Finding>& findings) co
     for (const auto& f : findings) {
         auto it = rule_index_.find(f.rule_id);
         if (it == rule_index_.end()) {
+            // Fail-visible: never silently drop a finding for an unknown rule.
             result.push_back(f);
             continue;
         }

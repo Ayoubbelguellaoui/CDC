@@ -8,6 +8,7 @@
 #include <fstream>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 
 #include "util/yaml_compat.h"
 
@@ -695,7 +696,8 @@ ClockConstraints SdcReader::read_sdc(const std::string& path) {
 
     static constexpr size_t MAX_FILE_SIZE = 2 * 1024 * 1024;
     auto file_size = file.tellg();
-    if (file_size > static_cast<std::streampos>(MAX_FILE_SIZE))
+    if (file_size == static_cast<std::streampos>(-1) ||
+        file_size > static_cast<std::streampos>(MAX_FILE_SIZE))
         return ClockConstraints{};
     file.seekg(0, std::ios::beg);
 
@@ -1144,6 +1146,11 @@ ClockConstraints ConstraintsParser::parse_file(const std::string& path, std::str
 
     static constexpr size_t MAX_FILE_SIZE = 2 * 1024 * 1024;
     auto file_size = file.tellg();
+    if (file_size == static_cast<std::streampos>(-1)) {
+        if (error)
+            *error = "Could not determine constraints file size: " + path;
+        return ClockConstraints{};
+    }
     if (file_size > static_cast<std::streampos>(MAX_FILE_SIZE)) {
         if (error)
             *error = "Constraints file exceeds 2MB limit: " + path;

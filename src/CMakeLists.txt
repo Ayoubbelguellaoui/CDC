@@ -28,7 +28,7 @@ set(OPENCDC_CORE_SOURCES
     lsp/server.cpp
 )
 
-option(OPENCDC_ENABLE_LSP "Enable LSP server" ${UNIX})
+option(OPENCDC_ENABLE_LSP "Enable LSP server" ON)
 
 set(OPENCDC_CORE_SOURCES_NO_LSP ${OPENCDC_CORE_SOURCES})
 list(REMOVE_ITEM OPENCDC_CORE_SOURCES_NO_LSP lsp/server.cpp)
@@ -45,6 +45,9 @@ target_include_directories(opencdc_core PUBLIC
     ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(opencdc_core PUBLIC slang::slang nlohmann_json::nlohmann_json yaml-cpp::yaml-cpp)
+if(WIN32)
+    target_link_libraries(opencdc_core PUBLIC ws2_32)
+endif()
 
 add_executable(opencdc entry.cpp)
 target_link_libraries(opencdc PRIVATE opencdc_core)

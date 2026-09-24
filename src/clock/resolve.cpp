@@ -1,5 +1,6 @@
 #include "clock/resolve.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace opencdc::clock {
@@ -49,7 +50,9 @@ std::string ClockResolver::get_root_port_name(const std::string& name,
     std::string short_name = (dot != std::string::npos) ? name.substr(dot + 1) : name;
     auto it = short_to_hier_.find(short_name);
     if (it != short_to_hier_.end() && !it->second.empty()) {
-        return it->second.front();
+        // Deterministic tie-break independent of elaboration order: smallest
+        // hierarchical name wins when a leaf name maps to several ports.
+        return *std::min_element(it->second.begin(), it->second.end());
     }
     return name;
 }

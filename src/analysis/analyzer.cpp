@@ -16,22 +16,51 @@
 namespace opencdc::analysis {
 
 AnalysisResult Analyzer::run(const AnalysisRequest& request) {
-    AnalysisResult result;
-    result.analysis_status = "complete";
+    // Parse config FIRST: FrontendOptions depend on it (allow_user_annotation),
+    // and config errors are cheaper to report than elaboration errors.
+    config::Config cfg;
+    if (request.config.has_value()) {
+        cfg = *request.config;
+    } else if (!request.config_path.empty()) {
+        config::ConfigParser parser;
+        std::string cfg_error;
+        cfg = parser.parse_file(request.config_path, &cfg_error);
+        if (!cfg_error.empty()) {
+            AnalysisResult result;
+            result.errors.push_back(std::move(cfg_error));
+            result.analysis_status = "failed";
+            return result;
+        }
+    }
 
     // 1. Frontend: parse and elaborate to IR graph.
     frontend::SlangAdapter adapter;
     frontend::FrontendOptions fe_opts;
     fe_opts.include_dirs = request.include_dirs;
     fe_opts.defines = request.defines;
+    fe_opts.allow_user_annotation = cfg.allow_user_annotation;
     frontend::FrontendResult fe_result =
         adapter.elaborate(request.input_files, request.top_module, fe_opts);
     if (!fe_result.ok) {
+        AnalysisResult result;
         result.errors = std::move(fe_result.errors);
         result.analysis_status = "failed";
         return result;
     }
-    result.graph = std::move(fe_result.graph);
+    ir::Graph graph = std::move(fe_result.graph);
+    std::vector<std::string> fe_warnings = std::move(fe_result.warnings);
+
+    AnalysisResult result = run_on_graph(std::move(graph), request, std::move(cfg));
+    // Frontend warnings (e.g. skipped unknown-clock blocks) travel with the result.
+    result.warnings.insert(result.warnings.begin(), fe_warnings.begin(), fe_warnings.end());
+    return result;
+}
+
+AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& request,
+                                      config::Config cfg) {
+    AnalysisResult result;
+    result.analysis_status = "complete";
+    result.graph = std::move(graph);
 
     // 2. Constraints file (SDC or YAML), if any.
     clock::ClockConstraints constraints;
@@ -62,21 +91,10 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     result.domains = domain_extractor.extract(result.graph);
     result.warnings = result.domains.warnings;
 
-    // 4. Config file: rule overrides, waivers, false paths, reset policy.
+    // 4. Config: rule overrides, waivers, false paths, reset policy.
+    // (Parsed by run() before elaboration; passed in so FrontendOptions can
+    // depend on it.)
     rules::RuleEngine rule_engine;
-    config::Config cfg;
-    if (request.config.has_value()) {
-        cfg = *request.config;
-    } else if (!request.config_path.empty()) {
-        config::ConfigParser parser;
-        std::string cfg_error;
-        cfg = parser.parse_file(request.config_path, &cfg_error);
-        if (!cfg_error.empty()) {
-            result.errors.push_back(std::move(cfg_error));
-            result.analysis_status = "failed";
-            return result;
-        }
-    }
 
     for (const auto& [rule_id, rule_cfg] : cfg.rules) {
         if (!rule_engine.find_rule(rule_id).has_value()) {
@@ -316,9 +334,26 @@ AnalysisResult Analyzer::run_incremental(AnalysisResult& previous, const Analysi
         return keep;
     }
 
-    // Re-run full analysis on the modified graph.
-    AnalysisResult result = run(request);
-    previous.graph.clear_dirty();
+    // Re-run the analysis stages on the caller's mutated graph (no
+    // re-elaboration from files). Parse config the same way run() does so
+    // FrontendOptions-dependent settings stay consistent.
+    config::Config cfg;
+    if (request.config.has_value()) {
+        cfg = *request.config;
+    } else if (!request.config_path.empty()) {
+        config::ConfigParser parser;
+        std::string cfg_error;
+        cfg = parser.parse_file(request.config_path, &cfg_error);
+        if (!cfg_error.empty()) {
+            AnalysisResult result;
+            result.errors.push_back(std::move(cfg_error));
+            result.analysis_status = "failed";
+            return result;
+        }
+    }
+    AnalysisResult result = run_on_graph(previous.graph, request, std::move(cfg));
+    if (result.ok)
+        previous = result;
     return result;
 }
 

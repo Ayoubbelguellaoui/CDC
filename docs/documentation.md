@@ -163,9 +163,30 @@ false_paths:
     dest: mod.meta_reg
 
 output:
-  format: json
+  format: json  # json, text, html, sarif
   file: report.json
   suppress_reset_crossings: true
+
+# Optional analysis tuning (all have defaults; profiles override these)
+reconvergence_depth: 8       # 1-32
+min_sync_stages: 2           # 2-5
+require_structural_proof: false
+allow_user_annotation: true
+suppress_reset_crossings: false  # top-level spelling also accepted
+
+reset_policy:
+  require_cdc_register_reset: false
+  check_same_clock_reset_crossings: false
+  detect_reset_synchronizer: true
+
+multicycle_path_policy:
+  suppress_findings: true
+  suppress_rules: [CDC001]
+
+blackboxes:
+  - module_name: xpm_cdc_single
+    vendor: xilinx
+    is_safe_crossing: true
 ```
 
 ## Waivers
@@ -179,7 +200,8 @@ CDC001 src dst clk_a clk_b "Known safe" @reviewer 2027-12-31
 # Wildcard matching
 WILDCARD CDC001 top.*.src_* top.*.dst_* clk_a clk_b "Module waiver" @team
 
-# Regex matching
+# Regex matching (max 256 chars, max 10 quantifiers, no nested quantifiers
+# such as `(a+)+` — unsafe patterns are rejected at load time)
 REGEX CDC001 top\.\w+\.src_\d+ top\.\w+\.dst_\d+ clk_a clk_b "Regex waiver" @team
 ```
 

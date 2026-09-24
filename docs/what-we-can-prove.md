@@ -42,6 +42,9 @@ constraints, or that it handles all metastability scenarios.
 ### Pattern Verification
 - **Gray code**: Verifies that a register with `is_gray_coded` flag has
   only single-bit transitions. Without the flag, detects but does not verify.
+  Gray transforms through function calls (including nested calls) and task
+  output args are recognized; exotic patterns (deep nesting, `ref` args,
+  generate-wrapped logic) may not be (see benchmark known gaps).
 - **Async FIFO**: Verifies gray-encoded pointers AND synchronized read/write
   pointers across domains.
 - **Handshake**: Verifies cross-domain path, data path, AND feedback path

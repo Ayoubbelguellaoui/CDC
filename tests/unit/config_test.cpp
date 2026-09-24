@@ -1,12 +1,12 @@
 #include "config/config.h"
 
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include <cstdio>
 #include <string>
 
 #include "analysis/trend.h"
+#include "util/temp_file.h"
 
 static std::string fixture_path(const std::string& name) {
     return std::string(FIXTURES_DIR) + "/config/" + name;
@@ -152,6 +152,90 @@ TEST(ConfigTest, SuppressResetCrossingsParsed) {
     EXPECT_TRUE(config.suppress_reset_crossings);
 }
 
+TEST(ConfigTest, SarifFormatAccepted) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    auto config = parser.parse_string("output:\n  format: sarif\n", &error);
+    EXPECT_TRUE(error.empty());
+    EXPECT_EQ(config.output.format, "sarif");
+}
+
+TEST(ConfigTest, NativeBoolFormsAccepted) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    auto config = parser.parse_string(
+        "rules:\n"
+        "  CDC001:\n"
+        "    enabled: yes\n"
+        "  CDC003:\n"
+        "    enabled: off\n",
+        &error);
+    EXPECT_TRUE(error.empty());
+    ASSERT_EQ(config.rules.size(), 2u);
+    EXPECT_TRUE(config.rules.at("CDC001").enabled);
+    EXPECT_FALSE(config.rules.at("CDC003").enabled);
+}
+
+TEST(ConfigTest, AnalysisTuningKeysParsed) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    auto config = parser.parse_string(
+        "reconvergence_depth: 12\n"
+        "min_sync_stages: 3\n"
+        "require_structural_proof: true\n"
+        "allow_user_annotation: false\n"
+        "reset_policy:\n"
+        "  require_cdc_register_reset: true\n"
+        "  check_same_clock_reset_crossings: true\n"
+        "  detect_reset_synchronizer: false\n"
+        "multicycle_path_policy:\n"
+        "  suppress_findings: false\n"
+        "  suppress_rules: [CDC001, CDC002]\n"
+        "blackboxes:\n"
+        "  - module_name: my_sync\n"
+        "    vendor: acme\n"
+        "    is_safe_crossing: true\n",
+        &error);
+    EXPECT_TRUE(error.empty());
+    EXPECT_EQ(config.reconvergence_depth, 12);
+    EXPECT_EQ(config.min_sync_stages, 3);
+    EXPECT_TRUE(config.require_structural_proof);
+    EXPECT_FALSE(config.allow_user_annotation);
+    EXPECT_TRUE(config.reset_policy.require_cdc_register_reset);
+    EXPECT_TRUE(config.reset_policy.check_same_clock_reset_crossings);
+    EXPECT_FALSE(config.reset_policy.detect_reset_synchronizer);
+    EXPECT_FALSE(config.multicycle_path_policy.suppress_findings);
+    ASSERT_EQ(config.multicycle_path_policy.suppress_rules.size(), 2u);
+    ASSERT_EQ(config.blackboxes.size(), 1u);
+    EXPECT_EQ(config.blackboxes[0].module_name, "my_sync");
+}
+
+TEST(ConfigTest, InvalidDepthRejected) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    parser.parse_string("reconvergence_depth: 99\n", &error);
+    EXPECT_FALSE(error.empty());
+}
+
+TEST(ConfigTest, ExclusiveTypoRejected) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    auto config = parser.parse_string(
+        "clock_groups:\n"
+        "  - clocks: [clk_a, clk_b]\n"
+        "    exclusive: maybe\n",
+        &error);
+    EXPECT_FALSE(error.empty());
+    EXPECT_TRUE(config.clock_groups.empty());
+}
+
+TEST(ConfigTest, UnknownTopLevelKeyRejected) {
+    opencdc::config::ConfigParser parser;
+    std::string error;
+    parser.parse_string("reconvergence_dept: 99\n", &error);
+    EXPECT_NE(error.find("Unknown config key"), std::string::npos);
+}
+
 TEST(ConfigTest, OldCompactWaiverFormatCompat) {
     opencdc::config::ConfigParser parser;
     auto config = parser.parse_string(
@@ -253,7 +337,7 @@ TEST(TrendTest, BaselineRoundTripsDelimitersNewlinesAndDuplicates) {
     finding.waived = true;
     finding.waiver_justification = "why\n";
 
-    const std::string path = "/tmp/opencdc-trend-test-" + std::to_string(::getpid()) + ".baseline";
+    const std::string path = opencdc::util::unique_temp_path("opencdc-trend-test-", ".baseline");
     opencdc::analysis::TrendAnalyzer analyzer;
     analyzer.save_baseline("baseline:name\n", {finding, finding}, path);
     auto baseline = analyzer.load_baseline(path);

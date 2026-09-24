@@ -1,17 +1,12 @@
 #include "lsp/server.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -19,6 +14,8 @@
 #include <sstream>
 
 #include "analysis/analyzer.h"
+#include "lsp/socket_compat.h"
+#include "util/temp_file.h"
 
 namespace opencdc {
 namespace lsp {
@@ -32,14 +29,30 @@ struct temp_file_guard {
             std::remove(path.c_str());
     }
 };
+
+bool is_loopback_ipv4(const std::string& ip) {
+    // 127.0.0.0/8 (covers 127.0.0.1, 127.0.0.2, ...).
+    if (ip.size() < 8 || ip.compare(0, 4, "127.") != 0)
+        return false;
+    std::istringstream ss(ip.substr(4));
+    std::string part;
+    while (std::getline(ss, part, '.')) {
+        if (part.empty() || part.size() > 3)
+            return false;
+        for (char c : part)
+            if (!std::isdigit((unsigned char)c))
+                return false;
+    }
+    return true;
+}
 }  // namespace
 
-static bool write_all_fd(int fd, const char* data, size_t len) {
+static bool write_all_fd(compat::socket_t fd, const char* data, size_t len) {
     size_t written = 0;
     while (written < len) {
-        ssize_t n = send(fd, data + written, len - written, MSG_NOSIGNAL);
+        compat::ssize_t n = compat::socket_send(fd, data + written, len - written, MSG_NOSIGNAL);
         if (n < 0) {
-            if (errno == EINTR)
+            if (compat::last_interrupted())
                 continue;
             return false;
         }
@@ -106,6 +119,10 @@ LspServer::~LspServer() {
 }
 
 void LspServer::start(int port) {
+    if (running_.load()) {
+        // Already running: refuse instead of joining a thread that never exits.
+        return;
+    }
     if (server_thread_.joinable()) {
         server_thread_.join();  // Join any prior run before restart
     }
@@ -128,22 +145,18 @@ void LspServer::stop() {
     // Use socket_mutex_ to serialize with concurrent writes.
     {
         std::lock_guard<std::mutex> lock(socket_mutex_);
-        if (client_fd_ >= 0) {
-            shutdown(client_fd_, SHUT_RDWR);
-            client_fd_ = -1;
+        if (client_fd_ != compat::kInvalidSocket) {
+            compat::shutdown_socket(client_fd_);
+            client_fd_ = compat::kInvalidSocket;
         }
-        if (socket_fd_ >= 0) {
-            shutdown(socket_fd_, SHUT_RDWR);
-            socket_fd_ = -1;
+        if (socket_fd_ != compat::kInvalidSocket) {
+            compat::shutdown_socket(socket_fd_);
+            socket_fd_ = compat::kInvalidSocket;
         }
     }
     if (server_thread_.joinable()) {
         server_thread_.join();
     }
-}
-
-void LspServer::set_publish_diagnostics_callback(PublishDiagnosticsCallback callback) {
-    publish_callback_ = std::move(callback);
 }
 
 void LspServer::did_open(const TextDocument& document) {
@@ -159,11 +172,16 @@ void LspServer::did_open(const TextDocument& document) {
         diagnostics_cache_[document.uri] = diagnostics;
     }
 
-    if (publish_callback_) {
+    PublishDiagnosticsCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        callback = publish_callback_;
+    }
+    if (callback) {
         PublishDiagnosticsParams params;
         params.uri = document.uri;
         params.diagnostics = diagnostics;
-        publish_callback_(params);
+        callback(params);
     } else {
         PublishDiagnosticsParams params{document.uri, diagnostics};
         send_diagnostics_notification(params);
@@ -172,12 +190,14 @@ void LspServer::did_open(const TextDocument& document) {
 
 void LspServer::did_change(const TextDocument& document) {
     {
+        // Signal any in-flight analysis; do NOT install a fresh flag here —
+        // analyze_document() owns flag creation. Installing one here would be
+        // immediately overwritten there, orphaning a cancel.
         std::lock_guard<std::mutex> lock(cancel_mutex_);
         auto it = cancel_flags_.find(document.uri);
         if (it != cancel_flags_.end()) {
             it->second->store(true);
         }
-        cancel_flags_[document.uri] = std::make_shared<std::atomic<bool>>(false);
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -191,11 +211,16 @@ void LspServer::did_change(const TextDocument& document) {
         diagnostics_cache_[document.uri] = diagnostics;
     }
 
-    if (publish_callback_) {
+    PublishDiagnosticsCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        callback = publish_callback_;
+    }
+    if (callback) {
         PublishDiagnosticsParams params;
         params.uri = document.uri;
         params.diagnostics = diagnostics;
-        publish_callback_(params);
+        callback(params);
     } else {
         PublishDiagnosticsParams params{document.uri, diagnostics};
         send_diagnostics_notification(params);
@@ -227,34 +252,63 @@ void LspServer::send_diagnostics_notification(const PublishDiagnosticsParams& pa
     std::string header = "Content-Length: " + std::to_string(content.size()) + "\r\n\r\n";
 
     std::lock_guard<std::mutex> lock(socket_mutex_);
-    if (client_fd_ < 0 || !write_all_fd(client_fd_, header.c_str(), header.size()) ||
+    if (client_fd_ == compat::kInvalidSocket)
+        return;
+    if (!write_all_fd(client_fd_, header.c_str(), header.size()) ||
         !write_all_fd(client_fd_, content.c_str(), content.size())) {
-        if (client_fd_ >= 0)
-            running_ = false;
+        // One dead peer must not stop the server for everyone: drop this
+        // client and keep accepting.
+        compat::close_socket(client_fd_);
+        client_fd_ = compat::kInvalidSocket;
     }
 }
 
 std::vector<Diagnostic> LspServer::analyze_document(const std::string& uri,
                                                     const std::string& content) {
     std::vector<Diagnostic> diagnostics;
+    auto make_diag = [](const std::string& severity, const std::string& code,
+                        const std::string& msg) {
+        Diagnostic d;
+        d.range.start.line = 0;
+        d.range.start.character = 0;
+        d.range.end.line = 0;
+        d.range.end.character = 0;
+        d.severity = severity;
+        d.code = code;
+        d.source = "opencdc";
+        d.message = msg;
+        return d;
+    };
 
-    // D3+D4: Set per-URI cancellation flag, record start time
+    // Reuse an existing non-cancelled flag if present so a $/cancelRequest
+    // racing did_change is not lost by overwriting. Only create when absent.
     std::shared_ptr<std::atomic<bool>> cancel_flag;
     {
         std::lock_guard<std::mutex> lock(cancel_mutex_);
-        cancel_flag = std::make_shared<std::atomic<bool>>(false);
-        cancel_flags_[uri] = cancel_flag;
+        auto it = cancel_flags_.find(uri);
+        if (it != cancel_flags_.end() && !it->second->load())
+            cancel_flag = it->second;
+        else {
+            cancel_flag = std::make_shared<std::atomic<bool>>(false);
+            cancel_flags_[uri] = cancel_flag;
+        }
     }
     auto start_time = std::chrono::steady_clock::now();
+    // Snapshot timeout once (setter has no lock; avoid data race).
+    int timeout_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(cancel_mutex_);
+        timeout_snapshot = analysis_timeout_sec_;
+    }
 
     // D4: Timeout/cancel check lambda
     auto check_timeout = [&]() -> bool {
         if (cancel_flag->load())
             return true;
-        if (analysis_timeout_sec_ > 0) {
+        if (timeout_snapshot > 0) {
             auto elapsed = std::chrono::steady_clock::now() - start_time;
             if (std::chrono::duration_cast<std::chrono::seconds>(elapsed).count() >=
-                analysis_timeout_sec_) {
+                timeout_snapshot) {
                 Diagnostic diag;
                 diag.range.start.line = 0;
                 diag.range.start.character = 0;
@@ -263,8 +317,7 @@ std::vector<Diagnostic> LspServer::analyze_document(const std::string& uri,
                 diag.severity = "warning";
                 diag.code = "analysis-timeout";
                 diag.source = "opencdc";
-                diag.message =
-                    "Analysis timed out after " + std::to_string(analysis_timeout_sec_) + "s";
+                diag.message = "Analysis timed out after " + std::to_string(timeout_snapshot) + "s";
                 diagnostics.push_back(diag);
                 return true;
             }
@@ -272,49 +325,58 @@ std::vector<Diagnostic> LspServer::analyze_document(const std::string& uri,
         return false;
     };
 
-    if (top_module_.empty()) {
+    std::string top_module, config_path, waiver_path, constraints_path;
+    {
+        // Setters may be called from another thread; snapshot under lock.
+        std::lock_guard<std::mutex> lock(mutex_);
+        top_module = top_module_;
+        config_path = config_path_;
+        waiver_path = waiver_path_;
+        constraints_path = constraints_path_;
+    }
+    if (top_module.empty()) {
         return diagnostics;
     }
 
-    std::string file_path = uri;
-    if (uri.find("file://") == 0) {
-        file_path = uri.substr(7);
-    }
-
+    std::string file_path;
     std::string analysis_content = content;
     bool use_content = !content.empty();
-    if (allow_remote_) {
-        // Never read a client-supplied URI on remote connections. Empty text is valid.
-        use_content = true;
+    // Resolve the effective document text: explicit content wins, otherwise
+    // fall back to the open-document snapshot (didOpen/didChange).
+    {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = open_documents_.find(uri);
-        if (it != open_documents_.end())
+        if (it != open_documents_.end() && analysis_content.empty())
             analysis_content = it->second.text;
-        file_path.clear();
     }
+    if (analysis_content.empty()) {
+        // Secure default: never read a client-supplied file:// URI from disk
+        // (/etc/passwd etc.). Refuse instead of opening arbitrary paths —
+        // same behavior for local and remote connections.
+        diagnostics.push_back(make_diag("error", "empty-document",
+                                        "No document text provided; refusing to read "
+                                        "client-supplied path from disk"));
+        return diagnostics;
+    }
+    use_content = true;
 
     temp_file_guard temp_guard;
     if (use_content) {
-        // Prefer a user-private temp directory to avoid world-readable exposure.
-        // XDG_RUNTIME_DIR is mode 0700 on modern Linux systems.
-        const char* xdg = std::getenv("XDG_RUNTIME_DIR");
-        std::string tmpdir = (xdg && *xdg) ? std::string(xdg) : "/tmp";
-        std::string tmpl_str = tmpdir + "/opencdc_lsp_XXXXXX.sv";
-
-        // Restrict umask around mkstemps so the file is never world-readable,
-        // even in the window between creation and fchmod.
-        mode_t old_mask = umask(0077);
-        std::vector<char> tmpl(tmpl_str.begin(), tmpl_str.end());
-        tmpl.push_back('\0');
-        int fd = mkstemps(tmpl.data(), 3);
-        umask(old_mask);
+        // Check cancel/timeout before the slow analysis step.
+        if (check_timeout())
+            return diagnostics;
+        // Private temp file (0600 equivalent on all platforms).
+        std::string tmpl_str =
+            util::temp_directory() + util::path_separator() + "opencdc_lsp_XXXXXX.sv";
+        std::string tmp_path;
+        int fd = util::create_private_temp_file(tmpl_str, 3, tmp_path);
 
         if (fd >= 0) {
             // Set temp_guard.path IMMEDIATELY so the file is cleaned up
             // even if fdopen later fails.
-            temp_guard.path = tmpl.data();
+            temp_guard.path = tmp_path;
 
-            FILE* fp = fdopen(fd, "w");
+            FILE* fp = util::fdopen_temp(fd, "w");
             if (fp) {
                 if (fputs(analysis_content.c_str(), fp) == EOF) {
                     fclose(fp);
@@ -333,7 +395,7 @@ std::vector<Diagnostic> LspServer::analyze_document(const std::string& uri,
                 fclose(fp);
                 file_path = temp_guard.path;
             } else {
-                close(fd);
+                util::close_temp_fd(fd);
                 // temp_guard will delete the file on scope exit
                 Diagnostic diag;
                 diag.range.start.line = 0;
@@ -364,10 +426,10 @@ std::vector<Diagnostic> LspServer::analyze_document(const std::string& uri,
 
     analysis::AnalysisRequest request;
     request.input_files = {file_path};
-    request.top_module = top_module_;
-    request.config_path = config_path_;
-    request.waiver_path = waiver_path_;
-    request.constraints_path = constraints_path_;
+    request.top_module = top_module;
+    request.config_path = config_path;
+    request.waiver_path = waiver_path;
+    request.constraints_path = constraints_path;
 
     analysis::Analyzer analyzer;
     analysis::AnalysisResult result = analyzer.run(request);
@@ -418,8 +480,22 @@ std::vector<Diagnostic> LspServer::analyze_document(const std::string& uri,
 }
 
 void LspServer::server_loop() {
-    int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd < 0) {
+    // Snapshot settings under lock: setters may race with a running server.
+    // (Prefer setting all options before start().)
+    std::string bind_address;
+    bool allow_remote;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        bind_address = bind_address_;
+        allow_remote = allow_remote_;
+    }
+    if (!compat::ensure_winsock()) {
+        running_ = false;
+        startup_cv_.notify_all();
+        return;
+    }
+    compat::socket_t listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd == compat::kInvalidSocket) {
         running_ = false;
         startup_cv_.notify_all();
         return;
@@ -435,17 +511,17 @@ void LspServer::server_loop() {
     struct sockaddr_in address;
     address.sin_family = AF_INET;
     // Security: bind to loopback by default; explicit opt-in for remote
-    if (allow_remote_) {
+    if (allow_remote) {
         address.sin_addr.s_addr = INADDR_ANY;
     } else {
-        address.sin_addr.s_addr = inet_addr(bind_address_.c_str());
+        address.sin_addr.s_addr = inet_addr(bind_address.c_str());
     }
     address.sin_port = htons(port_);
 
-    if (bind(listen_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
-        close(listen_fd);
+    if (bind(listen_fd, (struct sockaddr*)&address, sizeof(address)) != 0) {
+        compat::close_socket(listen_fd);
         std::lock_guard<std::mutex> lock(socket_mutex_);
-        socket_fd_ = -1;
+        socket_fd_ = compat::kInvalidSocket;
         running_ = false;
         { std::lock_guard<std::mutex> lock(startup_mutex_); }
         startup_cv_.notify_all();
@@ -454,17 +530,17 @@ void LspServer::server_loop() {
 
     // Discover actual port when port 0 was requested
     if (port_ == 0) {
-        socklen_t addr_len = sizeof(address);
+        compat::socklen_t addr_len = sizeof(address);
         if (getsockname(listen_fd, (struct sockaddr*)&address, &addr_len) == 0) {
             port_ = ntohs(address.sin_port);
         }
     }
 
-    if (listen(listen_fd, 16) < 0) {
-        close(listen_fd);
+    if (listen(listen_fd, 16) != 0) {
+        compat::close_socket(listen_fd);
         {
             std::lock_guard<std::mutex> lock(socket_mutex_);
-            socket_fd_ = -1;
+            socket_fd_ = compat::kInvalidSocket;
         }
         running_ = false;
         startup_cv_.notify_all();
@@ -493,45 +569,61 @@ void LspServer::server_loop() {
 
         if (FD_ISSET(listen_fd, &read_fds)) {
             struct sockaddr_in client_addr;
-            socklen_t client_len = sizeof(client_addr);
-            int client_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+            compat::socklen_t client_len = sizeof(client_addr);
+            compat::socket_t client_fd =
+                accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
 
-            if (client_fd >= 0) {
+            if (client_fd != compat::kInvalidSocket) {
                 // Security: reject non-loopback clients unless explicitly allowed
-                if (!allow_remote_) {
+                // (allow_remote snapshotted under lock at loop start).
+                if (!allow_remote) {
                     char client_ip[INET_ADDRSTRLEN];
                     inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
                     std::string ip_str(client_ip);
-                    if (ip_str != "127.0.0.1" && ip_str != "::1") {
-                        close(client_fd);
+                    // AF_INET only yields IPv4: accept full 127.0.0.0/8.
+                    // (Previous "::1" comparison was dead code on AF_INET.)
+                    if (!is_loopback_ipv4(ip_str)) {
+                        compat::close_socket(client_fd);
                         continue;
                     }
                 }
 
-                // Limit to single concurrent client
-                if (client_fd_ >= 0) {
-                    close(client_fd);
-                    continue;
-                }
-
+                // Limit to single concurrent client (check-and-set under lock
+                // so stop() cannot interleave a second accept).
                 {
                     std::lock_guard<std::mutex> lock(socket_mutex_);
+                    if (client_fd_ != compat::kInvalidSocket) {
+                        compat::close_socket(client_fd);
+                        continue;
+                    }
                     client_fd_ = client_fd;
                 }
 
-                // Set read timeout (30 seconds)
-                struct timeval read_timeout;
-                read_timeout.tv_sec = 30;
-                read_timeout.tv_usec = 0;
-                setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout));
+                // Idle read timeout (30 seconds); timeouts keep the
+                // connection, only real errors drop it.
+                compat::set_recv_timeout(client_fd, 30);
 
                 char buffer[4096];
                 std::string message;
 
                 while (running_) {
-                    ssize_t bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-                    if (bytes_read <= 0)
-                        break;
+                    compat::ssize_t bytes_read =
+                        compat::socket_recv(client_fd, buffer, sizeof(buffer) - 1);
+                    if (bytes_read == 0)
+                        break;  // peer closed the connection
+                    if (bytes_read < 0) {
+                        if (compat::last_interrupted())
+                            continue;
+                        if (compat::last_would_block()) {
+                            // 30s read timeout elapsed with no data: idle
+                            // client, not a dead one. Keep waiting while the
+                            // server runs instead of dropping the connection.
+                            if (!running_)
+                                break;
+                            continue;
+                        }
+                        break;  // real socket error
+                    }
 
                     buffer[bytes_read] = '\0';
                     message += buffer;
@@ -582,32 +674,37 @@ void LspServer::server_loop() {
                         if (!response.empty()) {
                             std::string response_header =
                                 "Content-Length: " + std::to_string(response.size()) + "\r\n\r\n";
-                            std::lock_guard<std::mutex> lock(socket_mutex_);
-                            if (!write_all_fd(client_fd, response_header.c_str(),
-                                              response_header.size()) ||
-                                !write_all_fd(client_fd, response.c_str(), response.size())) {
-                                running_ = false;
+                            bool write_ok;
+                            {
+                                std::lock_guard<std::mutex> lock(socket_mutex_);
+                                write_ok =
+                                    write_all_fd(client_fd, response_header.c_str(),
+                                                 response_header.size()) &&
+                                    write_all_fd(client_fd, response.c_str(), response.size());
+                            }
+                            if (!write_ok) {
+                                // Dead peer: drop this client, keep serving.
                                 break;
                             }
                         }
                     }
                 }
 
-                close(client_fd);
+                compat::close_socket(client_fd);
                 {
                     std::lock_guard<std::mutex> lock(socket_mutex_);
                     if (client_fd_ == client_fd)
-                        client_fd_ = -1;
+                        client_fd_ = compat::kInvalidSocket;
                 }
             }
         }
     }
 
-    close(listen_fd);
+    compat::close_socket(listen_fd);
     {
         std::lock_guard<std::mutex> lock(socket_mutex_);
         if (socket_fd_ == listen_fd)
-            socket_fd_ = -1;
+            socket_fd_ = compat::kInvalidSocket;
     }
 }
 
@@ -782,12 +879,14 @@ std::string LspServer::serialize_diagnostics(const PublishDiagnosticsParams& par
     return result.dump();
 }
 
-bool LspClient::write_all(int fd, const char* data, size_t len) {
+bool LspClient::write_all(compat::socket_t fd, const char* data, size_t len) {
     size_t written = 0;
     while (written < len) {
-        ssize_t n = ::write(fd, data + written, len - written);
+        // MSG_NOSIGNAL: a closed peer must surface as an error, never as a
+        // SIGPIPE death of the caller.
+        compat::ssize_t n = compat::socket_send(fd, data + written, len - written, MSG_NOSIGNAL);
         if (n < 0) {
-            if (errno == EINTR)
+            if (compat::last_interrupted())
                 continue;
             return false;
         }
@@ -805,47 +904,45 @@ LspClient::~LspClient() {
 bool LspClient::connect(const std::string& host, int port) {
     disconnect();
 
+    if (!compat::ensure_winsock())
+        return false;
     socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd_ < 0)
+    if (socket_fd_ == compat::kInvalidSocket)
         return false;
 
     struct sockaddr_in server_addr {};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
     if (inet_pton(AF_INET, host.c_str(), &server_addr.sin_addr) != 1) {
-        close(socket_fd_);
-        socket_fd_ = -1;
+        compat::close_socket(socket_fd_);
+        socket_fd_ = compat::kInvalidSocket;
         return false;
     }
 
-    // Set connection timeout (5 seconds)
-    struct timeval tv {};
-    tv.tv_sec = 5;
-    setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    // Connection + read/write timeouts (5s connect, 30s I/O).
+    compat::set_send_timeout(socket_fd_, 5);
 
-    if (::connect(socket_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        close(socket_fd_);
-        socket_fd_ = -1;
+    if (::connect(socket_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) != 0) {
+        compat::close_socket(socket_fd_);
+        socket_fd_ = compat::kInvalidSocket;
         return false;
     }
 
-    // Set read/write timeouts after connection (30 seconds)
-    tv.tv_sec = 30;
-    setsockopt(socket_fd_, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(socket_fd_, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    compat::set_recv_timeout(socket_fd_, 30);
+    compat::set_send_timeout(socket_fd_, 30);
 
     return true;
 }
 
 void LspClient::disconnect() {
-    if (socket_fd_ >= 0) {
-        close(socket_fd_);
-        socket_fd_ = -1;
+    if (socket_fd_ != compat::kInvalidSocket) {
+        compat::close_socket(socket_fd_);
+        socket_fd_ = compat::kInvalidSocket;
     }
 }
 
 void LspClient::send_notification(const std::string& method, const std::string& params) {
-    if (socket_fd_ < 0)
+    if (socket_fd_ == compat::kInvalidSocket)
         return;
 
     nlohmann::json content;
@@ -864,7 +961,7 @@ void LspClient::send_notification(const std::string& method, const std::string& 
 }
 
 std::string LspClient::send_request(const std::string& method, const std::string& params) {
-    if (socket_fd_ < 0)
+    if (socket_fd_ == compat::kInvalidSocket)
         return "";
 
     static std::atomic<int> request_id{0};
@@ -889,34 +986,41 @@ std::string LspClient::send_request(const std::string& method, const std::string
     std::string response;
 
     while (true) {
-        ssize_t bytes_read = read(socket_fd_, buffer, sizeof(buffer) - 1);
-        if (bytes_read <= 0)
-            break;
-
-        buffer[bytes_read] = '\0';
-        response += buffer;
-
-        size_t header_end = response.find("\r\n\r\n");
-        if (header_end != std::string::npos) {
+        // Drain already-buffered data first: a notification and its response
+        // often arrive coalesced in one TCP segment. Re-scan the buffer
+        // after skipping a notification instead of blocking in read() while
+        // a complete message sits unprocessed.
+        while (true) {
+            size_t header_end = response.find("\r\n\r\n");
+            if (header_end == std::string::npos)
+                break;
             size_t content_start = header_end + 4;
             std::string hdr = response.substr(0, header_end);
 
             size_t content_length = 0;
-            if (!parse_content_length(hdr, &content_length) || content_length > 10 * 1024 * 1024 ||
-                content_length > response.size() - content_start) {
-                continue;
+            if (!parse_content_length(hdr, &content_length) || content_length > 10 * 1024 * 1024) {
+                return "";
             }
+            if (content_length > response.size() - content_start)
+                break;  // incomplete body: read more
             std::string message = response.substr(content_start, content_length);
             response.erase(0, content_start + content_length);
             try {
                 nlohmann::json parsed = nlohmann::json::parse(message);
                 if (parsed.contains("method") && !parsed.contains("id"))
-                    continue;
+                    continue;  // notification: re-scan buffer for the response
             } catch (const nlohmann::json::parse_error&) {
                 return "";
             }
             return message;
         }
+
+        compat::ssize_t bytes_read = compat::socket_read(socket_fd_, buffer, sizeof(buffer) - 1);
+        if (bytes_read <= 0)
+            break;
+
+        buffer[bytes_read] = '\0';
+        response += buffer;
     }
 
     return "";

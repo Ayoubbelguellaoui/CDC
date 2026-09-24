@@ -25,6 +25,39 @@ static std::string to_lower(const std::string& s) {
     return r;
 }
 
+// Parse a YAML scalar that may be a native bool or a string ("true"/"false",
+// "yes"/"no", "on"/"off", "1"/"0"). Returns true on success, false + error on
+// invalid value. Never throws — callers must not let BadConversion escape to
+// the legacy fallback which would silently drop the setting.
+static bool parse_yaml_bool(const YAML::Node& node, bool& out, std::string* error,
+                            const std::string& ctx) {
+    // Native bool first (covers `enabled: true` unquoted).
+    try {
+        out = node.as<bool>();
+        return true;
+    } catch (const YAML::Exception&) {
+    }
+    try {
+        std::string raw = node.as<std::string>();
+        std::string v = to_lower(raw);
+        if (v == "true" || v == "yes" || v == "on" || v == "1") {
+            out = true;
+            return true;
+        }
+        if (v == "false" || v == "no" || v == "off" || v == "0") {
+            out = false;
+            return true;
+        }
+        if (error)
+            *error = "Invalid value for " + ctx + ": " + raw;
+        return false;
+    } catch (const YAML::Exception& e) {
+        if (error)
+            *error = "Invalid value for " + ctx + ": " + std::string(e.what());
+        return false;
+    }
+}
+
 static std::string strip_quotes(const std::string& s) {
     if (s.size() >= 2 &&
         ((s.front() == '"' && s.back() == '"') || (s.front() == '\'' && s.back() == '\'')))
@@ -220,17 +253,16 @@ static bool parse_rules_node(const YAML::Node& rules_node, Config& config,
         std::string rule_id = it->first.as<std::string>();
         YAML::Node rule_node = it->second;
         RuleConfig rc;
+        // Preserve existing entry so profile-applied defaults are not clobbered
+        // when config only overrides one field.
+        auto existing = config.rules.find(rule_id);
+        if (existing != config.rules.end())
+            rc = existing->second;
         if (rule_node["enabled"]) {
-            std::string v = to_lower(rule_node["enabled"].as<std::string>());
-            if (v == "true")
-                rc.enabled = true;
-            else if (v == "false")
-                rc.enabled = false;
-            else {
-                if (error)
-                    *error = "Invalid value for enabled in rule " + rule_id + ": " + v;
+            bool b = true;
+            if (!parse_yaml_bool(rule_node["enabled"], b, error, "enabled in rule " + rule_id))
                 return false;
-            }
+            rc.enabled = b;
         }
         if (rule_node["severity"]) {
             std::string v = to_lower(rule_node["severity"].as<std::string>());
@@ -284,13 +316,11 @@ static void parse_output_node(const YAML::Node& output_node, Config& config,
     if (output_node["file"])
         config.output.file = output_node["file"].as<std::string>();
     if (output_node["suppress_reset_crossings"]) {
-        std::string v = to_lower(output_node["suppress_reset_crossings"].as<std::string>());
-        if (v == "true")
-            config.suppress_reset_crossings = true;
-        else if (v == "false")
-            config.suppress_reset_crossings = false;
-        else if (error)
-            *error = "Invalid value for suppress_reset_crossings: " + v;
+        bool b = false;
+        if (!parse_yaml_bool(output_node["suppress_reset_crossings"], b, error,
+                             "suppress_reset_crossings"))
+            return;
+        config.suppress_reset_crossings = b;
     }
 }
 
@@ -322,7 +352,7 @@ static void parse_false_paths_node(const YAML::Node& fp_node, Config& config) {
     }
 }
 
-static void parse_clock_groups_node(const YAML::Node& cg_node, Config& config) {
+static void parse_clock_groups_node(const YAML::Node& cg_node, Config& config, std::string* error) {
     if (!cg_node)
         return;
     // Accept both map form (name: {clocks: [...]}) and sequence form
@@ -349,8 +379,12 @@ static void parse_clock_groups_node(const YAML::Node& cg_node, Config& config) {
                     }
                 }
             }
-            if (grp_node["exclusive"])
-                grp.exclusive = to_lower(grp_node["exclusive"].as<std::string>()) == "true";
+            if (grp_node["exclusive"]) {
+                bool b = true;
+                if (!parse_yaml_bool(grp_node["exclusive"], b, error, "clock_groups.exclusive"))
+                    return;
+                grp.exclusive = b;
+            }
             config.clock_groups.push_back(std::move(grp));
         }
         return;
@@ -379,15 +413,158 @@ static void parse_clock_groups_node(const YAML::Node& cg_node, Config& config) {
             }
         }
         if (grp_node["exclusive"]) {
-            grp.exclusive = to_lower(grp_node["exclusive"].as<std::string>()) == "true";
+            bool b = true;
+            if (!parse_yaml_bool(grp_node["exclusive"], b, error, "clock_groups.exclusive"))
+                return;
+            grp.exclusive = b;
         }
         config.clock_groups.push_back(std::move(grp));
+    }
+}
+
+static void parse_reset_policy_node(const YAML::Node& node, Config& config, std::string* error) {
+    if (!node || !node.IsMap())
+        return;
+    if (node["require_cdc_register_reset"]) {
+        bool b = false;
+        if (!parse_yaml_bool(node["require_cdc_register_reset"], b, error,
+                             "reset_policy.require_cdc_register_reset"))
+            return;
+        config.reset_policy.require_cdc_register_reset = b;
+    }
+    if (node["check_same_clock_reset_crossings"]) {
+        bool b = false;
+        if (!parse_yaml_bool(node["check_same_clock_reset_crossings"], b, error,
+                             "reset_policy.check_same_clock_reset_crossings"))
+            return;
+        config.reset_policy.check_same_clock_reset_crossings = b;
+    }
+    if (node["detect_reset_synchronizer"]) {
+        bool b = true;
+        if (!parse_yaml_bool(node["detect_reset_synchronizer"], b, error,
+                             "reset_policy.detect_reset_synchronizer"))
+            return;
+        config.reset_policy.detect_reset_synchronizer = b;
+    }
+}
+
+static void parse_multicycle_node(const YAML::Node& node, Config& config, std::string* error) {
+    if (!node || !node.IsMap())
+        return;
+    if (node["suppress_findings"]) {
+        bool b = true;
+        if (!parse_yaml_bool(node["suppress_findings"], b, error,
+                             "multicycle_path_policy.suppress_findings"))
+            return;
+        config.multicycle_path_policy.suppress_findings = b;
+    }
+    if (node["suppress_rules"]) {
+        config.multicycle_path_policy.suppress_rules.clear();
+        if (node["suppress_rules"].IsSequence()) {
+            for (const auto& r : node["suppress_rules"])
+                config.multicycle_path_policy.suppress_rules.push_back(r.as<std::string>());
+        } else if (node["suppress_rules"].IsScalar()) {
+            std::string val = node["suppress_rules"].as<std::string>();
+            std::istringstream ss(val);
+            std::string tok;
+            while (std::getline(ss, tok, ',')) {
+                tok = trim(tok);
+                if (!tok.empty())
+                    config.multicycle_path_policy.suppress_rules.push_back(tok);
+            }
+        }
+    }
+}
+
+static void parse_blackboxes_node(const YAML::Node& node, Config& config, std::string* error) {
+    if (!node || !node.IsSequence())
+        return;
+    for (const auto& item : node) {
+        if (!item.IsMap())
+            continue;
+        BlackBoxConfig bb;
+        if (item["module_name"])
+            bb.module_name = item["module_name"].as<std::string>();
+        if (item["vendor"])
+            bb.vendor = item["vendor"].as<std::string>();
+        if (bb.module_name.empty())
+            continue;
+        if (item["is_safe_crossing"]) {
+            bool b = true;
+            if (!parse_yaml_bool(item["is_safe_crossing"], b, error, "blackboxes.is_safe_crossing"))
+                return;
+            bb.is_safe_crossing = b;
+        }
+        if (item["has_synchronizer"]) {
+            bool b = false;
+            if (!parse_yaml_bool(item["has_synchronizer"], b, error, "blackboxes.has_synchronizer"))
+                return;
+            bb.has_synchronizer = b;
+        }
+        if (item["has_gray_encoding"]) {
+            bool b = false;
+            if (!parse_yaml_bool(item["has_gray_encoding"], b, error,
+                                 "blackboxes.has_gray_encoding"))
+                return;
+            bb.has_gray_encoding = b;
+        }
+        if (item["has_async_fifo"]) {
+            bool b = false;
+            if (!parse_yaml_bool(item["has_async_fifo"], b, error, "blackboxes.has_async_fifo"))
+                return;
+            bb.has_async_fifo = b;
+        }
+        if (item["has_handshake"]) {
+            bool b = false;
+            if (!parse_yaml_bool(item["has_handshake"], b, error, "blackboxes.has_handshake"))
+                return;
+            bb.has_handshake = b;
+        }
+        config.blackboxes.push_back(std::move(bb));
     }
 }
 
 static Config parse_yaml_content(const std::string& content, std::string* error) {
     Config config;
     YAML::Node root = YAML::Load(content);
+
+    // Fail closed on top-level typos (e.g. reconvergence_dept) instead of
+    // silently ignoring them.
+    if (root.IsMap()) {
+        static const char* kKnown[] = {"rules",
+                                       "waivers",
+                                       "output",
+                                       "false_paths",
+                                       "clock_groups",
+                                       "reset_policy",
+                                       "multicycle_path_policy",
+                                       "blackboxes",
+                                       "reconvergence_depth",
+                                       "min_sync_stages",
+                                       "require_structural_proof",
+                                       "allow_user_annotation",
+                                       "suppress_reset_crossings"};
+        for (auto it = root.begin(); it != root.end(); ++it) {
+            std::string key;
+            try {
+                key = it->first.as<std::string>();
+            } catch (const YAML::Exception&) {
+                continue;
+            }
+            bool known = false;
+            for (const char* k : kKnown) {
+                if (key == k) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) {
+                if (error)
+                    *error = "Unknown config key: " + key;
+                return Config();
+            }
+        }
+    }
 
     if (root["rules"]) {
         if (!parse_rules_node(root["rules"], config, error))
@@ -402,11 +579,88 @@ static Config parse_yaml_content(const std::string& content, std::string* error)
     }
     if (root["false_paths"])
         parse_false_paths_node(root["false_paths"], config);
-    if (root["clock_groups"])
-        parse_clock_groups_node(root["clock_groups"], config);
+    if (root["clock_groups"]) {
+        parse_clock_groups_node(root["clock_groups"], config, error);
+        if (error && !error->empty())
+            return Config();
+    }
+    if (root["reset_policy"]) {
+        parse_reset_policy_node(root["reset_policy"], config, error);
+        if (error && !error->empty())
+            return Config();
+    }
+    if (root["multicycle_path_policy"]) {
+        parse_multicycle_node(root["multicycle_path_policy"], config, error);
+        if (error && !error->empty())
+            return Config();
+    }
+    if (root["blackboxes"]) {
+        parse_blackboxes_node(root["blackboxes"], config, error);
+        if (error && !error->empty())
+            return Config();
+    }
+    if (root["reconvergence_depth"]) {
+        try {
+            int d = root["reconvergence_depth"].as<int>();
+            if (d < 1 || d > 32) {
+                if (error)
+                    *error = "Invalid reconvergence_depth (1-32): " + std::to_string(d);
+                return Config();
+            }
+            config.reconvergence_depth = d;
+        } catch (const YAML::Exception& e) {
+            if (error)
+                *error = std::string("Invalid reconvergence_depth: ") + e.what();
+            return Config();
+        }
+    }
+    if (root["min_sync_stages"]) {
+        try {
+            int s = root["min_sync_stages"].as<int>();
+            if (s < 2 || s > 5) {
+                if (error)
+                    *error = "Invalid min_sync_stages (2-5): " + std::to_string(s);
+                return Config();
+            }
+            config.min_sync_stages = s;
+        } catch (const YAML::Exception& e) {
+            if (error)
+                *error = std::string("Invalid min_sync_stages: ") + e.what();
+            return Config();
+        }
+    }
+    if (root["require_structural_proof"]) {
+        bool b = false;
+        if (!parse_yaml_bool(root["require_structural_proof"], b, error,
+                             "require_structural_proof"))
+            return Config();
+        config.require_structural_proof = b;
+    }
+    if (root["allow_user_annotation"]) {
+        bool b = true;
+        if (!parse_yaml_bool(root["allow_user_annotation"], b, error, "allow_user_annotation"))
+            return Config();
+        config.allow_user_annotation = b;
+    }
+    // Also accept the nested output.suppress_reset_crossings spelling.
+    if (root["output"] && root["output"].IsMap() && root["output"]["suppress_reset_crossings"]) {
+        bool b = false;
+        if (!parse_yaml_bool(root["output"]["suppress_reset_crossings"], b, error,
+                             "output.suppress_reset_crossings"))
+            return Config();
+        config.suppress_reset_crossings = b;
+    }
+    if (root["suppress_reset_crossings"]) {
+        bool b = false;
+        if (!parse_yaml_bool(root["suppress_reset_crossings"], b, error,
+                             "suppress_reset_crossings"))
+            return Config();
+        config.suppress_reset_crossings = b;
+    }
 
     if (!config.output.format.empty() && config.output.format != "json" &&
-        config.output.format != "text" && config.output.format != "html") {
+        config.output.format != "text" && config.output.format != "html" &&
+        config.output.format != "sarif") {
         if (error)
             *error = "Invalid output format: " + config.output.format;
         return Config();
@@ -440,6 +694,11 @@ Config ConfigParser::parse_file(const std::string& path, std::string* error) con
 
     static constexpr size_t MAX_FILE_SIZE = 1 * 1024 * 1024;
     auto file_size = file.tellg();
+    if (file_size == static_cast<std::streampos>(-1)) {
+        if (error)
+            *error = "Could not determine config file size: " + path;
+        return Config();
+    }
     if (file_size > static_cast<std::streampos>(MAX_FILE_SIZE)) {
         if (error)
             *error = "Config file exceeds 1MB limit: " + path;

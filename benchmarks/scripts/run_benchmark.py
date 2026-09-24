@@ -39,13 +39,21 @@ class RuleMetrics:
 
 def run_opencdc(binary, fixture, top):
     cmd = [binary, "check", fixture, "--top", top, "--format", "json"]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return [], "timeout after 60s: slow fixture recorded as no findings"
     if result.returncode > 1:
         return [], result.stderr
     try:
-        findings = json.loads(result.stdout) if result.stdout.strip() else []
+        data = json.loads(result.stdout) if result.stdout.strip() else {}
     except json.JSONDecodeError:
         return [], f"JSON parse error: {result.stdout[:200]}"
+    # CLI emits an object {"findings": [...]}; accept a bare list too.
+    if isinstance(data, dict):
+        findings = data.get("findings", [])
+    else:
+        findings = data
     return findings, result.stderr
 
 
@@ -54,6 +62,9 @@ def main():
     binary = os.environ.get("OPENCDC_BIN", os.path.join(project_root, "build/src/opencdc"))
     manifest_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         project_root, "benchmarks/expected/manifest.json")
+    if not os.path.isfile(manifest_path):
+        print(f"ERROR: Manifest not found: {manifest_path}")
+        sys.exit(1)
 
     if not os.path.exists(binary):
         print(f"ERROR: Binary not found: {binary}")
@@ -68,7 +79,11 @@ def main():
     rule_metrics = {}
 
     for fixture_key, fixture in benchmarks.items():
-        fixture_path = os.path.join(project_root, fixture["file"])
+        rel = fixture["file"]
+        if os.path.isabs(rel) or ".." in rel.split(os.sep):
+            print(f"  [SKIP] {fixture_key}: unsafe fixture path: {rel}")
+            continue
+        fixture_path = os.path.join(project_root, rel)
         top_module = fixture["top"]
         expected = fixture.get("expected", {})
 
@@ -81,6 +96,7 @@ def main():
 
         tp = 0
         fn = 0
+        fp = 0
         for pos in positives:
             rule = pos["rule"]
             src = pos.get("source", "")
@@ -134,7 +150,7 @@ def main():
                     rm.tn += 1
                 else:
                     rm.fp += 1
-                    fn += 1
+                    fp += 1
             elif expected_behavior == "cdc002_fires":
                 if found:
                     rm.tp += 1
@@ -142,13 +158,34 @@ def main():
                 else:
                     rm.fn += 1
                     fn += 1
+            else:
+                print(f"  [WARN] {fixture_key}: unknown expected value "
+                      f"'{expected_behavior}' for {rule}")
 
-        passed = fn == 0
+        # Ambiguous controls are measured and reported but never fail the
+        # fixture: they track genuine detector limitations and judgment calls.
+        ambiguous = expected.get("ambiguous_controls", [])
+        for amb in ambiguous:
+            rule = amb["rule"]
+            src = amb.get("source", "")
+            dst = amb.get("dest", "")
+            want = amb.get("expected", "undecided")
+            found = any(
+                af["rule_id"] == rule
+                and (not src or src in af.get("source", ""))
+                and (not dst or dst in af.get("dest", ""))
+                for af in actual_findings
+            )
+            print(f"  [AMBIG] {fixture_key}: {rule} {src} -> {dst}: "
+                  f"found={found} expected={want} ({amb.get('note', '')})")
+
+        passed = fn == 0 and fp == 0
         results.append({
             "name": fixture_key,
             "passed": passed,
             "tp": tp,
             "fn": fn,
+            "fp": fp,
             "actual_count": len(actual_findings),
             "positives": len(positives),
             "negatives": len(negatives),
@@ -162,7 +199,7 @@ def main():
     total_fail = 0
     for r in results:
         status = "PASS" if r["passed"] else "FAIL"
-        print(f"  [{status}] {r['name']}: TP={r['tp']} FN={r['fn']} actual_findings={r['actual_count']}")
+        print(f"  [{status}] {r['name']}: TP={r['tp']} FN={r['fn']} FP={r['fp']} actual_findings={r['actual_count']}")
         if r["passed"]:
             total_pass += 1
         else:

@@ -1,14 +1,17 @@
 #include "report/report.h"
 
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 
 #include "cdc/crossing.h"
 #include "report/html_reporter.h"
+#include "report/sarif_reporter.h"
+#include "util/temp_file.h"
 
 class ReportTest : public ::testing::Test {
    protected:
@@ -136,6 +139,20 @@ TEST_F(ReportTest, HasUnsuppressedErrorsOnlyWarnings) {
     EXPECT_FALSE(reporter.has_unsuppressed_errors(findings));
 }
 
+TEST_F(ReportTest, HasUnsuppressedErrorsFalsePathSuppressed) {
+    auto f = make_finding("CDC001", "error", "src", "dst");
+    f.suppressed_by_false_path = true;
+    std::vector<opencdc::cdc::Finding> findings = {f};
+    EXPECT_FALSE(reporter.has_unsuppressed_errors(findings));
+}
+
+TEST_F(ReportTest, HasUnsuppressedErrorsMulticycleSuppressed) {
+    auto f = make_finding("CDC001", "error", "src", "dst");
+    f.suppressed_by_multicycle = true;
+    std::vector<opencdc::cdc::Finding> findings = {f};
+    EXPECT_FALSE(reporter.has_unsuppressed_errors(findings));
+}
+
 TEST_F(ReportTest, EscapeSpecialChars) {
     EXPECT_EQ(opencdc::report::Reporter::escape_json("hello"), "hello");
     EXPECT_EQ(opencdc::report::Reporter::escape_json("he\"llo"), "he\\\"llo");
@@ -158,6 +175,36 @@ TEST_F(ReportTest, SummaryWithWaived) {
     EXPECT_NE(out.find("waived=1"), std::string::npos);
 }
 
+TEST(HtmlReportTest, CustomCssRemoteDirectivesStripped) {
+    opencdc::cdc::Finding finding;
+    finding.rule_id = "CDC001";
+    finding.severity = "info";
+
+    opencdc::report::HtmlReportOptions options;
+    options.output_dir = opencdc::util::unique_temp_path("opencdc-html-css-test-");
+    options.custom_css =
+        ".ok { color: blue; }\n@import url(\"https://evil.example/x.css\");\n"
+        ".bg { background: URL(https://evil.example/bg.png); }\n";
+    opencdc::report::HtmlReporter reporter;
+    reporter.generate_report({finding}, options);
+
+    std::ifstream css(options.output_dir + "/style.css");
+    std::string css_text((std::istreambuf_iterator<char>(css)), {});
+    EXPECT_NE(css_text.find(".ok"), std::string::npos);
+    EXPECT_EQ(css_text.find("@import"), std::string::npos);
+    EXPECT_EQ(css_text.find("url("), std::string::npos);
+    EXPECT_EQ(css_text.find("URL("), std::string::npos);
+    std::error_code rm_ec;
+    std::filesystem::remove_all(options.output_dir, rm_ec);
+}
+
+TEST(HtmlReportTest, EmptyOutputDirThrows) {
+    opencdc::report::HtmlReportOptions options;
+    options.output_dir = "";
+    opencdc::report::HtmlReporter reporter;
+    EXPECT_THROW(reporter.generate_report({}, options), std::runtime_error);
+}
+
 TEST(HtmlReportTest, OptionsAndFiltersAreRendered) {
     opencdc::cdc::Finding finding;
     finding.rule_id = "CDC001";
@@ -168,7 +215,7 @@ TEST(HtmlReportTest, OptionsAndFiltersAreRendered) {
     finding.source_loc.line = 7;
 
     opencdc::report::HtmlReportOptions options;
-    options.output_dir = "/tmp/opencdc-html-test-" + std::to_string(::getpid());
+    options.output_dir = opencdc::util::unique_temp_path("opencdc-html-test-");
     options.include_source_snippets = false;
     options.dark_mode = true;
     options.custom_css = ".custom-test { color: red; }";
@@ -184,11 +231,8 @@ TEST(HtmlReportTest, OptionsAndFiltersAreRendered) {
     EXPECT_NE(html_text.find("id=\"rule-filter\""), std::string::npos);
     EXPECT_NE(html_text.find("value=\"info\""), std::string::npos);
     EXPECT_EQ(html_text.find("source.sv:7"), std::string::npos);
-    std::remove((options.output_dir + "/index.html").c_str());
-    std::remove((options.output_dir + "/findings.html").c_str());
-    std::remove((options.output_dir + "/style.css").c_str());
-    std::remove((options.output_dir + "/script.js").c_str());
-    std::remove(options.output_dir.c_str());
+    std::error_code rm_ec;
+    std::filesystem::remove_all(options.output_dir, rm_ec);
 }
 
 TEST_F(ReportTest, JsonIncludesSafetyFields) {
@@ -226,6 +270,21 @@ TEST_F(ReportTest, TextReportShowsAnalysisStatus) {
     EXPECT_NE(out.find("Analysis status: complete"), std::string::npos);
 }
 
+TEST_F(ReportTest, SarifUriEncodedAndStartLineClamped) {
+    auto f = make_finding("CDC001", "error", "src", "dst");
+    f.source_loc.file = "/tmp/my dir/design.sv";
+    f.source_loc.line = 0;
+    opencdc::report::SarifReporter sarif;
+    opencdc::analysis::CoverageResult coverage;
+    opencdc::analysis::SignoffResult signoff;
+    std::ostringstream os;
+    sarif.report({f}, coverage, signoff, os);
+
+    std::string out = os.str();
+    EXPECT_NE(out.find("file:///tmp/my%20dir/design.sv"), std::string::npos);
+    EXPECT_NE(out.find("\"startLine\": 1"), std::string::npos);
+}
+
 TEST(HtmlReportTest, SafetyFilterIsRendered) {
     opencdc::cdc::Finding finding;
     finding.rule_id = "CDC001";
@@ -237,7 +296,7 @@ TEST(HtmlReportTest, SafetyFilterIsRendered) {
     finding.safety_status = opencdc::cdc::SafetyStatus::VerifiedUnsafe;
 
     opencdc::report::HtmlReportOptions options;
-    options.output_dir = "/tmp/opencdc-html-safety-test-" + std::to_string(::getpid());
+    options.output_dir = opencdc::util::unique_temp_path("opencdc-html-safety-test-");
     options.include_source_snippets = false;
     opencdc::report::HtmlReporter reporter;
     reporter.generate_report({finding}, options);
@@ -247,9 +306,6 @@ TEST(HtmlReportTest, SafetyFilterIsRendered) {
     EXPECT_NE(html_text.find("id=\"safety-filter\""), std::string::npos);
     EXPECT_NE(html_text.find("Verified Safe"), std::string::npos);
     EXPECT_NE(html_text.find("Verified Unsafe"), std::string::npos);
-    std::remove((options.output_dir + "/index.html").c_str());
-    std::remove((options.output_dir + "/findings.html").c_str());
-    std::remove((options.output_dir + "/style.css").c_str());
-    std::remove((options.output_dir + "/script.js").c_str());
-    std::remove(options.output_dir.c_str());
+    std::error_code rm_ec;
+    std::filesystem::remove_all(options.output_dir, rm_ec);
 }

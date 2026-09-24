@@ -7,6 +7,7 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -14,11 +15,14 @@ namespace opencdc::util {
 
 template <typename T, typename Func>
 void parallel_for(std::vector<T>& items, Func func, size_t num_threads = 0) {
+    constexpr size_t kMaxThreads = 64;
     if (num_threads == 0) {
         num_threads = std::thread::hardware_concurrency();
         if (num_threads == 0)
             num_threads = 4;
     }
+    if (num_threads > kMaxThreads)
+        num_threads = kMaxThreads;
 
     if (items.size() < num_threads) {
         num_threads = items.size();
@@ -70,11 +74,14 @@ void parallel_for(std::vector<T>& items, Func func, size_t num_threads = 0) {
 
 template <typename T, typename Func, typename Result>
 std::vector<Result> parallel_map(const std::vector<T>& items, Func func, size_t num_threads = 0) {
+    constexpr size_t kMaxThreads = 64;
     if (num_threads == 0) {
         num_threads = std::thread::hardware_concurrency();
         if (num_threads == 0)
             num_threads = 4;
     }
+    if (num_threads > kMaxThreads)
+        num_threads = kMaxThreads;
 
     std::vector<Result> results(items.size());
 
@@ -145,6 +152,24 @@ class ThreadSafeQueue {
         return true;
     }
 
+    // Blocking pop: waits until an item arrives or shutdown() is called.
+    // Returns false on shutdown with an empty queue.
+    bool wait_pop(T& value) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cond_.wait(lock, [&] { return !queue_.empty() || !running_; });
+        if (queue_.empty())
+            return false;
+        value = std::move(queue_.front());
+        queue_.pop();
+        return true;
+    }
+
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        running_ = false;
+        cond_.notify_all();
+    }
+
     bool empty() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return queue_.empty();
@@ -159,16 +184,20 @@ class ThreadSafeQueue {
     mutable std::mutex mutex_;
     std::queue<T> queue_;
     std::condition_variable cond_;
+    bool running_ = true;
 };
 
 class ThreadPool {
    public:
     explicit ThreadPool(size_t num_threads = 0) : running_(true) {
+        constexpr size_t kMaxThreads = 64;
         if (num_threads == 0) {
             num_threads = std::thread::hardware_concurrency();
             if (num_threads == 0)
                 num_threads = 4;
         }
+        if (num_threads > kMaxThreads)
+            num_threads = kMaxThreads;
 
         for (size_t i = 0; i < num_threads; ++i) {
             workers_.emplace_back([this]() { worker_loop(); });

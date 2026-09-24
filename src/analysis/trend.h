@@ -49,8 +49,10 @@ struct TrendReport {
 
 class TrendAnalyzer {
    public:
-    void save_baseline(const std::string& name, const std::vector<cdc::Finding>& findings,
-                       const std::string& filepath);
+    // Returns false (with *error set when provided) when the file cannot be
+    // written, e.g. bad path or permission denied.
+    bool save_baseline(const std::string& name, const std::vector<cdc::Finding>& findings,
+                       const std::string& filepath, std::string* error = nullptr);
 
     Baseline load_baseline(const std::string& filepath);
 

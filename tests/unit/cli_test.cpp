@@ -3,9 +3,23 @@
 #include <cstdlib>
 #include <string>
 
+#include "util/temp_file.h"
+
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
 static std::string bin_path() {
     std::string p = std::string(OPENCDC_BIN_DIR) + "/opencdc";
     return "\"" + p + "\"";
+}
+
+static int exit_status(int rc) {
+#ifdef _WIN32
+    return rc;
+#else
+    return WIFEXITED(rc) ? WEXITSTATUS(rc) : -1;
+#endif
 }
 
 TEST(CliTest, NoArgsPrintsUsage) {
@@ -45,4 +59,35 @@ TEST(CliTest, SignoffUnsyncExitsOne) {
 TEST(CliTest, LspHelpExitsZero) {
     int rc = std::system((bin_path() + " lsp --help").c_str());
     EXPECT_EQ(rc, 0);
+}
+
+TEST(CliTest, MissingOptionValueIsInputError) {
+    int rc = std::system((bin_path() + " check foo.sv --top").c_str());
+    EXPECT_EQ(exit_status(rc), 2);
+}
+
+TEST(CliTest, LspUnknownOptionIsInputError) {
+    int rc = std::system((bin_path() + " lsp --bogus-flag").c_str());
+    EXPECT_EQ(exit_status(rc), 2);
+}
+
+TEST(CliTest, CompareMissingBaselineIsInputError) {
+    std::string missing =
+        opencdc::util::unique_temp_path("definitely_missing_baseline_xyz", ".json");
+    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv --top simple_cdc_crossing "
+                      "--compare-baseline " +
+                      missing;
+    int rc = std::system(cmd.c_str());
+    EXPECT_EQ(exit_status(rc), 2);
+}
+
+TEST(CliTest, FalsePathWithExtraColonsAccepted) {
+    // Split on last colon: must not be rejected as malformed (exit 2);
+    // runs to findings (exit 1) instead.
+    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv --top simple_cdc_crossing "
+                      "--false-path 'a:b:c' --format json > /dev/null";
+    int rc = std::system(cmd.c_str());
+    EXPECT_EQ(exit_status(rc), 1);
 }

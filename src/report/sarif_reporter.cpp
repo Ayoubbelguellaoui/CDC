@@ -1,9 +1,11 @@
 #include "report/sarif_reporter.h"
 
 #include <algorithm>
+#include <cctype>
 
 #include "analysis/signoff.h"
 #include "clock/relationship.h"
+#include "opencdc/version.h"
 #include "report/report.h"
 
 namespace opencdc::report {
@@ -25,6 +27,45 @@ static const char* safety_status_str(cdc::SafetyStatus s) {
 
 static std::string sarif_escape(const std::string& s) {
     return Reporter::escape_json(s);
+}
+
+// SARIF artifactLocation.uri must be a URI, not a raw filesystem path:
+// encode spaces/control/special chars, and prefix absolute paths with
+// the file:// scheme. Relative paths are emitted as relative URIs.
+static std::string sarif_uri(const std::string& path) {
+    if (path.empty())
+        return "";
+    auto needs_encode = [](char c) {
+        unsigned char u = static_cast<unsigned char>(c);
+        if (std::isalnum(u))
+            return false;
+        switch (c) {
+            case '-':
+            case '_':
+            case '.':
+            case '~':
+            case '/':
+            case ':':
+                return false;
+            default:
+                return true;
+        }
+    };
+    std::string out;
+    if (!path.empty() && path[0] == '/')
+        out += "file://";
+    static const char* hex = "0123456789ABCDEF";
+    for (char c : path) {
+        if (needs_encode(c)) {
+            unsigned char u = static_cast<unsigned char>(c);
+            out += '%';
+            out += hex[(u >> 4) & 0xF];
+            out += hex[u & 0xF];
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
 std::string SarifReporter::sarif_level(const std::string& severity, bool waived) {
@@ -52,7 +93,7 @@ void SarifReporter::report(const std::vector<cdc::Finding>& findings,
        << "      \"tool\": {\n"
        << "        \"driver\": {\n"
        << "          \"name\": \"opencdc\",\n"
-       << "          \"version\": \"0.4.1\",\n"
+       << "          \"version\": \"" << OPENCDC_VERSION << "\",\n"
        << "          \"informationUri\": \"https://github.com/opencdc/opencdc\",\n"
        << "          \"rules\": [\n";
 
@@ -102,10 +143,12 @@ void SarifReporter::report(const std::vector<cdc::Finding>& findings,
            << "            {\n"
            << "              \"physicalLocation\": {\n"
            << "                \"artifactLocation\": {\n"
-           << "                  \"uri\": \"" << sarif_escape(f.source_loc.file) << "\"\n"
+           << "                  \"uri\": \"" << sarif_escape(sarif_uri(f.source_loc.file))
+           << "\"\n"
            << "                },\n"
            << "                \"region\": {\n"
-           << "                  \"startLine\": " << f.source_loc.line << "\n"
+           << "                  \"startLine\": " << (f.source_loc.line > 0 ? f.source_loc.line : 1)
+           << "\n"
            << "                }\n"
            << "              }\n"
            << "            }\n"
@@ -126,6 +169,18 @@ void SarifReporter::report(const std::vector<cdc::Finding>& findings,
     }
 
     os << "      ]\n"
+       << "      ,\n"
+       << "      \"properties\": {\n"
+       << "        \"methodology\": \"" << sarif_escape(signoff.methodology) << "\",\n"
+       << "        \"signoff\": \"" << sarif_escape(analysis::signoff_status_name(signoff.status))
+       << "\",\n"
+       << "        \"signoff_reason\": \"" << sarif_escape(signoff.reason) << "\",\n"
+       << "        \"total_findings\": " << sorted.size() << ",\n"
+       << "        \"total_crossings\": " << coverage.counts.total_crossings << ",\n"
+       << "        \"analyzed_crossings\": " << coverage.counts.analyzed_crossings << ",\n"
+       << "        \"unwaived_errors\": " << coverage.counts.unwaived_errors << ",\n"
+       << "        \"waived\": " << coverage.counts.waived << "\n"
+       << "      }\n"
        << "    }\n"
        << "  ]\n"
        << "}\n";

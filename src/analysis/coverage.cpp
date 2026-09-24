@@ -1,5 +1,8 @@
 #include "analysis/coverage.h"
 
+#include <cstdint>
+#include <unordered_set>
+
 namespace opencdc::analysis {
 
 CoverageResult CoverageEngine::compute(const std::vector<cdc::Finding>& findings,
@@ -112,6 +115,8 @@ CoverageResult CoverageEngine::compute(const std::vector<cdc::Finding>& findings
         }
     }
 
+    // Finding-level "analyzed": findings minus truncation diagnostics.
+    // (Distinct from analyzed_crossings, which counts classified crossings.)
     result.counts.analyzed = result.counts.total - result.counts.truncated;
 
     return result;
@@ -122,49 +127,47 @@ void CoverageEngine::compute_crossing_coverage(
     const std::unordered_map<uint64_t, size_t>& register_to_domain) const {
     auto& c = result.counts;
 
-    // Count all register-to-register edges in the graph.
+    // Enumerate crossings exactly like CrossingAnalyzer::analyze does:
+    // per-source find_register_paths with per-destination dedup, so the
+    // denominator matches the findings' source of truth. (The previous
+    // implementation walked register_successors directly, which has
+    // different fanout semantics and no dedup.)
     for (const auto& node : graph.nodes()) {
         if (node.kind != ir::NodeKind::Register)
             continue;
 
         auto src_it = register_to_domain.find(node.id);
         if (src_it == register_to_domain.end() || src_it->second >= domains.size()) {
-            // Source has no domain — count successors as skipped_no_domain.
-            for (uint64_t succ : graph.register_successors(node.id)) {
-                const ir::Node* sn = graph.find_node(succ);
-                if (sn && sn->kind == ir::NodeKind::Register) {
-                    c.total_crossings++;
-                    c.skipped_no_domain++;
-                }
-            }
+            // Source has no domain — its fanout cannot be classified.
+            c.skipped_no_domain++;
             continue;
         }
-
         const clock::ClockDomain& src_dom = domains[src_it->second];
 
-        for (uint64_t succ : graph.register_successors(node.id)) {
-            const ir::Node* sn = graph.find_node(succ);
+        auto path_result = graph.find_register_paths(node.id);
+        std::unordered_set<uint64_t> seen_dst;
+        for (const auto& reg_path : path_result.paths) {
+            uint64_t dst_id = reg_path.dst_reg_id;
+            if (!seen_dst.insert(dst_id).second)
+                continue;
+            const ir::Node* sn = graph.find_node(dst_id);
             if (!sn || sn->kind != ir::NodeKind::Register)
                 continue;
-
             c.total_crossings++;
 
-            auto dst_it = register_to_domain.find(succ);
+            auto dst_it = register_to_domain.find(dst_id);
             if (dst_it == register_to_domain.end() || dst_it->second >= domains.size()) {
                 c.skipped_no_domain++;
                 continue;
             }
-
-            const clock::ClockDomain& dst_dom = domains[dst_it->second];
-
-            if (src_dom.id == dst_dom.id) {
+            if (src_dom.id == domains[dst_it->second].id) {
                 c.skipped_same_domain++;
                 continue;
             }
-
-            // Cross-domain crossing counted as analyzed (findings vector is the source of truth).
             c.analyzed_crossings++;
         }
+        if (path_result.truncated)
+            c.truncated++;
     }
 }
 

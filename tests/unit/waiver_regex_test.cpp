@@ -1,10 +1,10 @@
 #include <gtest/gtest.h>
-#include <unistd.h>
 
 #include <fstream>
 
 #include "cdc/crossing.h"
 #include "cdc/waiver.h"
+#include "util/temp_file.h"
 
 using namespace opencdc::cdc;
 
@@ -136,7 +136,7 @@ TEST_F(WaiverRegexTest, RegexNoMatch) {
 TEST_F(WaiverRegexTest, LoadFromFileWithWildcard) {
     std::string waiver_content = "WILDCARD CDC001 top.*.src top.*.dst \"Test waiver\" @team\n";
 
-    std::string temp_file = "/tmp/test_waivers.txt-" + std::to_string(::getpid());
+    std::string temp_file = opencdc::util::unique_temp_path("test_waivers", ".txt");
     std::ofstream file(temp_file);
     file << waiver_content;
     file.close();
@@ -152,7 +152,7 @@ TEST_F(WaiverRegexTest, LoadFromFileWithRegex) {
     std::string waiver_content =
         "REGEX CDC001 top\\.\\w+\\.src top\\.\\w+\\.dst \"Test waiver\" @team\n";
 
-    std::string temp_file = "/tmp/test_waivers_regex.txt-" + std::to_string(::getpid());
+    std::string temp_file = opencdc::util::unique_temp_path("test_waivers_regex", ".txt");
     std::ofstream file(temp_file);
     file << waiver_content;
     file.close();
@@ -219,4 +219,57 @@ TEST_F(WaiverRegexTest, InvalidRegexIsNotUsedAsSubstring) {
     engine.add_waiver(w);
 
     EXPECT_TRUE(engine.waivers().empty());
+}
+
+TEST_F(WaiverRegexTest, NestedQuantifierRejected) {
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "(a+)+$";
+    w.match_type = WaiverMatchType::Regex;
+    EXPECT_FALSE(engine.add_waiver(w));
+    EXPECT_TRUE(engine.waivers().empty());
+}
+
+TEST_F(WaiverRegexTest, AlternationOverlapRejected) {
+    for (const char* pat : {"(a|aa)+$", "(a|a)+", "(.*|b)*"}) {
+        WaiverEngine e;
+        Waiver w;
+        w.rule_id = "CDC001";
+        w.source_reg_name = pat;
+        w.match_type = WaiverMatchType::Regex;
+        EXPECT_FALSE(e.add_waiver(w)) << "pattern: " << pat;
+    }
+}
+
+TEST_F(WaiverRegexTest, NonCapturingGroupAccepted) {
+    WaiverEngine e;
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = "(?:abc)+";
+    w.match_type = WaiverMatchType::Regex;
+    EXPECT_TRUE(e.add_waiver(w));
+}
+
+TEST_F(WaiverRegexTest, OverlongPatternRejected) {
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = std::string(300, 'a');
+    w.match_type = WaiverMatchType::Regex;
+    EXPECT_FALSE(engine.add_waiver(w));
+    EXPECT_TRUE(engine.waivers().empty());
+}
+
+TEST_F(WaiverRegexTest, LegitDotsStarPatternAccepted) {
+    Waiver w;
+    w.rule_id = "CDC001";
+    w.source_reg_name = ".*_sync_.*";
+    w.dest_reg_name = ".*_meta_.*";
+    w.match_type = WaiverMatchType::Regex;
+    EXPECT_TRUE(engine.add_waiver(w));
+    ASSERT_EQ(engine.waivers().size(), 1u);
+    Finding f;
+    f.rule_id = "CDC001";
+    f.source_reg_name = "top_a_sync_reg";
+    f.dest_reg_name = "top_a_meta_reg";
+    EXPECT_TRUE(engine.matches(f, engine.waivers()[0]));
 }

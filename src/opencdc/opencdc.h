@@ -13,6 +13,7 @@ struct CheckOptions {
     std::string config_path;
     std::string output_path;
     std::string format = "json";
+    bool format_explicit = false;
     std::string waiver_path;
     std::string constraints_path;
     std::string html_output_dir;

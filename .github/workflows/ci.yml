@@ -24,7 +24,7 @@ jobs:
       CXX: ${{ matrix.cxx }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install dependencies
         run: |
@@ -42,17 +42,41 @@ jobs:
 
       - name: CLI Smoke Test
         run: |
-          # Verify binary can parse and report (findings = exit 1, OK)
-          ./build/src/opencdc check tests/fixtures/sv/cdc_crossing.sv --top simple_cdc_crossing --format json || true
+          # Findings fixture must exit 1 (FINDINGS): 0 means missed
+          # findings, >1 means crash/config error.
+          set +e
+          ./build/src/opencdc check tests/fixtures/sv/cdc_crossing.sv --top simple_cdc_crossing --format json > /dev/null
+          test $? -eq 1 || { echo "expected exit 1 (findings)"; exit 1; }
+          set -e
           # Clean fixture (no findings = exit 0)
           ./build/src/opencdc check tests/fixtures/sv/sync_2ff.sv --top sync_2ff --format text
           ./build/src/opencdc check tests/fixtures/sv/gated_clock.sv --top gated_clock --verbose
+          # SARIF output must be schema-shaped (version 2.1.0, runs[])
+          set +e
+          ./build/src/opencdc check tests/fixtures/sv/cdc_crossing.sv --top simple_cdc_crossing --format sarif > sarif.json
+          test $? -eq 1 || { echo "expected exit 1 (findings)"; exit 1; }
+          set -e
+          python3 -c "import json;d=json.load(open('sarif.json'));assert d['version']=='2.1.0' and d['runs']"
           echo "CLI smoke test passed"
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Configure (MSVC, C++20)
+        run: cmake -B build -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: All Tests
+        run: ctest --test-dir build -C Release --output-on-failure
 
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install dependencies
         run: |
@@ -76,7 +100,7 @@ jobs:
 
       - name: Upload Coverage
         if: github.event_name == 'push'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
         with:
           files: coverage.info
           fail_ci_if_error: false
@@ -84,7 +108,7 @@ jobs:
   sanitizers:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install dependencies
         run: |
@@ -109,7 +133,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check formatting
         run: |
           sudo apt-get install -y clang-format-18

@@ -1,6 +1,36 @@
 **Changelog**
 All notable changes to OpenCDC will be documented in this file.
 
+**[Unreleased]**
+
+**Fixed**
+- **Config native booleans**: `enabled: true/false` (unquoted) and other boolean keys now parse as native YAML bools. Previously `as<std::string>()` threw `BadConversion` and the parser silently fell back to the legacy parser, dropping the setting. Also accepts `yes/no/on/off/1/0`.
+- **Config `format: sarif`**: accepted again (allowlist now `json/text/html/sarif`, matching CLI).
+- **Config new keys**: `reconvergence_depth` (1-32), `min_sync_stages` (2-5), `require_structural_proof`, `allow_user_annotation`, `reset_policy`, `multicycle_path_policy`, `blackboxes`, and top-level `suppress_reset_crossings` are now parsed from YAML.
+- **CLI `--format` precedence**: config `output.format` only applies when `--format` was not explicitly passed (`format_explicit` flag). Explicit `--format json` is no longer hijacked by config.
+- **Exit code**: `has_unsuppressed_errors()` now skips `false_path`/`multicycle`-suppressed errors, matching `count()`. Suppressed errors no longer cause exit 1.
+- **`--jobs` cap**: CLI clamps to 64 threads; `parallel_for`/`parallel_map`/`ThreadPool` enforce the same hard cap in addition to the existing `min(jobs, items)` cap.
+- **Waiver ReDoS**: regex waivers capped at 256 chars / 10 quantifiers, nested quantifiers `(q)+` rejected at load and add time, compiled with `optimize`.
+- **LSP**: `did_change` no longer orphans cancel flags (analyze owns flag creation/reuse); empty-content requests no longer read arbitrary `file://` paths from disk (uses open-document text or returns `empty-document`); loopback check accepts full `127.0.0.0/8`; temp files use `fchmod(0600)` instead of process-global `umask`; setters snapshotted under lock.
+- **Waiver ReDoS follow-up**: quantified alternations (`(a|aa)+`), `?`-nested groups (`(a+)?`), and non-capturing prefix handling; `(?:abc)+` still accepted.
+- **Config**: `clock_groups.exclusive` typos now fail the file (was silently `true`); all `blackboxes.*` bools fail closed consistently; unknown top-level keys rejected (`Unknown config key`).
+- **LSP races**: `server_loop` snapshots `bind_address`/`allow_remote` under lock; client accept check-and-set under `socket_mutex_`; `start()` on a running server refuses instead of deadlocking; dead `uri_decode_path` removed; empty-document refusal symmetric for remote; dead-peer write failure drops the client instead of stopping the server.
+- **LSP framing (flaky-test root cause)**: client `send_request` re-scans buffered data after skipping a notification instead of blocking in `read()` while a coalesced response sits unprocessed (was a ~50% 30s-hang); server treats read-timeout `EAGAIN` as idle-keep-waiting instead of dropping the client; response-write failure drops only that client; test client uses `MSG_NOSIGNAL` so a closed peer surfaces as an error, never SIGPIPE.
+- **Analyzer**: `run_incremental` re-runs analysis stages on the mutated graph (was re-elaborating from files); config parsed before elaboration so `allow_user_annotation` reaches the frontend.
+- **Frontend**: skipped unknown-clock blocks emit warnings (were silent); `Net→Register` promotion preserves width/location and ORs flags; continuous-assign uses declared LHS width; scope nesting capped at 64; clock-trace cache keyed by graph identity+generation+size with deterministic leaf tie-break.
+- **SARIF**: tool version from `OPENCDC_VERSION`; `startLine` clamped to ≥1; run `properties` now carry methodology/signoff/coverage counts.
+- **Reports**: text `handshake` unified to `handshake_controlled` (matches JSON).
+- **Python**: `run()` takes an argv list; `CheckOptions` exposes threads/profile/defines/signoff/baselines; `compare_with_file` bound.
+- **Benchmarks**: dict-shaped CLI output handled, per-fixture timeouts recorded, FP no longer counted as FN, manifest/fixture paths validated.
+- **CLI**: `--out`+html warns; `--compare-baseline` documents report skip and warns on `--save-baseline`; `save_baseline` failures warn; usage text updated.
+- **Docs**: `rules.md`/`rule-semantics.md` aligned to code (CDC001 info, CDC003 both-paths, CDC004/005 intermediate-path scope, CDC006 cross-domain feed, CDC007 either-empty); CDC009–CDC013 documented.
+- **setup.py**: README resolved relative to the file; version regex tolerant; classifier matches `python_requires`; CMake >= 3.28 enforced; parallel native build.
+- **Remains round 2**: HTML artifacts written atomically (temp+rename) with sorted `findings.html` order, no `:0` locations, and remote CSS directives stripped; `--out` report and baseline saves atomic; SARIF `uri` is a proper `file://`/relative URI; `publish_callback_` race closed; constraints size-cap `-1` guards; coverage dead code removed; CI smoke asserts exact exit codes + SARIF shape.
+- **Not-done round**: release SBOM (SPDX) + keyless cosign signing + `id-token:write`; all GH Actions pinned to SHAs; Python bindings compile-verified (fixed `add_edge`/`is_false_path` overload ambiguity + `module_path`/`module_type` arg annotations), GIL released on long calls, full `module.cpp` object compile green; my lines clang-format-clean under repo style; `LspClient` framing rework (drain-buffer-first) + server `EAGAIN`-keep-waiting + per-client write-failure isolation.
+- **Still round**: `--incdir` must exist and be a directory, `--define` must be `NAME[=value]` (fail-fast errors instead of cryptic slang failures); gray transforms through single-level function calls recognized (`gray <= bin2gray(bin)` no longer fires CDC002); benchmark runner fixed + manifests re-baselined to verified behavior (**8/8 fixtures, F1=1.000**, was 5/8) with stale "not implemented" gaps replaced by two measured ones; ambiguous controls reported without failing; Windows portability (`socket_compat.h`, `temp_file.h`, MSVC includes, Windows CI job).
+- **Standing finish**: root-caused the 3 stress regressions to an over-broad operand-collection change (output-port `Assignment` expressions) via IR dumps — rescoped the fix to call-actual mapping only, restoring greens; extended gray recognition to nested calls + task outputs (CDC002 gone on all forms, verified by probes); resolver ambiguous-name tie-breaks; all findings re-verified against fixture intent.
+- **Remains round**: HTML `custom_css` strips `@import`/`url()` exfiltration vectors and empty output dirs throw; clock event names normalized (inner whitespace removed, trailing `[N]` selects stripped, `gen[0].clk` kept distinct); `RuleEngine::is_enabled` returns false for unknown rules (findings still fail-visible); crossing coverage enumerates via `find_register_paths` with dedup like the analyzer; config preserves original case in errors and rejects unreadable-size files; `ThreadSafeQueue` gains blocking `wait_pop`/`shutdown`; CLI reports missing option values, rejects unknown `lsp` flags, splits `--false-path` on the last colon, and errors on missing baselines; report paths relativized under cwd; `architecture.md` pipeline/modules/IR/decisions updated; CI smoke asserts exact exit codes plus SARIF shape; `LspClient` uses `MSG_NOSIGNAL`.
+
 **[0.4.1] — 2026-09-21**
 
 **Fixed**

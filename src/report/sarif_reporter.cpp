@@ -94,7 +94,7 @@ void SarifReporter::report(const std::vector<cdc::Finding>& findings,
        << "        \"driver\": {\n"
        << "          \"name\": \"opencdc\",\n"
        << "          \"version\": \"" << OPENCDC_VERSION << "\",\n"
-       << "          \"informationUri\": \"https://github.com/opencdc/opencdc\",\n"
+       << "          \"informationUri\": \"https://github.com/Ayoubbelguellaoui/CDC\",\n"
        << "          \"rules\": [\n";
 
     // Emit one rule descriptor per unique rule_id

@@ -54,7 +54,7 @@ See [docs/architecture.md](docs/architecture.md) for the full module map.
 
 ## Reporting Issues
 
-Use GitHub Issues. Include:
+Use GitHub Issues: [https://github.com/Ayoubbelguellaoui/CDC/issues](https://github.com/Ayoubbelguellaoui/CDC/issues). Include:
 - RTL snippet that triggers the issue
 - Expected vs actual behavior
 - OpenCDC version and build configuration

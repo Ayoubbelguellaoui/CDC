@@ -161,6 +161,11 @@ See [docs/ci.md](docs/ci.md) for GitHub Actions, GitLab CI, and best practices.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+## Contact
+
+- Repository: [https://github.com/Ayoubbelguellaoui/CDC](https://github.com/Ayoubbelguellaoui/CDC)
+- Maintainer: Ayoub Belguellaoui — [belguellaoui01@gmail.com](mailto:belguellaoui01@gmail.com)
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.

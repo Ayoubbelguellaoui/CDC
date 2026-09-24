@@ -76,5 +76,5 @@ cdc-check:
 Add a status badge to your README:
 
 ```markdown
-![CDC Check](https://github.com/your-org/your-repo/actions/workflows/cdc-check.yml/badge.svg)
+![CDC Check](https://github.com/Ayoubbelguellaoui/CDC/actions/workflows/ci.yml/badge.svg)
 ```

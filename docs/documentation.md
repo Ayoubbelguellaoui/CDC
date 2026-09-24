@@ -42,8 +42,8 @@ OpenCDC is a static analysis tool for detecting Clock Domain Crossing (CDC) issu
 ### Build from Source
 
 ```bash
-git clone https://github.com/opencdc/opencdc.git
-cd opencdc
+git clone https://github.com/Ayoubbelguellaoui/CDC.git
+cd CDC
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
@@ -57,7 +57,7 @@ sudo cmake --install build
 ### Python Package
 
 ```bash
-pip install opencdc
+pip install cdc-check
 ```
 
 ## Quick Start
@@ -302,7 +302,7 @@ reporter.generate_report(findings, options);
 ### Installation
 
 ```bash
-pip install opencdc
+pip install cdc-check
 ```
 
 ### Usage

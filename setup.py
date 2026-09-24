@@ -69,15 +69,15 @@ class CMakeBuild(build_ext):
                               cwd=self.build_temp)
 
 setup(
-    name='opencdc',
+    name='cdc-check',
     version=cmake_version(),
-    author='OpenCDC Contributors',
-    author_email='opencdc@example.com',
+    author='Ayoub Belguellaoui',
+    author_email='belguellaoui01@gmail.com',
     description='Open-source static analysis tool for Clock Domain Crossing issues',
     long_description=open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                          'README.md'), encoding='utf-8').read(),
     long_description_content_type='text/markdown',
-    url='https://github.com/opencdc/opencdc',
+    url='https://github.com/Ayoubbelguellaoui/CDC',
     ext_modules=[CMakeExtension('opencdc')],
     cmdclass={'build_ext': CMakeBuild},
     zip_safe=False,

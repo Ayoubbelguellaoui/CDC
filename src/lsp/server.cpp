@@ -506,7 +506,10 @@ void LspServer::server_loop() {
     }
 
     int opt = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    // Winsock takes const char* here (POSIX takes int*); the cast is valid
+    // on both.
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&opt),
+               sizeof(opt));
 
     struct sockaddr_in address;
     address.sin_family = AF_INET;

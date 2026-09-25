@@ -10,6 +10,11 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+// NOMINMAX must precede every windows.h inclusion in the TU, or std::max /
+// std::min break (windows.h defines function-like max/min macros).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 

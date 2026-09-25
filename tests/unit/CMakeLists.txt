@@ -39,11 +39,26 @@ target_include_directories(opencdc_unit_tests
         ${CMAKE_BINARY_DIR}/generated
 )
 
+# Multi-config generators (Visual Studio, Xcode) place binaries in a
+# per-config subdirectory (src/Release/opencdc.exe); single-config ones
+# put them directly in src/. The suffix below keeps OPENCDC_BIN_DIR valid
+# on both (forward slashes work on Windows too).
+if(CMAKE_CONFIGURATION_TYPES)
+    set(OPENCDC_BIN_SUFFIX "/$<CONFIG>")
+else()
+    set(OPENCDC_BIN_SUFFIX "")
+endif()
+
 target_compile_definitions(opencdc_unit_tests
     PRIVATE
         OPENCDC_BIN_DIR="${CMAKE_BINARY_DIR}/src"
+        OPENCDC_BIN_SUFFIX="${OPENCDC_BIN_SUFFIX}"
         FIXTURES_DIR="${CMAKE_SOURCE_DIR}/tests/fixtures"
 )
+
+# The CLI tests shell out to the opencdc binary: ensure it exists before
+# the test binary links (matters for single-target builds).
+add_dependencies(opencdc_unit_tests opencdc)
 
 target_link_libraries(opencdc_unit_tests
     PRIVATE

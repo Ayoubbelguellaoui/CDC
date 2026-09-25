@@ -10,7 +10,10 @@
 #endif
 
 static std::string bin_path() {
-    std::string p = std::string(OPENCDC_BIN_DIR) + "/opencdc";
+    // OPENCDC_BIN_SUFFIX is "/<Config>" on multi-config generators (Visual
+    // Studio puts binaries in src/Release/) and empty on single-config ones.
+    // All paths use forward slashes (valid on Windows too).
+    std::string p = std::string(OPENCDC_BIN_DIR) + OPENCDC_BIN_SUFFIX + "/opencdc";
 #ifdef _WIN32
     p += ".exe";
 #endif

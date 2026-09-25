@@ -11,7 +11,19 @@
 
 static std::string bin_path() {
     std::string p = std::string(OPENCDC_BIN_DIR) + "/opencdc";
+#ifdef _WIN32
+    p += ".exe";
+#endif
     return "\"" + p + "\"";
+}
+
+// Null redirect + argument quoting that work on both POSIX sh and cmd.exe.
+static std::string null_redirect() {
+#ifdef _WIN32
+    return " > NUL";
+#else
+    return " > /dev/null";
+#endif
 }
 
 static int exit_status(int rc) {
@@ -43,15 +55,15 @@ TEST(CliTest, CheckWithoutFilesFails) {
 }
 
 TEST(CliTest, SignoffClean2ffExitsZero) {
-    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
-                      "/sv/sync_2ff.sv --top sync_2ff --signoff --profile asic_signoff";
+    std::string cmd = bin_path() + " check \"" + std::string(FIXTURES_DIR) +
+                      "/sv/sync_2ff.sv\" --top sync_2ff --signoff --profile asic_signoff";
     int rc = std::system(cmd.c_str());
     EXPECT_EQ(rc, 0);
 }
 
 TEST(CliTest, SignoffUnsyncExitsOne) {
-    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
-                      "/sv/cdc_crossing.sv --top simple_cdc_crossing --signoff";
+    std::string cmd = bin_path() + " check \"" + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv\" --top simple_cdc_crossing --signoff";
     int rc = std::system(cmd.c_str());
     EXPECT_NE(rc, 0);
 }
@@ -74,10 +86,10 @@ TEST(CliTest, LspUnknownOptionIsInputError) {
 TEST(CliTest, CompareMissingBaselineIsInputError) {
     std::string missing =
         opencdc::util::unique_temp_path("definitely_missing_baseline_xyz", ".json");
-    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
-                      "/sv/cdc_crossing.sv --top simple_cdc_crossing "
-                      "--compare-baseline " +
-                      missing;
+    std::string cmd = bin_path() + " check \"" + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv\" --top simple_cdc_crossing "
+                      "--compare-baseline \"" +
+                      missing + "\"";
     int rc = std::system(cmd.c_str());
     EXPECT_EQ(exit_status(rc), 2);
 }
@@ -85,9 +97,10 @@ TEST(CliTest, CompareMissingBaselineIsInputError) {
 TEST(CliTest, FalsePathWithExtraColonsAccepted) {
     // Split on last colon: must not be rejected as malformed (exit 2);
     // runs to findings (exit 1) instead.
-    std::string cmd = bin_path() + " check " + std::string(FIXTURES_DIR) +
-                      "/sv/cdc_crossing.sv --top simple_cdc_crossing "
-                      "--false-path 'a:b:c' --format json > /dev/null";
+    std::string cmd = bin_path() + " check \"" + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv\" --top simple_cdc_crossing "
+                      "--false-path \"a:b:c\" --format json" +
+                      null_redirect();
     int rc = std::system(cmd.c_str());
     EXPECT_EQ(exit_status(rc), 1);
 }

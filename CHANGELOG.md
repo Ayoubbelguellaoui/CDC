@@ -3,6 +3,9 @@ All notable changes to OpenCDC will be documented in this file.
 
 **[Unreleased]**
 
+**Added**
+- **Realistic benchmark corpus** (`benchmarks/corpus/`, 16 designs, 18 manifest entries, manifest v1.2): correct designs, known violations, gray/binary async FIFOs, 4-phase + 2-phase + pulse handshakes, generated/gated/muxed clocks, 3-level hierarchy, blackbox vendor IP (A/B entries with/without model), and FP-prone tricky cases. All 25 fixtures pass (F1=1.000); 6 new `known_gaps` document verified limitations (wide-chain sync, handshake payload, instance-to-instance tracing, CDC006 reachability, reset-sync depth, generated-clock resolution). Runner gains per-entry `config`/`waiver`/`constraints`/`args`, rule-level `present_rules`/`absent_rules`, `reason_contains` matching, and fails fixtures when the tool itself errors instead of vacuous-passing on empty output.
+
 **Fixed**
 - **Config native booleans**: `enabled: true/false` (unquoted) and other boolean keys now parse as native YAML bools. Previously `as<std::string>()` threw `BadConversion` and the parser silently fell back to the legacy parser, dropping the setting. Also accepts `yes/no/on/off/1/0`.
 - **Config `format: sarif`**: accepted again (allowlist now `json/text/html/sarif`, matching CLI).

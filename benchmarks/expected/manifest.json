@@ -1,6 +1,6 @@
 {
- "version": "1.1",
- "description": "Expected results for OpenCDC benchmark fixtures. Each fixture tests specific rules with positive/negative/ambiguous controls.",
+ "version": "1.2",
+ "description": "Expected results for OpenCDC benchmark fixtures. Each fixture tests specific rules with positive/negative/ambiguous controls. v1.2 adds benchmarks/corpus/: realistic designs across clean/violations/fifo/handshake/clocks/hierarchical/blackbox/tricky. Optional per-entry keys: config/waiver/constraints (project-root-relative paths), args (extra CLI flags), absent_rules (rules with zero findings), present_rules (rules with >=1 finding), reason_contains (substring match on finding reason). Ambiguous controls are reported, never fail.",
  "generated_at": "2026-08-18",
  "benchmarks": {
   "cdc001_benchmark": {
@@ -231,6 +231,683 @@
      }
     ]
    }
+  },
+  "corpus_clean_2ff": {
+   "file": "benchmarks/corpus/clean/sync_2ff_clean.sv",
+   "top": "sync_2ff_clean",
+   "description": "Clean single-bit 2FF crossing with resets; only CDC001 info/verified_safe may appear",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "present_rules": [
+     "CDC001"
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ],
+    "known_behavior": "CDC001 info/verified_safe proves the crossing was analyzed, not skipped."
+   }
+  },
+  "corpus_unsync_single": {
+   "file": "benchmarks/corpus/violations/unsync_single_bit.sv",
+   "top": "unsync_single_bit",
+   "description": "Single-bit crossing with no synchronizer",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "unsync_single_bit.clean_unsync_src",
+      "dest": "unsync_single_bit.clean_unsync_dst",
+      "note": "Direct async sample, no sync stages"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_unsync_bus": {
+   "file": "benchmarks/corpus/violations/unsync_bus.sv",
+   "top": "unsync_bus",
+   "description": "Plain 8-bit bus and free-running binary counter sampled directly",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "unsync_bus.bus_src",
+      "dest": "unsync_bus.bus_dst",
+      "note": "Multi-bit bus, no protection"
+     },
+     {
+      "rule": "CDC002",
+      "source": "unsync_bus.bus_src",
+      "dest": "unsync_bus.bus_dst",
+      "note": "Multi-bit bus, no gray/handshake/FIFO"
+     },
+     {
+      "rule": "CDC001",
+      "source": "unsync_bus.bincnt_src",
+      "dest": "unsync_bus.bincnt_dst",
+      "note": "Binary counter, several bits change per tick"
+     },
+     {
+      "rule": "CDC002",
+      "source": "unsync_bus.bincnt_src",
+      "dest": "unsync_bus.bincnt_dst",
+      "note": "Non-gray counter crossing"
+     }
+    ],
+    "absent_rules": [
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_reconvergence": {
+   "file": "benchmarks/corpus/violations/reconvergence_fanout.sv",
+   "top": "reconvergence_fanout",
+   "description": "Multi-bit source fans out over two skewed paths that reconverge (CDC003)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "reconvergence_fanout.rconv_src",
+      "dest": "reconvergence_fanout.rconv_path_a",
+      "note": "Fanout leg A is an unsync crossing"
+     },
+     {
+      "rule": "CDC001",
+      "source": "reconvergence_fanout.rconv_src",
+      "dest": "reconvergence_fanout.rconv_path_b",
+      "note": "Fanout leg B is an unsync crossing"
+     },
+     {
+      "rule": "CDC002",
+      "source": "reconvergence_fanout.rconv_src",
+      "dest": "reconvergence_fanout.rconv_path_a",
+      "note": "8-bit legs have no gray/handshake either"
+     },
+     {
+      "rule": "CDC002",
+      "source": "reconvergence_fanout.rconv_src",
+      "dest": "reconvergence_fanout.rconv_path_b",
+      "note": "8-bit legs have no gray/handshake either"
+     },
+     {
+      "rule": "CDC003",
+      "source": "reconvergence_fanout.rconv_src",
+      "dest": "",
+      "note": "Skewed copies recombine at rconv_consumer"
+     }
+    ],
+    "absent_rules": [
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_comb_sync": {
+   "file": "benchmarks/corpus/violations/comb_into_sync.sv",
+   "top": "comb_into_sync",
+   "description": "AND gate between cross-domain feed and first sync stage; surfaces as CDC001, never CDC006",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "comb_into_sync.src_ff",
+      "dest": "comb_into_sync.meta_ff",
+      "note": "Comb in the feed breaks chain classification; error stays CDC001"
+     }
+    ],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC006",
+      "source": "comb_into_sync.src_ff",
+      "dest": "comb_into_sync.meta_ff",
+      "expected": "undecided",
+      "note": "Design IS buggy, but CDC006 cannot fire: it needs a direct cross-domain register predecessor on the chain entry, and any comb in the feed removes that edge (also breaks sync classification)"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012"
+    ],
+    "known_behavior": "CDC013 warning also emitted on sync_ff (unknown-propagation); not asserted."
+   }
+  },
+  "corpus_missing_reset": {
+   "file": "benchmarks/corpus/violations/missing_reset_crossing.sv",
+   "top": "missing_reset_crossing",
+   "description": "Structurally fine 2FF where neither side has reset (CDC007)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC007",
+      "source": "missing_reset_crossing.noreset_src",
+      "dest": "missing_reset_crossing.noreset_meta",
+      "note": "Neither side reset; info severity by default"
+     }
+    ],
+    "present_rules": [
+     "CDC001"
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_fifo_gray": {
+   "file": "benchmarks/corpus/fifo/async_fifo_gray.sv",
+   "top": "async_fifo_gray",
+   "description": "Correct async FIFO (gray pointers, 2FF pointer sync); flags CDC001 error on wide pointer chains - documents the width==1 sync limitation",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "present_rules": [
+     "CDC001"
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012"
+    ],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "async_fifo_gray.wr_ptr_gray",
+      "dest": "async_fifo_gray.wr_ptr_gray_sync1",
+      "expected": "fires-today",
+      "note": "CORRECT design flagged: 5-bit pointer sync chains are never classified (width==1 required), so no verified_safe downgrade"
+     },
+     {
+      "rule": "CDC001",
+      "source": "async_fifo_gray.rd_ptr_gray",
+      "dest": "async_fifo_gray.rd_ptr_gray_sync1",
+      "expected": "fires-today",
+      "note": "Same wide-chain limitation on the read-pointer leg"
+     }
+    ],
+    "known_behavior": "No CDC002 (gray recognized for the multi-bit rule). CDC013 warnings on the synced pointers are also emitted; not asserted."
+   }
+  },
+  "corpus_fifo_binary": {
+   "file": "benchmarks/corpus/fifo/async_fifo_binary_broken.sv",
+   "top": "async_fifo_binary_broken",
+   "description": "FIFO-style pointer exchange with binary (non-gray) pointers, no sync",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "async_fifo_binary_broken.waddr_bin",
+      "dest": "async_fifo_binary_broken.waddr_bin_seen_in_rclk",
+      "note": "Binary write pointer sampled across domains"
+     },
+     {
+      "rule": "CDC002",
+      "source": "async_fifo_binary_broken.waddr_bin",
+      "dest": "async_fifo_binary_broken.waddr_bin_seen_in_rclk",
+      "note": "5-bit pointer, no gray code"
+     },
+     {
+      "rule": "CDC001",
+      "source": "async_fifo_binary_broken.raddr_bin",
+      "dest": "async_fifo_binary_broken.raddr_bin_seen_in_wclk",
+      "note": "Binary read pointer sampled across domains"
+     },
+     {
+      "rule": "CDC002",
+      "source": "async_fifo_binary_broken.raddr_bin",
+      "dest": "async_fifo_binary_broken.raddr_bin_seen_in_wclk",
+      "note": "5-bit pointer, no gray code"
+     }
+    ],
+    "absent_rules": [
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ],
+    "known_behavior": "Pointer registers deliberately avoid wr_ptr/rd_ptr/wptr/rptr naming so only the structural (non-)gray property is tested."
+   }
+  },
+  "corpus_hs_4phase": {
+   "file": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv",
+   "top": "handshake_4phase_valid_ready",
+   "description": "Correct 4-phase valid/ready handshake; controls clean, payload still flagged (handshake covers control pair only)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "handshake_4phase_valid_ready.hs_valid",
+      "dest": "handshake_4phase_valid_ready.hs_valid_sync1",
+      "note": "Control sync chain, info/verified_safe"
+     },
+     {
+      "rule": "CDC001",
+      "source": "handshake_4phase_valid_ready.hs_ready",
+      "dest": "handshake_4phase_valid_ready.hs_ready_sync1",
+      "note": "Return-path sync chain, info/verified_safe"
+     }
+    ],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "handshake_4phase_valid_ready.hs_data",
+      "dest": "handshake_4phase_valid_ready.hs_capture",
+      "expected": "fires-today",
+      "note": "Correct-by-protocol payload flagged: is_verified_safe_crossing verifies only the valid/ready pair, not the data it guards"
+     },
+     {
+      "rule": "CDC002",
+      "source": "handshake_4phase_valid_ready.hs_data",
+      "dest": "handshake_4phase_valid_ready.hs_capture",
+      "expected": "fires-today",
+      "note": "Same limitation on the multi-bit rule"
+     }
+    ],
+    "absent_rules": [
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_hs_2phase": {
+   "file": "benchmarks/corpus/handshake/handshake_2phase_req_ack.sv",
+   "top": "handshake_2phase_req_ack",
+   "description": "Correct toggle (2-phase) req/ack handshake; controls clean, payload still flagged",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "handshake_2phase_req_ack.req_valid",
+      "dest": "handshake_2phase_req_ack.req_valid_sync1",
+      "note": "Toggle request sync chain, info/verified_safe"
+     },
+     {
+      "rule": "CDC001",
+      "source": "handshake_2phase_req_ack.dst_ack",
+      "dest": "handshake_2phase_req_ack.dst_ack_sync1",
+      "note": "Ack return sync chain, info/verified_safe"
+     }
+    ],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "handshake_2phase_req_ack.hs_data",
+      "dest": "handshake_2phase_req_ack.hs_capture",
+      "expected": "fires-today",
+      "note": "Correct-by-protocol payload flagged (control-pair-only verification)"
+     },
+     {
+      "rule": "CDC002",
+      "source": "handshake_2phase_req_ack.hs_data",
+      "dest": "handshake_2phase_req_ack.hs_capture",
+      "expected": "fires-today",
+      "note": "Same limitation on the multi-bit rule"
+     }
+    ],
+    "absent_rules": [
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ],
+    "known_behavior": "No CDC012: both toggle legs use full 2FF chains. The toggle is named req_valid (valid-seeded handshake roles) - see file header."
+   }
+  },
+  "corpus_pulse_sync": {
+   "file": "benchmarks/corpus/handshake/pulse_synchronizer.sv",
+   "top": "pulse_synchronizer",
+   "description": "Pulse-via-toggle + 2FF + edge-detect; clean, no CDC011",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "present_rules": [
+     "CDC001"
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_genclk": {
+   "file": "benchmarks/corpus/clocks/generated_div_clock.sv",
+   "top": "generated_div_clock",
+   "description": "Divide-by-4 clock from clk_core; generated clock traced to parent root so no crossing is reported",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "present_rules": [],
+    "absent_rules": [
+     "CDC001",
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC010",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ],
+    "known_behavior": "Tool resolves clk_div into the clk_core domain (4 registers, 1 domain): related-clock transfers are invisible by design. The runner fails this fixture if the tool errors, so zero findings means analyzed-and-clean, not skipped."
+   }
+  },
+  "corpus_gated_muxed": {
+   "file": "benchmarks/corpus/clocks/gated_and_muxed_clocks.sv",
+   "top": "gated_and_muxed_clocks",
+   "description": "CDC004 gated-clock positive, CDC005 muxed-no-reset positive, muxed-with-reset negative",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "gated_and_muxed_clocks.gated_src",
+      "dest": "gated_and_muxed_clocks.gated_dst",
+      "note": "Unsync crossing on the gated clock"
+     },
+     {
+      "rule": "CDC004",
+      "source": "gated_and_muxed_clocks.gated_src",
+      "dest": "gated_and_muxed_clocks.gated_dst",
+      "note": "Source clocked by clk_raw & gate_en"
+     },
+     {
+      "rule": "CDC001",
+      "source": "gated_and_muxed_clocks.muxed_src_norst",
+      "dest": "gated_and_muxed_clocks.muxed_dst_a",
+      "note": "Unsync crossing on the muxed clock"
+     },
+     {
+      "rule": "CDC005",
+      "source": "gated_and_muxed_clocks.muxed_src_norst",
+      "dest": "gated_and_muxed_clocks.muxed_dst_a",
+      "note": "Muxed clock without reset"
+     },
+     {
+      "rule": "CDC007",
+      "source": "gated_and_muxed_clocks.muxed_src_norst",
+      "dest": "gated_and_muxed_clocks.muxed_dst_a",
+      "note": "No-reset side effect, info severity"
+     },
+     {
+      "rule": "CDC001",
+      "source": "gated_and_muxed_clocks.muxed_src_rst",
+      "dest": "gated_and_muxed_clocks.muxed_dst_b",
+      "note": "Crossing still unsynchronized (CDC001 applies)"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC005",
+      "source": "gated_and_muxed_clocks.muxed_src_rst",
+      "dest": "gated_and_muxed_clocks.muxed_dst_b",
+      "expected": "no_finding",
+      "note": "Muxed clock WITH reset: CDC005 must stay quiet"
+     },
+     {
+      "rule": "CDC004",
+      "source": "gated_and_muxed_clocks.muxed_src_rst",
+      "dest": "gated_and_muxed_clocks.muxed_dst_b",
+      "expected": "no_finding",
+      "note": "Not a gated clock either"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC006",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ],
+    "known_behavior": "Clock gating/muxing is recognized through explicit assign statements; net-initializer form (wire clk = a & b) is NOT traced for clock roots."
+   }
+  },
+  "corpus_hier_soc": {
+   "file": "benchmarks/corpus/hierarchical/hierarchical_soc.sv",
+   "top": "hierarchical_soc",
+   "description": "3-level hierarchy: traced top-reg path (clean) + untraced instance-to-instance violation (known gap)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "hierarchical_soc.topo_src_clean",
+      "dest": "hierarchical_soc.u_island.meta_ff",
+      "note": "Parent-reg to child-instance input traces; hierarchical names intact"
+     }
+    ],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "hierarchical_soc.sender_status",
+      "dest": "hierarchical_soc.q_raw_ff",
+      "expected": "no_finding",
+      "note": "REAL unsync crossing, INVISIBLE: instance-output -> wire -> instance-input boundaries are not traced (false negative)"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_blackbox_flagged": {
+   "file": "benchmarks/corpus/blackbox/blackbox_crossing_top.sv",
+   "top": "blackbox_crossing_top",
+   "description": "Crossing through vendor IP WITHOUT the vendor model: visible as sync-chain info + reset info",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "blackbox_crossing_top.bb_src",
+      "dest": "blackbox_crossing_top.u_vendor_sync.v_meta",
+      "reason_contains": "drives register",
+      "note": "Unsuppressed variant: plain sync-chain info wording"
+     },
+     {
+      "rule": "CDC007",
+      "source": "blackbox_crossing_top.bb_src",
+      "dest": "blackbox_crossing_top.u_vendor_sync.v_meta",
+      "note": "Macro interior has no reset"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_blackbox_suppressed": {
+   "file": "benchmarks/corpus/blackbox/blackbox_crossing_top.sv",
+   "top": "blackbox_crossing_top",
+   "config": "benchmarks/corpus/blackbox/vendor_cdc_ip.yaml",
+   "description": "Same RTL WITH the vendor model: crossing attributed to the safe black box, CDC007 gone",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "blackbox_crossing_top.bb_src",
+      "dest": "blackbox_crossing_top.u_vendor_sync.v_meta",
+      "reason_contains": "safe black box",
+      "note": "Suppressed variant: audit finding, VerifiedSafe, names the black box mechanism"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC009",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
+  },
+  "corpus_tricky_fp": {
+   "file": "benchmarks/corpus/tricky/fp_prone_crossings.sv",
+   "top": "fp_prone_crossings",
+   "description": "Quasi-static config (ambiguous FP), constant tie-off (no edge), clean reset sync (negative), mixed-reset CDC009 (ambiguous)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "fp_prone_crossings.arst_data_src",
+      "dest": "fp_prone_crossings.arst_data_meta",
+      "note": "Common-reset 2FF data path, info/verified_safe"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "source": "",
+      "dest": "fp_prone_crossings.tie_dst",
+      "expected": "no_finding",
+      "note": "Constant tie-off: no source register, no edge, no finding"
+     }
+    ],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "fp_prone_crossings.cfg_src",
+      "dest": "fp_prone_crossings.cfg_dst",
+      "expected": "fires-today",
+      "note": "Quasi-static config bit flagged; functionally benign after boot but structurally an unsync crossing - review-worthy, not provably safe"
+     },
+     {
+      "rule": "CDC009",
+      "source": "fp_prone_crossings.mx_data_src",
+      "dest": "fp_prone_crossings.mx_data_meta",
+      "expected": "fires-today",
+      "note": "Mixed rst_n/arst_sync domains flagged error although the reset IS synchronized; suppression needs 2+ data stages in the new reset domain"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003",
+     "CDC004",
+     "CDC005",
+     "CDC006",
+     "CDC007",
+     "CDC008",
+     "CDC011",
+     "CDC012",
+     "CDC013"
+    ]
+   }
   }
  },
  "known_gaps": [
@@ -244,6 +921,42 @@
    "rule": "CDC002",
    "gap": "Gray/handshake transforms hidden behind exotic call patterns (deeply nested calls beyond depth 4, ref-arg tasks, generate-wrapped logic) may not be recognized; single-level/nested function calls and task output args are handled",
    "severity": "low"
+  },
+  {
+   "rule": "CDC001",
+   "gap": "Only single-bit (width == 1) synchronizer chains are classified; wide (multi-bit) 2FF chains - e.g. gray-coded async-FIFO pointer syncs - never downgrade to verified_safe, so correct FIFOs report CDC001 error",
+   "severity": "medium",
+   "evidence": "benchmarks/corpus/fifo/async_fifo_gray.sv ambiguous controls"
+  },
+  {
+   "rule": "CDC001/CDC002",
+   "gap": "Verified handshakes cover only the valid/ready (req/ack) control pair; the payload data the handshake guards is still reported CDC001+CDC002 even for protocol-correct 4-phase and 2-phase designs",
+   "severity": "medium",
+   "evidence": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv, handshake_2phase_req_ack.sv ambiguous controls"
+  },
+  {
+   "rule": "CDC001",
+   "gap": "Instance-output -> wire -> instance-input paths are not traced: a source register inside a child module feeding another child module's input is invisible (false negatives on hierarchical designs)",
+   "severity": "high",
+   "evidence": "benchmarks/corpus/hierarchical/hierarchical_soc.sv ambiguous control"
+  },
+  {
+   "rule": "CDC006",
+   "gap": "Combinational logic anywhere in a synchronizer feed path removes the direct cross-domain register edge the chain entry requires, so the chain is never classified and the bug surfaces as CDC001 instead of CDC006; CDC006 appears unreachable from single-driver RTL",
+   "severity": "medium",
+   "evidence": "benchmarks/corpus/violations/comb_into_sync.sv ambiguous control"
+  },
+  {
+   "rule": "CDC009",
+   "gap": "Reset-synchronizer suppression only applies when the destination sits 2+ data stages deep in the new reset domain; a proper 2FF under a synchronized-but-different reset still reports CDC009 error",
+   "severity": "low",
+   "evidence": "benchmarks/corpus/tricky/fp_prone_crossings.sv case 4"
+  },
+  {
+   "rule": "clocking",
+   "gap": "Counter-generated clocks are resolved into the parent root domain (no crossing reported - by design but unverified for phase), and clock gating/muxing is only recognized through explicit assign statements, not net-initializer form",
+   "severity": "low",
+   "evidence": "benchmarks/corpus/clocks/generated_div_clock.sv, gated_and_muxed_clocks.sv known_behavior notes"
   }
  ]
 }

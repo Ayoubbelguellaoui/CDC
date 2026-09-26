@@ -37,24 +37,25 @@ class RuleMetrics:
         return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
 
 
-def run_opencdc(binary, fixture, top):
-    cmd = [binary, "check", fixture, "--top", top, "--format", "json"]
+def run_opencdc(binary, fixture, top, extra_args=None):
+    cmd = [binary, "check", fixture, "--top", top] + list(extra_args or []) + [
+        "--format", "json"]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
-        return [], "timeout after 60s: slow fixture recorded as no findings"
+        return [], "timeout after 60s: slow fixture recorded as no findings", False
     if result.returncode > 1:
-        return [], result.stderr
+        return [], result.stderr, False
     try:
         data = json.loads(result.stdout) if result.stdout.strip() else {}
     except json.JSONDecodeError:
-        return [], f"JSON parse error: {result.stdout[:200]}"
+        return [], f"JSON parse error: {result.stdout[:200]}", False
     # CLI emits an object {"findings": [...]}; accept a bare list too.
     if isinstance(data, dict):
         findings = data.get("findings", [])
     else:
         findings = data
-    return findings, result.stderr
+    return findings, result.stderr, True
 
 
 def main():
@@ -87,7 +88,39 @@ def main():
         top_module = fixture["top"]
         expected = fixture.get("expected", {})
 
-        actual_findings, stderr = run_opencdc(binary, fixture_path, top_module)
+        # Optional per-fixture inputs (relative to the project root, same
+        # safety rule as "file"): YAML config (blackbox models, profiles),
+        # waiver file, SDC/YAML clock constraints, plus raw extra CLI args.
+        extra_args = []
+        skip_fixture = False
+        for key, flag in (("config", "--config"), ("waiver", "--waiver"),
+                          ("constraints", "--constraints")):
+            val = fixture.get(key)
+            if val:
+                if os.path.isabs(val) or ".." in val.split(os.sep):
+                    print(f"  [SKIP] {fixture_key}: unsafe {key} path: {val}")
+                    skip_fixture = True
+                    break
+                extra_args += [flag, os.path.join(project_root, val)]
+        if skip_fixture:
+            continue
+        extra_args += fixture.get("args", [])
+
+        actual_findings, stderr, ok = run_opencdc(binary, fixture_path, top_module,
+                                                      extra_args)
+        if not ok:
+            print(f"  [ERROR] {fixture_key}: tool failed: {stderr[:200]}")
+            results.append({
+                "name": fixture_key,
+                "passed": False,
+                "tp": 0,
+                "fn": 0,
+                "fp": 0,
+                "actual_count": 0,
+                "positives": len(expected.get("positive_controls", [])),
+                "negatives": len(expected.get("negative_controls", [])),
+            })
+            continue
 
         actual_rules = set(f["rule_id"] for f in actual_findings)
 
@@ -101,6 +134,7 @@ def main():
             rule = pos["rule"]
             src = pos.get("source", "")
             dst = pos.get("dest", "")
+            want_reason = pos.get("reason_contains", "")
 
             found = False
             for af in actual_findings:
@@ -108,6 +142,8 @@ def main():
                     if src and src not in af.get("source", ""):
                         continue
                     if dst and dst not in af.get("dest", ""):
+                        continue
+                    if want_reason and want_reason not in af.get("reason", ""):
                         continue
                     found = True
                     break
@@ -130,6 +166,7 @@ def main():
             expected_behavior = neg.get("expected", "no_finding")
             src = neg.get("source", "")
             dst = neg.get("dest", "")
+            want_reason = neg.get("reason_contains", "")
 
             found = False
             for af in actual_findings:
@@ -137,6 +174,8 @@ def main():
                     if src and src not in af.get("source", ""):
                         continue
                     if dst and dst not in af.get("dest", ""):
+                        continue
+                    if want_reason and want_reason not in af.get("reason", ""):
                         continue
                     found = True
                     break
@@ -178,6 +217,36 @@ def main():
             )
             print(f"  [AMBIG] {fixture_key}: {rule} {src} -> {dst}: "
                   f"found={found} expected={want} ({amb.get('note', '')})")
+
+        passed = fn == 0 and fp == 0
+        # Rule-level presence/absence assertions. These complement the
+        # pair-level controls above: e.g. a clean design legitimately has
+        # info-level CDC001 findings, so "no CDC001 at all" is unstatable,
+        # but "zero CDC002 findings anywhere" is exactly the property a
+        # gray-coded/FIFO/handshake fixture must prove.
+        for rule in expected.get("absent_rules", []):
+            hits = [af for af in actual_findings if af["rule_id"] == rule]
+            if rule not in rule_metrics:
+                rule_metrics[rule] = RuleMetrics(rule_id=rule)
+            if hits:
+                rule_metrics[rule].fp += len(hits)
+                fp += len(hits)
+                print(f"  [ABSENT-FAIL] {fixture_key}: {rule} fired "
+                      f"{len(hits)}x but must be absent")
+            else:
+                rule_metrics[rule].tn += 1
+        for rule in expected.get("present_rules", []):
+            hits = [af for af in actual_findings if af["rule_id"] == rule]
+            if rule not in rule_metrics:
+                rule_metrics[rule] = RuleMetrics(rule_id=rule)
+            if hits:
+                rule_metrics[rule].tp += 1
+                tp += 1
+            else:
+                rule_metrics[rule].fn += 1
+                fn += 1
+                print(f"  [PRESENT-FAIL] {fixture_key}: {rule} has no "
+                      f"findings but must be present")
 
         passed = fn == 0 and fp == 0
         results.append({

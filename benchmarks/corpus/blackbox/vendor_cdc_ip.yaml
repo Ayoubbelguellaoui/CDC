@@ -1,0 +1,8 @@
+# Vendor synchronizer model: the CDC inside vendor_cdc_bit is handled by
+# hardened vendor cells, so crossings through it are safe by construction.
+# Used by the blackbox_suppressed manifest entry; the blackbox_flagged
+# entry runs the same RTL WITHOUT this file and must report CDC001.
+blackboxes:
+  - module_name: vendor_cdc_bit
+    vendor: generic
+    is_safe_crossing: true

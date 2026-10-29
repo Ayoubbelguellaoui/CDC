@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "cdc/cdc006.h"
 #include "cdc/crossing.h"
 #include "cdc/pattern.h"
 #include "cdc/reconvergence.h"
@@ -1243,4 +1244,54 @@ TEST(FrontendTest, TwoResetsBehindOnePortNameCross) {
         crossing = crossing || (f.rule_id == "CDC009" && f.source_reg_name == "rh_two.u_a.q" &&
                                 f.dest_reg_name == "rh_two.u_b.q");
     EXPECT_TRUE(crossing);
+}
+
+TEST(FrontendTest, CrossingThroughAnEnable) {
+    // `if (a_r) q <= 1'b1;`: a_r reaches q only through the condition.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_enable", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* a = fe.graph.find_node_by_name("cd_enable.a_r");
+    const auto* q = fe.graph.find_node_by_name("cd_enable.q");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(fe.graph.edge_role(a->id, q->id), opencdc::ir::EdgeRole::Control);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_enable.q"), "error");
+}
+
+TEST(FrontendTest, EnabledSynchronizerIsStillAChain) {
+    // A same-clock enable on both stages is a Control edge: no stage
+    // predecessor, the 2FF chain stays verified.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_sync_enable", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_sync_enable.s0"), "info");
+}
+
+TEST(FrontendTest, ConditionGatedConsumerIsNoStage) {
+    // ack depends on s1 only through `if (s1 != ack)`: not a third stage,
+    // so no CDC006 and the chain stays a verified 2FF.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_gated_consumer", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_gated_consumer.s0"), "info");
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::Cdc006Analyzer cdc006;
+    EXPECT_TRUE(cdc006.analyze(fe.graph, dr.domains, dr.register_to_domain).empty());
+}
+
+TEST(FrontendTest, FirstStageReadThroughLogicIsFlagged) {
+    // The still-metastable first stage feeds logic into another register.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_tap_logic", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_tap_logic.s0"), "warning");
+}
+
+TEST(FrontendTest, FirstStageReadByOutputPortIsFlagged) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_tap_port", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_tap_port.s0"), "warning");
 }

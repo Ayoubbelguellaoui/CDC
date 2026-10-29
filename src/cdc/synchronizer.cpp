@@ -1,5 +1,9 @@
 #include "cdc/synchronizer.h"
 
+#include <algorithm>
+#include <unordered_set>
+#include <vector>
+
 namespace opencdc::cdc {
 
 std::string SynchronizerMatcher::validate_stage_reset(const ir::Graph& graph, uint64_t stage_id,
@@ -38,14 +42,33 @@ bool SynchronizerMatcher::validate_stage_fanout(const ir::Graph& graph, uint64_t
     if (!stage1)
         return true;
 
-    size_t same_domain_successors = 0;
-    for (uint64_t succ : graph.register_successors(stage1_id, false)) {
-        const ir::Node* n = graph.find_node(succ);
-        if (n && n->kind == ir::NodeKind::Register && n->clock_domain == stage1->clock_domain) {
-            same_domain_successors++;
-            if (same_domain_successors > 1)
+    // A stage before the last may still be metastable: it must feed the
+    // next stage only. Any other register it reaches - through nets, ports
+    // or logic - or a top-level output port reads the unresolved value.
+    size_t registers = 0;
+    std::unordered_set<uint64_t> visited{stage1_id};
+    std::vector<uint64_t> stack = graph.successors(stage1_id);
+    while (!stack.empty()) {
+        uint64_t cur = stack.back();
+        stack.pop_back();
+        if (!visited.insert(cur).second)
+            continue;
+        const ir::Node* n = graph.find_node(cur);
+        if (!n)
+            continue;
+        if (n->kind == ir::NodeKind::Register) {
+            if (++registers > 1)
                 return false;
+            continue;
         }
+        if (n->kind == ir::NodeKind::Port &&
+            std::count(n->hier_name.begin(), n->hier_name.end(), '.') == 1)
+            return false;  // a top-level output
+        if (n->kind != ir::NodeKind::Net && n->kind != ir::NodeKind::Port &&
+            n->kind != ir::NodeKind::Combinational)
+            continue;
+        for (uint64_t succ : graph.successors(cur))
+            stack.push_back(succ);
     }
     return true;
 }
@@ -108,7 +131,7 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
         return SyncPattern::None;
 
     bool has_cross_domain_register_pred = false;
-    for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false)) {
+    for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false, true)) {
         const ir::Node* pred = graph.find_node(pred_id);
         if (pred && pred->kind == ir::NodeKind::Register &&
             pred->clock_domain != dest->clock_domain) {
@@ -120,7 +143,7 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
         return SyncPattern::None;
 
     if (strict) {
-        for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false)) {
+        for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false, true)) {
             if (pred_id == dest_reg_id)
                 continue;
             const ir::Node* pred = graph.find_node(pred_id);
@@ -143,7 +166,7 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
 
     for (int stage = 0; stage < 10; ++stage) {
         uint64_t next_id = 0;
-        for (uint64_t succ : graph.register_successors(current, false)) {
+        for (uint64_t succ : graph.register_successors(current, false, true)) {
             const ir::Node* n = graph.find_node(succ);
             if (!n || n->kind != ir::NodeKind::Register)
                 continue;
@@ -156,7 +179,7 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
             // a consumer fed by independent paths, not a chain stage.
             {
                 size_t same_domain_preds = 0;
-                for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                for (uint64_t pred : graph.register_predecessors(succ, false, true)) {
                     const ir::Node* pn = graph.find_node(pred);
                     if (pn && pn->kind == ir::NodeKind::Register &&
                         pn->clock_domain == n->clock_domain) {
@@ -169,7 +192,7 @@ SyncPattern SynchronizerMatcher::find_pattern_for_dest(uint64_t dest_reg_id, con
             }
             if (strict && current != dest_reg_id) {
                 bool has_unexpected_pred = false;
-                for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                for (uint64_t pred : graph.register_predecessors(succ, false, true)) {
                     const ir::Node* pn = graph.find_node(pred);
                     if (!pn || pn->kind != ir::NodeKind::Register)
                         continue;
@@ -205,7 +228,7 @@ bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t de
     uint64_t current = dest_reg_id;
     for (int stage = 0; stage < 10; ++stage) {
         uint64_t next_id = 0;
-        for (uint64_t succ : graph.register_successors(current, false)) {
+        for (uint64_t succ : graph.register_successors(current, false, true)) {
             const ir::Node* n = graph.find_node(succ);
             if (!n || n->kind != ir::NodeKind::Register)
                 continue;
@@ -216,7 +239,7 @@ bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t de
             // Strict check: reject if successor has an unexpected same-domain predecessor
             if (strict && current != dest_reg_id) {
                 bool has_unexpected_pred = false;
-                for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                for (uint64_t pred : graph.register_predecessors(succ, false, true)) {
                     const ir::Node* pn = graph.find_node(pred);
                     if (!pn || pn->kind != ir::NodeKind::Register)
                         continue;
@@ -257,7 +280,7 @@ std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph
         if (node.kind != ir::NodeKind::Register)
             continue;
 
-        for (uint64_t pred_id : graph.register_predecessors(node.id, false)) {
+        for (uint64_t pred_id : graph.register_predecessors(node.id, false, true)) {
             const ir::Node* pred = graph.find_node(pred_id);
             if (!pred || pred->kind != ir::NodeKind::Register)
                 continue;
@@ -288,7 +311,7 @@ std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph
             uint64_t current = node.id;
             for (int stage = 0; stage < 10; ++stage) {
                 uint64_t next_id = 0;
-                for (uint64_t succ : graph.register_successors(current, false)) {
+                for (uint64_t succ : graph.register_successors(current, false, true)) {
                     const ir::Node* n = graph.find_node(succ);
                     if (!n || n->kind != ir::NodeKind::Register)
                         continue;
@@ -299,7 +322,7 @@ std::vector<SynchronizerChain> SynchronizerMatcher::match(const ir::Graph& graph
                     // Strict check: reject if successor has an unexpected same-domain predecessor
                     if (current != node.id) {
                         bool has_unexpected_pred = false;
-                        for (uint64_t pred : graph.register_predecessors(succ, false)) {
+                        for (uint64_t pred : graph.register_predecessors(succ, false, true)) {
                             const ir::Node* pn = graph.find_node(pred);
                             if (!pn || pn->kind != ir::NodeKind::Register)
                                 continue;
@@ -344,7 +367,7 @@ size_t SynchronizerMatcher::chain_depth(uint64_t dest_reg_id, const ir::Graph& g
         return 0;
 
     bool has_cross_domain_pred = false;
-    for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false)) {
+    for (uint64_t pred_id : graph.register_predecessors(dest_reg_id, false, true)) {
         const ir::Node* pred = graph.find_node(pred_id);
         if (pred && pred->kind == ir::NodeKind::Register &&
             pred->clock_domain != dest->clock_domain) {
@@ -363,7 +386,7 @@ size_t SynchronizerMatcher::chain_depth(uint64_t dest_reg_id, const ir::Graph& g
     uint64_t current = dest_reg_id;
     for (int stage = 0; stage < 10; ++stage) {
         uint64_t next_id = 0;
-        for (uint64_t succ : graph.register_successors(current, false)) {
+        for (uint64_t succ : graph.register_successors(current, false, true)) {
             const ir::Node* n = graph.find_node(succ);
             if (!n || n->kind != ir::NodeKind::Register)
                 continue;

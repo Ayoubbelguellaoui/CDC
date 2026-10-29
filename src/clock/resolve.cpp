@@ -110,11 +110,96 @@ std::string ClockResolver::trace_to_top_port(const std::string& port_name,
     return (dot != std::string::npos) ? current.substr(dot + 1) : current;
 }
 
+ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
+                                                 const ir::Graph& graph) const {
+    ClockInfo info;
+    info.name = clock_name;
+    const ir::Node* start = graph.find_node_by_name(clock_name);
+    if (!start)
+        return info;
+    auto is_top_port = [](const ir::Node& n) {
+        return n.kind == ir::NodeKind::Port &&
+               std::count(n.hier_name.begin(), n.hier_name.end(), '.') == 1;
+    };
+    if (is_top_port(*start))
+        return info;  // a top-level clock: the existing tracing names it
+
+    // Every top-level port reachable backwards; a child's output port is
+    // driven from inside the child (a clock gate's `clk_o = en & clk_i`),
+    // so ports are passed through like nets.
+    std::vector<const ir::Node*> roots;
+    bool through_child_output = false;
+    bool gated = false;
+    bool muxed = false;
+    std::unordered_set<uint64_t> visited{start->id};
+    std::vector<const ir::Node*> stack{start};
+    while (!stack.empty() && visited.size() < 4096) {
+        const ir::Node* n = stack.back();
+        stack.pop_back();
+        for (uint64_t pred_id : graph.predecessors(n->id)) {
+            const ir::Node* pred = graph.find_node(pred_id);
+            if (!pred || !visited.insert(pred_id).second)
+                continue;
+            if (is_top_port(*pred)) {
+                roots.push_back(pred);
+                continue;
+            }
+            if (pred->kind == ir::NodeKind::Register)
+                continue;  // a divided clock: the existing tracing folds it
+            if (pred->kind == ir::NodeKind::Combinational) {
+                gated = gated || pred->logic_type == ir::LogicType::And;
+                muxed = muxed || pred->logic_type == ir::LogicType::Mux;
+            }
+            if (pred->kind == ir::NodeKind::Port && n->kind == ir::NodeKind::Net &&
+                pred->module_path.size() > n->module_path.size())
+                through_child_output = true;
+            stack.push_back(pred);
+        }
+    }
+    // Only a clock that leaves a child instance through an output port is
+    // decided here; other shapes keep the existing tracing.
+    if (!through_child_output || roots.empty())
+        return info;
+
+    // A clock gate or mux reaches its enable or select too: the source is
+    // the top-level port that clocks registers directly.
+    const ir::Node* root = nullptr;
+    if (roots.size() == 1) {
+        root = roots.front();
+    } else {
+        for (const ir::Node* r : roots) {
+            bool clocks_registers = false;
+            for (const auto& node : graph.nodes()) {
+                if (node.kind == ir::NodeKind::Register && node.clock_domain == r->hier_name) {
+                    clocks_registers = true;
+                    break;
+                }
+            }
+            if (clocks_registers) {
+                if (root)
+                    return info;  // two clock sources: undecided
+                root = r;
+            }
+        }
+    }
+    if (!root)
+        return info;
+    size_t dot = root->hier_name.rfind('.');
+    info.root_clock = root->hier_name.substr(dot + 1);
+    info.is_gated = gated && !muxed;
+    info.is_muxed = muxed;
+    return info;
+}
+
 ClockInfo ClockResolver::trace_clock(const std::string& clock_name, const ir::Graph& graph) const {
     ClockInfo info;
     info.name = clock_name;
 
     ensure_port_index(graph);
+
+    ClockInfo through = trace_through_hierarchy(clock_name, graph);
+    if (!through.root_clock.empty())
+        return through;
 
     if (is_clock_port(clock_name, graph)) {
         info.root_clock = trace_to_top_port(clock_name, graph);

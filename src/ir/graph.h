@@ -175,6 +175,7 @@ class Graph {
     struct PathTraversalResult {
         std::vector<RegPath> paths;
         bool truncated = false;
+        bool truncated_by_depth = false;  // a path longer than MAX_PATH_DEPTH
         size_t max_paths = 0;
         size_t visited_nodes = 0;
         size_t visited_edges = 0;

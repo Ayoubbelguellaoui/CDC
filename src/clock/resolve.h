@@ -35,6 +35,12 @@ class ClockResolver {
 
     ClockInfo trace_clock(const std::string& clock_name, const ir::Graph& graph) const;
 
+    // Source of a clock through the hierarchy: walks the drivers of the
+    // clock node back through nets, instance ports and gating/muxing logic
+    // (not through registers) to the top-level ports that feed it. Empty
+    // root_clock when that does not decide the source.
+    ClockInfo trace_through_hierarchy(const std::string& clock_name, const ir::Graph& graph) const;
+
     mutable std::unordered_set<std::string> port_names_;
     mutable std::unordered_set<std::string> short_port_names_;
     mutable bool port_names_built_ = false;

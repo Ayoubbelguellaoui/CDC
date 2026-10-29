@@ -34,6 +34,7 @@ struct ClockResetInfo {
     // clock is named after the scope that declares it (see scope_paths_).
     const slang::ast::Symbol* clock_symbol = nullptr;
     std::string reset;
+    const slang::ast::Symbol* reset_symbol = nullptr;  // as clock_symbol
     ir::ResetPolarity reset_pol = ir::ResetPolarity::None;
     bool is_async_reset = false;
 };
@@ -68,6 +69,9 @@ class SlangAdapter : public IFrontend {
 
     static void propagate_gray_captures(ir::Graph& graph);
 
+    // Names each register's reset after its source (see reset_paths_).
+    void resolve_resets(ir::Graph& graph);
+
     static bool is_top_level_input(const std::string& hier_name, const ir::Graph& graph,
                                    const std::unordered_set<std::string>& top_level_ports);
 
@@ -88,6 +92,11 @@ class SlangAdapter : public IFrontend {
     // Unpacked arrays accessed only by static-index element selects: one
     // node per element (`s[0]`, `s[1]`) instead of one for the array.
     std::unordered_set<const slang::ast::Symbol*> split_arrays_;
+    // Register id -> hierarchical name of its reset as the register's
+    // module sees it (`top.u_dec.i_reset_n`); resolve_resets traces it to
+    // the source, so one reset net is one reset domain whatever the ports
+    // it passes are called.
+    std::unordered_map<uint64_t, std::string> reset_paths_;
 };
 
 }  // namespace opencdc::frontend

@@ -5,6 +5,7 @@
 #include "cdc/crossing.h"
 #include "cdc/pattern.h"
 #include "cdc/reconvergence.h"
+#include "cdc/reset_domain.h"
 #include "cdc/waiver.h"
 #include "clock/domain.h"
 #include "frontend/slang_adapter.h"
@@ -1191,4 +1192,55 @@ TEST(FrontendTest, BlackBoxPllOutputsAreClockSources) {
     cdc_clock::DomainExtractor de;
     EXPECT_EQ(de.extract(fe.graph).domains.size(), 2u);
     EXPECT_EQ(severity_into(findings, "CDC001", "fs_pll.u_sync.s[0]"), "info");
+}
+
+namespace {
+// CDC009 findings of `top` in reset_hier.sv, same-clock crossings checked.
+std::vector<cdc_ns::Finding> reset_crossings(const std::string& top,
+                                             opencdc::frontend::FrontendResult& fe) {
+    opencdc::frontend::SlangAdapter adapter;
+    fe = adapter.elaborate({fixture_path("reset_hier.sv")}, top);
+    if (!fe.ok)
+        return {};
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::ResetDomainAnalyzer ra;
+    auto rd = ra.extract_reset_domains(fe.graph);
+    opencdc::config::ResetPolicyConfig policy;
+    policy.check_same_clock_reset_crossings = true;
+    return ra.check_reset_crossings(fe.graph, rd.domains, dr.domains, dr.register_to_domain,
+                                    &policy);
+}
+}  // namespace
+
+TEST(FrontendTest, ResetRenamedByPortIsOneResetDomain) {
+    // One reset net, i_reset_n in one child and rst_n in the other: the
+    // reset is named after its source, so no reset crossing.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_crossings("rh_rename", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* a = fe.graph.find_node_by_name("rh_rename.u_a.q");
+    const auto* b = fe.graph.find_node_by_name("rh_rename.u_b.q");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(a->reset_signal, "rst_n");
+    EXPECT_EQ(b->reset_signal, "rst_n");
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC009") << f.reason;
+}
+
+TEST(FrontendTest, TwoResetsBehindOnePortNameCross) {
+    // The top reset and its synchronized copy both enter a child as rst_n:
+    // two reset domains, and u_a.q -> u_b.q crosses them.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_crossings("rh_two", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* b = fe.graph.find_node_by_name("rh_two.u_b.q");
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(b->reset_signal, "rh_two.rst_sync");
+    bool crossing = false;
+    for (const auto& f : findings)
+        crossing = crossing || (f.rule_id == "CDC009" && f.source_reg_name == "rh_two.u_a.q" &&
+                                f.dest_reg_name == "rh_two.u_b.q");
+    EXPECT_TRUE(crossing);
 }

@@ -83,6 +83,9 @@ class SlangAdapter : public IFrontend {
     // generate blocks). A signal is named after the scope that declares it,
     // not the one that reads it: a generate block reads its module's signals.
     std::unordered_map<const slang::ast::Scope*, std::string> scope_paths_;
+    // Unpacked arrays accessed only by static-index element selects: one
+    // node per element (`s[0]`, `s[1]`) instead of one for the array.
+    std::unordered_set<const slang::ast::Symbol*> split_arrays_;
 };
 
 }  // namespace opencdc::frontend

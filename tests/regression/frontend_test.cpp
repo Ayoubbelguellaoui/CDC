@@ -983,3 +983,79 @@ TEST(FrontendTest, GenerateLoopIterationsAreSeparateCopies) {
         EXPECT_TRUE(found) << dest;
     }
 }
+
+TEST(FrontendTest, UnpackedArrayPortsHaveWidth) {
+    // getBitWidth() is zero for unpacked types: ports, nets and registers of
+    // unpacked arrays got width 0 and failed graph validation.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_port");
+    ASSERT_TRUE(fe.ok) << (fe.errors.empty() ? "" : fe.errors.front());
+    for (const auto& n : fe.graph.nodes())
+        EXPECT_GT(n.width, 0u) << n.hier_name;
+    const auto* din = fe.graph.find_node_by_name("uarr_port.u_child.din");
+    ASSERT_NE(din, nullptr);
+    EXPECT_EQ(din->width, 16u);
+    const auto* mem = fe.graph.find_node_by_name("uarr_port.mem");
+    ASSERT_NE(mem, nullptr);
+    EXPECT_EQ(mem->kind, NodeKind::Register);
+    EXPECT_EQ(mem->width, 16u);
+}
+
+TEST(FrontendTest, UnpackedArraySynchronizerIsAChain) {
+    // Every access to s is a static index: s[0] and s[1] are registers of
+    // their own and the 2FF chain is recognized (CDC001 info, not error).
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_sync");
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(fe.graph.find_node_by_name("uarr_sync.s"), nullptr);
+    for (const char* name : {"uarr_sync.s[0]", "uarr_sync.s[1]"}) {
+        const auto* n = fe.graph.find_node_by_name(name);
+        ASSERT_NE(n, nullptr) << name;
+        EXPECT_EQ(n->kind, NodeKind::Register);
+        EXPECT_EQ(n->width, 1u);
+    }
+
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::CrossingAnalyzer ca;
+    auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+    const cdc_ns::Finding* cross = nullptr;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.dest_reg_name == "uarr_sync.s[0]")
+            cross = &f;
+    }
+    ASSERT_NE(cross, nullptr);
+    EXPECT_EQ(cross->severity, "info");
+    EXPECT_EQ(cross->detected_sync, cdc_ns::SyncPattern::TwoFF);
+}
+
+TEST(FrontendTest, UnpackedArrayWithVariableIndexStaysOneNode) {
+    // rf[sel] reads an element only known at run time: splitting rf would
+    // disconnect that read, so rf stays one node and the crossing is kept.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_mixed");
+    ASSERT_TRUE(fe.ok);
+    const auto* rf = fe.graph.find_node_by_name("uarr_mixed.rf");
+    ASSERT_NE(rf, nullptr);
+    EXPECT_EQ(rf->kind, NodeKind::Register);
+    EXPECT_EQ(fe.graph.find_node_by_name("uarr_mixed.rf[0]"), nullptr);
+
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::CrossingAnalyzer ca;
+    auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+    bool error = false;
+    for (const auto& f : findings)
+        error = error || (f.rule_id == "CDC001" && f.dest_reg_name == "uarr_mixed.b_r" &&
+                          f.severity == "error");
+    EXPECT_TRUE(error);
+}
+
+TEST(FrontendTest, ParameterIsNoSignal) {
+    // `d & MASK`: MASK is a constant of the elaboration, not a net.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_param");
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(fe.graph.find_node_by_name("uarr_param.MASK"), nullptr);
+    EXPECT_NE(fe.graph.find_node_by_name("uarr_param.q"), nullptr);
+}

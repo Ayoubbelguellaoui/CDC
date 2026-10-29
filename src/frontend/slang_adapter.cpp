@@ -160,6 +160,10 @@ static void apply_pattern_name_tags(ir::Node& node) {
     }
 }
 
+// Value of the variable of each procedural for loop being unrolled
+// (collect_assigns, ArrayAccessScan): an index of the body is static.
+static thread_local std::unordered_map<const Symbol*, int64_t> g_loop_values;
+
 // Index of an element select known at elaboration: a literal, a parameter
 // (a genvar is a parameter in each generate-loop entry), or + - * of those.
 static std::optional<int64_t> static_index(const Expression& expr) {
@@ -174,6 +178,8 @@ static std::optional<int64_t> static_index(const Expression& expr) {
     }
     if (e->kind == ExpressionKind::NamedValue) {
         auto& sym = static_cast<const NamedValueExpression&>(*e).symbol;
+        if (auto it = g_loop_values.find(&sym); it != g_loop_values.end())
+            return it->second;
         if (sym.kind != SymbolKind::Parameter)
             return std::nullopt;
         const ConstantValue* cv = &static_cast<const ParameterSymbol&>(sym).getValue();
@@ -199,6 +205,98 @@ static std::optional<int64_t> static_index(const Expression& expr) {
         }
     }
     return std::nullopt;
+}
+
+// Iteration values of a procedural loop `for (int i = A; i < B; i++)`:
+// one variable, static A and B, a < <= > >= != stop, ++ -- += -= of a
+// static step; at most 1024 iterations. nullopt for any other loop.
+struct LoopUnroll {
+    const Symbol* var = nullptr;
+    std::vector<int64_t> values;
+};
+
+static std::optional<LoopUnroll> unroll_for(const ForLoopStatement& fl) {
+    const Symbol* var = nullptr;
+    std::optional<int64_t> init;
+    if (fl.loopVars.size() == 1 && fl.loopVars[0]->getInitializer()) {
+        var = fl.loopVars[0];
+        init = static_index(*fl.loopVars[0]->getInitializer());
+    } else if (fl.loopVars.empty() && fl.initializers.size() == 1 &&
+               fl.initializers[0]->kind == ExpressionKind::Assignment) {
+        auto& a = static_cast<const AssignmentExpression&>(*fl.initializers[0]);
+        if (!a.isCompound() && a.left().kind == ExpressionKind::NamedValue) {
+            var = &static_cast<const NamedValueExpression&>(a.left()).symbol;
+            init = static_index(a.right());
+        }
+    }
+    if (!var || !init || !fl.stopExpr || fl.steps.size() != 1 ||
+        fl.stopExpr->kind != ExpressionKind::BinaryOp)
+        return std::nullopt;
+    auto is_var = [&](const Expression& e) {
+        const Expression* x = &e;
+        while (x->kind == ExpressionKind::Conversion)
+            x = &static_cast<const ConversionExpression&>(*x).operand();
+        return x->kind == ExpressionKind::NamedValue &&
+               &static_cast<const NamedValueExpression&>(*x).symbol == var;
+    };
+    auto& stop = static_cast<const BinaryExpression&>(*fl.stopExpr);
+    if (!is_var(stop.left()))
+        return std::nullopt;
+    auto bound = static_index(stop.right());
+    if (!bound)
+        return std::nullopt;
+
+    int64_t step = 0;
+    const Expression& st = *fl.steps[0];
+    if (st.kind == ExpressionKind::UnaryOp) {
+        auto& u = static_cast<const UnaryExpression&>(st);
+        if (!is_var(u.operand()))
+            return std::nullopt;
+        if (u.op == UnaryOperator::Preincrement || u.op == UnaryOperator::Postincrement)
+            step = 1;
+        else if (u.op == UnaryOperator::Predecrement || u.op == UnaryOperator::Postdecrement)
+            step = -1;
+    } else if (st.kind == ExpressionKind::Assignment) {
+        auto& a = static_cast<const AssignmentExpression&>(st);
+        auto k = static_index(a.right());
+        if (a.isCompound() && is_var(a.left()) && k) {
+            if (*a.op == BinaryOperator::Add)
+                step = *k;
+            else if (*a.op == BinaryOperator::Subtract)
+                step = -*k;
+        }
+    }
+    if (step == 0)
+        return std::nullopt;
+
+    LoopUnroll out;
+    out.var = var;
+    for (int64_t v = *init; out.values.size() <= 1024; v += step) {
+        bool go = false;
+        switch (stop.op) {
+            case BinaryOperator::LessThan:
+                go = v < *bound;
+                break;
+            case BinaryOperator::LessThanEqual:
+                go = v <= *bound;
+                break;
+            case BinaryOperator::GreaterThan:
+                go = v > *bound;
+                break;
+            case BinaryOperator::GreaterThanEqual:
+                go = v >= *bound;
+                break;
+            case BinaryOperator::Inequality:
+                go = v != *bound;
+                break;
+            default:
+                return std::nullopt;
+        }
+        if (!go)
+            return out;
+        out.values.push_back(v);
+    }
+    return std::nullopt;  // more than 1024 iterations
 }
 
 // The fixed-size unpacked array variable or net a named value refers to.
@@ -249,6 +347,17 @@ struct ArrayAccessScan : public ASTVisitor<ArrayAccessScan, true, true> {
     void handle(const NamedValueExpression& nv) {
         if (const Symbol* sym = unpacked_array_symbol(nv))
             whole.insert(sym);
+    }
+    void handle(const ForLoopStatement& fl) {
+        // An index by the variable of an unrollable loop is static.
+        auto unroll = unroll_for(fl);
+        if (!unroll || unroll->values.empty()) {
+            visitDefault(fl);
+            return;
+        }
+        g_loop_values[unroll->var] = unroll->values.front();
+        visitDefault(fl);
+        g_loop_values.erase(unroll->var);
     }
     void handle(const InstanceSymbol& inst) {
         for (const auto* connection : inst.getPortConnections()) {
@@ -420,6 +529,120 @@ static const Symbol* gray_xor_shared_symbol(const Expression& expr) {
 // nested calls (`outer(x)` calling `inner(x)`), up to a small depth.
 // `subst` maps enclosing-scope formal names to concrete signal names so
 // inner actuals that reference outer formals resolve transitively.
+static void collect_bitwise_gray(const Statement& stmt, const Symbol& var, const Symbol*& formal,
+                                 std::vector<bool>& ok, size_t depth);
+
+// The formal a function's local `var` is the gray code of, when the body
+// builds it bit by bit: `g[k] = b[k+1] ^ b[k]` for every k < W-1 and
+// `g[W-1] = b[W-1]` (loops unrolled), over one formal b. Else null.
+static const Symbol* bitwise_gray_formal(const SubroutineSymbol& sub, const Symbol& var) {
+    if (var.kind != SymbolKind::Variable)
+        return nullptr;
+    uint32_t width = static_cast<const VariableSymbol&>(var).getType().getBitWidth();
+    if (width < 2 || width > 1024)
+        return nullptr;
+    const Symbol* formal = nullptr;
+    std::vector<bool> ok(width, false);
+    collect_bitwise_gray(sub.getBody(), var, formal, ok, 0);
+    if (!formal)
+        return nullptr;
+    for (bool b : ok) {
+        if (!b)
+            return nullptr;
+    }
+    for (const auto* f : sub.getArguments()) {
+        if (f == formal)
+            return formal;
+    }
+    return nullptr;
+}
+
+// Records into `ok` the bits of `var` the statement assigns as gray bits.
+static void collect_bitwise_gray(const Statement& stmt, const Symbol& var, const Symbol*& formal,
+                                 std::vector<bool>& ok, size_t depth) {
+    if (depth > 16)
+        return;
+    switch (stmt.kind) {
+        case StatementKind::Block:
+            collect_bitwise_gray(static_cast<const BlockStatement&>(stmt).body, var, formal, ok,
+                                 depth + 1);
+            return;
+        case StatementKind::List:
+            for (auto* st : static_cast<const StatementList&>(stmt).list)
+                collect_bitwise_gray(*st, var, formal, ok, depth + 1);
+            return;
+        case StatementKind::ForLoop: {
+            auto& fl = static_cast<const ForLoopStatement&>(stmt);
+            auto unroll = unroll_for(fl);
+            if (!unroll)
+                return;
+            for (int64_t v : unroll->values) {
+                g_loop_values[unroll->var] = v;
+                collect_bitwise_gray(fl.body, var, formal, ok, depth + 1);
+            }
+            g_loop_values.erase(unroll->var);
+            return;
+        }
+        case StatementKind::ExpressionStatement:
+            break;
+        default:
+            return;
+    }
+    auto& es = static_cast<const ExpressionStatement&>(stmt);
+    if (es.expr.kind != ExpressionKind::Assignment)
+        return;
+    auto& asgn = static_cast<const AssignmentExpression&>(es.expr);
+    if (asgn.isCompound() || asgn.left().kind != ExpressionKind::ElementSelect)
+        return;
+    auto& lhs = static_cast<const ElementSelectExpression&>(asgn.left());
+    if (lhs.value().kind != ExpressionKind::NamedValue ||
+        &static_cast<const NamedValueExpression&>(lhs.value()).symbol != &var)
+        return;
+    auto k = static_index(lhs.selector());
+    if (!k || *k < 0 || *k >= static_cast<int64_t>(ok.size()))
+        return;
+    // The bit b[i] of a formal: its symbol and index.
+    auto formal_bit = [](const Expression& e) -> std::optional<std::pair<const Symbol*, int64_t>> {
+        const Expression* x = &e;
+        while (x->kind == ExpressionKind::Conversion)
+            x = &static_cast<const ConversionExpression&>(*x).operand();
+        if (x->kind != ExpressionKind::ElementSelect)
+            return std::nullopt;
+        auto& sel = static_cast<const ElementSelectExpression&>(*x);
+        if (sel.value().kind != ExpressionKind::NamedValue)
+            return std::nullopt;
+        auto i = static_index(sel.selector());
+        if (!i)
+            return std::nullopt;
+        return std::make_pair(&static_cast<const NamedValueExpression&>(sel.value()).symbol, *i);
+    };
+    auto use = [&](const Symbol* f) {
+        if (!formal)
+            formal = f;
+        return formal == f;
+    };
+    const Expression& rhs = asgn.right();
+    if (*k == static_cast<int64_t>(ok.size()) - 1) {
+        auto bit = formal_bit(rhs);
+        if (bit && bit->second == *k && use(bit->first))
+            ok[*k] = true;
+        return;
+    }
+    if (rhs.kind != ExpressionKind::BinaryOp)
+        return;
+    auto& bin = static_cast<const BinaryExpression&>(rhs);
+    if (bin.op != BinaryOperator::BinaryXor)
+        return;
+    auto l = formal_bit(bin.left());
+    auto r = formal_bit(bin.right());
+    if (!l || !r || l->first != r->first)
+        return;
+    bool adjacent =
+        (l->second == *k && r->second == *k + 1) || (l->second == *k + 1 && r->second == *k);
+    if (adjacent && use(l->first))
+        ok[*k] = true;
+}
+
 static bool call_computes_gray_of_named(const CallExpression& call, const std::string& prefix,
                                         const FormalMap& subst, size_t depth) {
     if (call.isSystemCall() || depth > 4)
@@ -504,6 +727,12 @@ static bool call_computes_gray_of_named(const CallExpression& call, const std::s
     for (const Expression* cand : candidates) {
         if (const Symbol* shared = gray_xor_shared_symbol(*cand)) {
             if (is_formal(shared) && local.find(sv_to_string(shared->name)) != local.end())
+                return true;
+        } else if (cand->kind == ExpressionKind::NamedValue) {
+            // `return g;` of a local built bit by bit (bitwise_gray_formal).
+            auto& sym = static_cast<const NamedValueExpression&>(*cand).symbol;
+            const Symbol* shared = bitwise_gray_formal(*sub, sym);
+            if (shared && local.find(sv_to_string(shared->name)) != local.end())
                 return true;
         } else if (cand->kind == ExpressionKind::Call) {
             auto& inner = static_cast<const CallExpression&>(*cand);
@@ -763,8 +992,19 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
             break;
         }
         case StatementKind::ForLoop: {
+            // Unrolled when the bounds are static: each iteration's
+            // shift_reg[i] <= shift_reg[i-1] names its elements.
             auto& fl = static_cast<const ForLoopStatement&>(stmt);
-            collect_assigns(fl.body, prefix, out, formal_map, depth);
+            auto unroll = unroll_for(fl);
+            if (!unroll) {
+                collect_assigns(fl.body, prefix, out, formal_map, depth);
+                break;
+            }
+            for (int64_t v : unroll->values) {
+                g_loop_values[unroll->var] = v;
+                collect_assigns(fl.body, prefix, out, formal_map, depth);
+            }
+            g_loop_values.erase(unroll->var);
             break;
         }
         case StatementKind::WhileLoop: {
@@ -1141,6 +1381,7 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     walk_instance(*top_inst, result.graph, "");
     g_scope_paths = nullptr;
     g_split_arrays = nullptr;
+    propagate_gray_captures(result.graph);
     if (result.graph.truncated()) {
         result.errors.push_back("IR graph exceeded node or edge safety limit; analysis incomplete");
         return result;
@@ -1154,6 +1395,38 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     result.warnings = std::move(frontend_warnings_);
     result.ok = true;
     return result;
+}
+
+// A net, port or register whose one data input is gray-coded carries the
+// same gray code: `assign w = g;`, a port connection, `g_r <= g;`. Run after
+// the walk - continuous assigns are visited after the procedural blocks.
+void SlangAdapter::propagate_gray_captures(ir::Graph& graph) {
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto& node : graph.nodes_mutable()) {
+            if (node.is_gray_coded ||
+                (node.kind != ir::NodeKind::Net && node.kind != ir::NodeKind::Port &&
+                 node.kind != ir::NodeKind::Register))
+                continue;
+            const ir::Node* input = nullptr;
+            bool one_input = true;
+            for (uint64_t pred_id : graph.predecessors(node.id)) {
+                if (pred_id == node.id)
+                    continue;  // a register holding its value
+                if (input && input->id != pred_id) {
+                    one_input = false;
+                    break;
+                }
+                input = graph.find_node(pred_id);
+            }
+            if (!one_input || !input)
+                continue;
+            if (input->is_gray_coded || input->logic_type == ir::LogicType::GrayEncoder) {
+                node.is_gray_coded = true;
+                changed = true;
+            }
+        }
+    }
 }
 
 void SlangAdapter::walk_instance(const InstanceSymbol& inst, ir::Graph& graph,
@@ -1415,8 +1688,16 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
         std::vector<std::pair<std::string, uint32_t>> rhs_ops;
         collect_named_values(asgn.right(), p, rhs_ops);
 
+        // `assign g = b ^ (b >> 1)` or `assign g = b2g(b)` encodes gray, as
+        // the same right-hand side does in a procedural block.
+        bool is_gray =
+            is_gray_xor_structure(asgn.right()) ||
+            (asgn.right().kind == ExpressionKind::Call &&
+             function_computes_gray(static_cast<const CallExpression&>(asgn.right()), p));
         ir::LogicType logic_type = ir::LogicType::Unknown;
-        if (asgn.right().kind == ExpressionKind::BinaryOp) {
+        if (is_gray) {
+            logic_type = ir::LogicType::GrayEncoder;
+        } else if (asgn.right().kind == ExpressionKind::BinaryOp) {
             auto& bin = static_cast<const BinaryExpression&>(asgn.right());
             if (bin.op == BinaryOperator::BinaryAnd)
                 logic_type = ir::LogicType::And;
@@ -1443,6 +1724,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 if (mutable_lhs) {
                     mutable_lhs->logic_type = logic_type;
                 }
+            }
+            if (is_gray) {
+                if (auto* mutable_lhs = graph.find_node_mutable(lhs_id))
+                    mutable_lhs->is_gray_coded = true;
             }
 
             if (logic_type != ir::LogicType::Unknown && logic_type != ir::LogicType::None) {
@@ -1535,7 +1820,13 @@ void SlangAdapter::resolve_clocks(ir::Graph& graph) {
             }
         }
 
-        if (node.root_clock.empty() || !is_top(node.root_clock)) {
+        // A black-box clock output (an instance port nothing drives) the
+        // resolver found is a root of its own, like a top-level port.
+        const ir::Node* root_node =
+            node.root_clock.empty() ? nullptr : graph.find_node_by_name(node.root_clock);
+        bool black_box_root = root_node && root_node->kind == ir::NodeKind::Port &&
+                              graph.predecessors(root_node->id).empty();
+        if (!black_box_root && (node.root_clock.empty() || !is_top(node.root_clock))) {
             std::string source = trace_to_top_level_source(node.clock_domain, graph);
             if (!source.empty() && source != node.clock_domain) {
                 node.root_clock = source;

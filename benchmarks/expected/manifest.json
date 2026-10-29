@@ -450,7 +450,7 @@
   "corpus_fifo_gray": {
    "file": "benchmarks/corpus/fifo/async_fifo_gray.sv",
    "top": "async_fifo_gray",
-   "description": "Correct async FIFO (gray pointers, 2FF pointer sync); flags CDC001 error on wide pointer chains - documents the width==1 sync limitation",
+   "description": "Correct async FIFO (gray pointers, 2FF pointer sync): the wide gray pointer chains are verified synchronizers (CDC001 info)",
    "expected": {
     "positive_controls": [],
     "negative_controls": [],
@@ -474,18 +474,18 @@
       "rule": "CDC001",
       "source": "async_fifo_gray.wr_ptr_gray",
       "dest": "async_fifo_gray.wr_ptr_gray_sync1",
-      "expected": "fires-today",
-      "note": "CORRECT design flagged: 5-bit pointer sync chains are never classified (width==1 required), so no verified_safe downgrade"
+      "expected": "info",
+      "note": "Gray-coded 5-bit pointer through a destination-wide 2FF chain: verified_safe (a gray source may use stages as wide as the destination)"
      },
      {
       "rule": "CDC001",
       "source": "async_fifo_gray.rd_ptr_gray",
       "dest": "async_fifo_gray.rd_ptr_gray_sync1",
-      "expected": "fires-today",
-      "note": "Same wide-chain limitation on the read-pointer leg"
+      "expected": "info",
+      "note": "Same on the read-pointer leg"
      }
     ],
-    "known_behavior": "No CDC002 (gray recognized for the multi-bit rule). CDC013 warnings on the synced pointers are also emitted; not asserted."
+    "known_behavior": "No CDC002 (gray recognized for the multi-bit rule); both pointer crossings CDC001 info / verified_safe."
    }
   },
   "corpus_fifo_binary": {
@@ -921,8 +921,8 @@
   },
   {
    "rule": "CDC001",
-   "gap": "Only single-bit (width == 1) synchronizer chains are classified; wide (multi-bit) 2FF chains - e.g. gray-coded async-FIFO pointer syncs - never downgrade to verified_safe, so correct FIFOs report CDC001 error",
-   "severity": "medium",
+   "gap": "Wide (multi-bit) synchronizer chains are classified only for gray-coded sources reaching the chain through nets and ports; a wide chain of any other source still reports CDC001 error (per-bit synchronization of a binary bus is unsafe, so this is by design)",
+   "severity": "low",
    "evidence": "benchmarks/corpus/fifo/async_fifo_gray.sv ambiguous controls"
   },
   {

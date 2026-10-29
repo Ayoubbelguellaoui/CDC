@@ -3,6 +3,7 @@
 #include <string>
 
 #include "cdc/crossing.h"
+#include "cdc/pattern.h"
 #include "cdc/reconvergence.h"
 #include "cdc/waiver.h"
 #include "clock/domain.h"
@@ -1061,6 +1062,7 @@ TEST(FrontendTest, ParameterIsNoSignal) {
 }
 
 namespace {
+// Elaborates and analyzes like the CLI: patterns annotated, recognizer set.
 std::vector<cdc_ns::Finding> analyze_fixture(const std::string& file, const std::string& top,
                                              opencdc::frontend::FrontendResult& fe) {
     opencdc::frontend::SlangAdapter adapter;
@@ -1069,7 +1071,10 @@ std::vector<cdc_ns::Finding> analyze_fixture(const std::string& file, const std:
         return {};
     cdc_clock::DomainExtractor de;
     auto dr = de.extract(fe.graph);
+    cdc_ns::PatternRecognizer recognizer;
+    recognizer.analyze_and_annotate(fe.graph);
     cdc_ns::CrossingAnalyzer ca;
+    ca.set_pattern_recognizer(&recognizer);
     return ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
 }
 }  // namespace
@@ -1116,4 +1121,74 @@ TEST(FrontendTest, PathSearchIsLinearInDiamonds) {
         crossing = crossing || (f.rule_id == "CDC001" && f.dest_reg_name == "op_diamonds.q");
     }
     EXPECT_TRUE(crossing);
+}
+
+namespace {
+// Severity of the CDC001 (or CDC002) finding into `dest`; empty when none.
+std::string severity_into(const std::vector<cdc_ns::Finding>& findings, const std::string& rule,
+                          const std::string& dest) {
+    for (const auto& f : findings) {
+        if (f.rule_id == rule && f.dest_reg_name == dest)
+            return f.severity;
+    }
+    return "";
+}
+}  // namespace
+
+TEST(FrontendTest, LoopShiftedArraySynchronizerIsAChain) {
+    // `for (int i = 1; i < STAGES; i++) s[i] <= s[i-1];` is unrolled: the
+    // elements are the stages of a 2FF chain.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_loop_sync", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_NE(fe.graph.find_node_by_name("fs_loop_sync.u_sync.s[1]"), nullptr);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_loop_sync.u_sync.s[0]"), "info");
+}
+
+TEST(FrontendTest, BitwiseGrayPointerSynchronizedByWideChain) {
+    // A gray pointer built bit by bit in a function, assigned continuously
+    // and registered, through a 5-bit 2FF chain: a verified synchronizer.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_gray_ptr", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* g = fe.graph.find_node_by_name("fs_gray_ptr.cnt_g_r");
+    ASSERT_NE(g, nullptr);
+    EXPECT_TRUE(g->is_gray_coded);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_gray_ptr.u_sync.s[0]"), "info");
+    EXPECT_EQ(severity_into(findings, "CDC002", "fs_gray_ptr.u_sync.s[0]"), "");
+}
+
+TEST(FrontendTest, GrayDecodedBeforeCrossingIsMultiBit) {
+    // A gray register decoded to binary before it crosses: the crossing
+    // carries binary, so CDC001 and CDC002 stay errors.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_gray_decoded", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_gray_decoded.u_sync.s[0]"), "error");
+    EXPECT_EQ(severity_into(findings, "CDC002", "fs_gray_decoded.u_sync.s[0]"), "error");
+}
+
+TEST(FrontendTest, BinaryPointerThroughWideChainIsUnsafe) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_bin_ptr", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_bin_ptr.u_sync.s[0]"), "error");
+    EXPECT_EQ(severity_into(findings, "CDC002", "fs_bin_ptr.u_sync.s[0]"), "error");
+}
+
+TEST(FrontendTest, BlackBoxPllOutputsAreClockSources) {
+    // Undriven outputs of a black-box PLL, through a buffer instance and
+    // into a submodule port: one domain per PLL output, named by its path.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_pll", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* a = fe.graph.find_node_by_name("fs_pll.a_r");
+    const auto* s1 = fe.graph.find_node_by_name("fs_pll.u_sync.s[1]");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(s1, nullptr);
+    EXPECT_EQ(a->root_clock, "fs_pll.u_pll.clk0");
+    EXPECT_EQ(s1->root_clock, "fs_pll.u_pll.clk1");
+    cdc_clock::DomainExtractor de;
+    EXPECT_EQ(de.extract(fe.graph).domains.size(), 2u);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_pll.u_sync.s[0]"), "info");
 }

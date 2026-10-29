@@ -26,8 +26,10 @@
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
+#include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/AllTypes.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
@@ -64,6 +66,19 @@ struct MultiAssignInfo {
 
 static std::string sv_to_string(std::string_view sv) {
     return std::string(sv);
+}
+
+// Width of a signal of type `t` in bits. getBitWidth() is zero for every
+// non-numeric type - unpacked arrays, unpacked structs and unions - so
+// those take their $bits; a type with no static size (dynamic array, queue,
+// string) counts as one bit. A graph node never gets width zero.
+static uint32_t type_width(const Type& t) {
+    uint64_t width = t.getBitWidth();
+    if (width == 0)
+        width = t.getBitstreamWidth();
+    if (width == 0)
+        return 1;
+    return static_cast<uint32_t>(std::min<uint64_t>(width, UINT32_MAX));
 }
 
 // SlangAdapter::scope_paths_ while elaborate() walks the design, for the
@@ -145,12 +160,119 @@ static void apply_pattern_name_tags(ir::Node& node) {
     }
 }
 
+// Index of an element select known at elaboration: a literal, a parameter
+// (a genvar is a parameter in each generate-loop entry), or + - * of those.
+static std::optional<int64_t> static_index(const Expression& expr) {
+    const Expression* e = &expr;
+    while (e->kind == ExpressionKind::Conversion)
+        e = &static_cast<const ConversionExpression&>(*e).operand();
+    if (e->kind == ExpressionKind::IntegerLiteral) {
+        SVInt v = static_cast<const IntegerLiteral&>(*e).getValue();
+        if (v.hasUnknown())
+            return std::nullopt;
+        return v.as<int64_t>();
+    }
+    if (e->kind == ExpressionKind::NamedValue) {
+        auto& sym = static_cast<const NamedValueExpression&>(*e).symbol;
+        if (sym.kind != SymbolKind::Parameter)
+            return std::nullopt;
+        const ConstantValue* cv = &static_cast<const ParameterSymbol&>(sym).getValue();
+        if (!cv->isInteger() || cv->integer().hasUnknown())
+            return std::nullopt;
+        return cv->integer().as<int64_t>();
+    }
+    if (e->kind == ExpressionKind::BinaryOp) {
+        auto& bin = static_cast<const BinaryExpression&>(*e);
+        auto l = static_index(bin.left());
+        auto r = static_index(bin.right());
+        if (!l || !r)
+            return std::nullopt;
+        switch (bin.op) {
+            case BinaryOperator::Add:
+                return *l + *r;
+            case BinaryOperator::Subtract:
+                return *l - *r;
+            case BinaryOperator::Multiply:
+                return *l * *r;
+            default:
+                return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+// The fixed-size unpacked array variable or net a named value refers to.
+static const Symbol* unpacked_array_symbol(const Expression& expr) {
+    if (expr.kind != ExpressionKind::NamedValue)
+        return nullptr;
+    auto& sym = static_cast<const NamedValueExpression&>(expr).symbol;
+    if (sym.kind != SymbolKind::Variable && sym.kind != SymbolKind::Net)
+        return nullptr;
+    const Type& t = static_cast<const ValueSymbol&>(sym).getType();
+    return t.isUnpackedArray() && t.isFixedSize() ? &sym : nullptr;
+}
+
+// Unpacked arrays whose every access is an element select with a static
+// index (SlangAdapter::split_arrays_ while elaborate() walks the design):
+// each element is a node of its own, `s[0]`, `s[1]`, so a synchronizer
+// written as an array is a chain. Any other array is one node.
+static thread_local const std::unordered_set<const Symbol*>* g_split_arrays = nullptr;
+
+// Node name of the element select `value[selector]` when value is a split
+// array, else nullopt.
+static std::optional<std::string> split_element_name(const ElementSelectExpression& es,
+                                                     const std::string& prefix) {
+    const Symbol* sym = unpacked_array_symbol(es.value());
+    if (!sym || !g_split_arrays || !g_split_arrays->count(sym))
+        return std::nullopt;
+    auto index = static_index(es.selector());
+    if (!index)
+        return std::nullopt;
+    return symbol_path(*sym, prefix) + "[" + std::to_string(*index) + "]";
+}
+
+// Finds the unpacked arrays to split: those accessed only through element
+// selects with a static index. A bare reference (whole-array assignment,
+// port connection, variable index) keeps the array one node.
+struct ArrayAccessScan : public ASTVisitor<ArrayAccessScan, true, true> {
+    std::unordered_set<const Symbol*> indexed;
+    std::unordered_set<const Symbol*> whole;
+
+    void handle(const ElementSelectExpression& es) {
+        if (unpacked_array_symbol(es.value()) && static_index(es.selector())) {
+            indexed.insert(unpacked_array_symbol(es.value()));
+            es.selector().visit(*this);
+            return;
+        }
+        visitDefault(es);
+    }
+    void handle(const NamedValueExpression& nv) {
+        if (const Symbol* sym = unpacked_array_symbol(nv))
+            whole.insert(sym);
+    }
+    void handle(const InstanceSymbol& inst) {
+        for (const auto* connection : inst.getPortConnections()) {
+            if (connection && connection->getExpression())
+                connection->getExpression()->visit(*this);
+        }
+        visitDefault(inst);
+    }
+
+    std::unordered_set<const Symbol*> split() const {
+        std::unordered_set<const Symbol*> out;
+        for (const Symbol* sym : indexed) {
+            if (!whole.count(sym))
+                out.insert(sym);
+        }
+        return out;
+    }
+};
+
 static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expression& expr,
                                                                       const std::string& prefix) {
     if (expr.kind == ExpressionKind::NamedValue) {
         auto& nv = static_cast<const NamedValueExpression&>(expr);
-        return std::make_pair(symbol_path(nv.symbol, prefix),
-                              static_cast<uint32_t>(expr.type->getBitWidth()));
+        return std::make_pair(symbol_path(nv.symbol, prefix), type_width(*expr.type));
     }
     if (expr.kind == ExpressionKind::MemberAccess) {
         auto& member = static_cast<const MemberAccessExpression&>(expr);
@@ -158,15 +280,17 @@ static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expr
         if (!base)
             return std::nullopt;
         base->first += "." + sv_to_string(member.member.name);
-        base->second = static_cast<uint32_t>(expr.type->getBitWidth());
+        base->second = type_width(*expr.type);
         return base;
     }
     if (expr.kind == ExpressionKind::ElementSelect) {
         auto& select = static_cast<const ElementSelectExpression&>(expr);
+        if (auto element = split_element_name(select, prefix))
+            return std::make_pair(*element, type_width(*expr.type));
         auto base = extract_lvalue(select.value(), prefix);
         if (!base)
             return std::nullopt;
-        base->second = static_cast<uint32_t>(expr.type->getBitWidth());
+        base->second = type_width(*expr.type);
         return base;
     }
     if (expr.kind == ExpressionKind::RangeSelect) {
@@ -174,7 +298,7 @@ static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expr
         auto base = extract_lvalue(select.value(), prefix);
         if (!base)
             return std::nullopt;
-        base->second = static_cast<uint32_t>(expr.type->getBitWidth());
+        base->second = type_width(*expr.type);
         return base;
     }
     return std::nullopt;
@@ -211,6 +335,10 @@ static void collect_named_values(const Expression& expr, const std::string& pref
                                  const FormalMap& formal_map) {
     if (expr.kind == ExpressionKind::NamedValue) {
         auto& nv = static_cast<const NamedValueExpression&>(expr);
+        // Parameters (genvars included) and enum values are constants of
+        // the elaboration, not signals: no node, no edge.
+        if (nv.symbol.kind == SymbolKind::Parameter || nv.symbol.kind == SymbolKind::EnumValue)
+            return;
         std::string raw_name = sv_to_string(nv.symbol.name);
         auto fm_it = formal_map.find(raw_name);
         std::string name;
@@ -222,7 +350,7 @@ static void collect_named_values(const Expression& expr, const std::string& pref
             name = symbol_path(nv.symbol, prefix);
             if (nv.symbol.kind == SymbolKind::Variable) {
                 auto& var = static_cast<const VariableSymbol&>(nv.symbol);
-                width = var.getType().getBitWidth();
+                width = type_width(var.getType());
             }
         }
         out.push_back({name, width});
@@ -244,6 +372,10 @@ static void collect_named_values(const Expression& expr, const std::string& pref
         collect_named_values(ma.value(), prefix, out, formal_map);
     } else if (expr.kind == ExpressionKind::ElementSelect) {
         auto& es = static_cast<const ElementSelectExpression&>(expr);
+        if (auto element = split_element_name(es, prefix)) {
+            out.push_back({*element, type_width(*expr.type)});
+            return;
+        }
         collect_named_values(es.value(), prefix, out, formal_map);
         collect_named_values(es.selector(), prefix, out, formal_map);
     } else if (expr.kind == ExpressionKind::RangeSelect) {
@@ -1000,10 +1132,15 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
         return result;
     }
 
+    ArrayAccessScan scan;
+    top_inst->visit(scan);
+    split_arrays_ = scan.split();
+    g_split_arrays = &split_arrays_;
     scope_paths_.clear();
     g_scope_paths = &scope_paths_;
     walk_instance(*top_inst, result.graph, "");
     g_scope_paths = nullptr;
+    g_split_arrays = nullptr;
     if (result.graph.truncated()) {
         result.errors.push_back("IR graph exceeded node or edge safety limit; analysis incomplete");
         return result;
@@ -1044,13 +1181,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 if (!graph.find_node_by_name(port_name)) {
                     auto opt_loc = to_source_loc(port.location);
                     ir::SourceLoc ir_loc = opt_loc.value_or(ir::SourceLoc{});
-                    uint32_t port_width = 1;
-                    const auto& port_type = port.getType();
-                    if (port_type.isIntegral()) {
-                        port_width = static_cast<uint32_t>(port_type.getBitWidth());
-                        if (port_width == 0)
-                            port_width = 1;
-                    }
+                    uint32_t port_width = type_width(port.getType());
                     graph.add_port(port_name, port_width, ir_loc, p, module_type);
                 }
                 break;

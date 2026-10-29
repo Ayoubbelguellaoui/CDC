@@ -126,7 +126,9 @@ ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
 
     // Every top-level port reachable backwards; a child's output port is
     // driven from inside the child (a clock gate's `clk_o = en & clk_i`),
-    // so ports are passed through like nets.
+    // so ports are passed through like nets. An instance output port
+    // nothing drives is the output of a black box (a PLL/MMCM model): a
+    // clock source too.
     std::vector<const ir::Node*> roots;
     bool through_child_output = false;
     bool gated = false;
@@ -140,7 +142,8 @@ ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
             const ir::Node* pred = graph.find_node(pred_id);
             if (!pred || !visited.insert(pred_id).second)
                 continue;
-            if (is_top_port(*pred)) {
+            if (is_top_port(*pred) ||
+                (pred->kind == ir::NodeKind::Port && graph.predecessors(pred_id).empty())) {
                 roots.push_back(pred);
                 continue;
             }
@@ -167,6 +170,7 @@ ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
     if (roots.size() == 1) {
         root = roots.front();
     } else {
+        // Undecided by direct clocking: the one top-level port, if one.
         for (const ir::Node* r : roots) {
             bool clocks_registers = false;
             for (const auto& node : graph.nodes()) {
@@ -181,11 +185,22 @@ ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
                 root = r;
             }
         }
+        if (!root) {
+            for (const ir::Node* r : roots) {
+                if (!is_top_port(*r))
+                    continue;
+                if (root)
+                    return info;
+                root = r;
+            }
+        }
     }
     if (!root)
         return info;
+    // A top-level port is named by its port name, like the other tracing;
+    // a black-box output by its hierarchical name (CLKOUT0 is not unique).
     size_t dot = root->hier_name.rfind('.');
-    info.root_clock = root->hier_name.substr(dot + 1);
+    info.root_clock = is_top_port(*root) ? root->hier_name.substr(dot + 1) : root->hier_name;
     info.is_gated = gated && !muxed;
     info.is_muxed = muxed;
     return info;

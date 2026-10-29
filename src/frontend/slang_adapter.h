@@ -66,6 +66,8 @@ class SlangAdapter : public IFrontend {
 
     void resolve_clocks(ir::Graph& graph);
 
+    static void propagate_gray_captures(ir::Graph& graph);
+
     static bool is_top_level_input(const std::string& hier_name, const ir::Graph& graph,
                                    const std::unordered_set<std::string>& top_level_ports);
 

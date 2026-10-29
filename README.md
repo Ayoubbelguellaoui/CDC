@@ -13,7 +13,7 @@ the product. Surrounding features (HTML, SARIF, LSP, Python) are secondary.
 | Proven structurally | Heuristic / shape match | Not covered |
 |---|---|---|
 | Register-to-register path between different root clocks | Gray-code encoder of the form `x ^ (x >> 1)` | Formal handshake / FIFO protocol |
-| Single-bit 2FF / 3FF / N-stage synchronizer chain at the destination | Async-FIFO pointer *shape* (gray pointers + synced r/w) | Payload data guarded by a handshake |
+| Single-bit 2FF / 3FF / N-stage synchronizer chain at the destination (destination-wide for a gray-coded source) | Async-FIFO pointer *shape* (gray pointers + synced r/w) | Payload data guarded by a handshake |
 | ICG as `AND(clk, en)` (RTL) and library ICG cells (netlist) | Handshake *shape* (valid/ready or req/ack pair only) | Recirculation-mux / mux-feedback synchronizers |
 | False paths and multicycle paths **if declared** (SDC / YAML) | Gated / muxed clocks via explicit `assign` | Timing / metastability proof |
 | Muxed-clock and gated-clock *presence* on a crossing | Generated / divided clocks folded into the parent root | |
@@ -26,9 +26,9 @@ Details: [docs/what-we-can-prove.md](docs/what-we-can-prove.md).
 These are measured gaps, not a wish list. Evidence lives in
 `benchmarks/expected/manifest.json` (`known_gaps`) and the corpus fixtures.
 
-- **Wide 2FF chains** (e.g. gray async-FIFO pointer syncs) are not classified
-  as synchronizers. Only `width == 1` chains downgrade CDC001 to
-  `info` / `verified_safe`. Correct FIFOs still report CDC001 error.
+- **Wide 2FF chains** are classified as synchronizers only for a gray-coded
+  source that reaches the chain through nets and ports (async-FIFO pointers);
+  a wide chain of any other bus still reports CDC001 error, by design.
 - **Handshake payload** is not covered. A valid/ready (or req/ack) pair can
   be recognized; the data bus it guards still fires CDC001 + CDC002.
 - **CDC006** (comb between sync stages) is effectively unreachable on

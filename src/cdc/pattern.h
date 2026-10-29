@@ -96,7 +96,10 @@ class PatternRecognizer {
     bool is_async_fifo_ptr(uint64_t node_id, const ir::Graph& graph) const;
     bool is_pulse_sync(uint64_t node_id, const ir::Graph& graph) const;
     bool is_toggle_sync(uint64_t node_id, const ir::Graph& graph) const;
-    bool is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
+    // wire_path: only nets and ports lie between src and dst, so a gray
+    // code arrives unchanged; a gray source is safe only then.
+    bool is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+                                   bool wire_path = true) const;
 
     bool verify_async_fifo(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
                            std::string& failure_reason) const;

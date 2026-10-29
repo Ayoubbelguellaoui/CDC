@@ -759,7 +759,7 @@
   "corpus_hier_soc": {
    "file": "benchmarks/corpus/hierarchical/hierarchical_soc.sv",
    "top": "hierarchical_soc",
-   "description": "3-level hierarchy: traced top-reg path (clean) + untraced instance-to-instance violation (known gap)",
+   "description": "3-level hierarchy: traced top-reg path (clean) + instance-to-instance violation through a parent wire",
    "expected": {
     "positive_controls": [
      {
@@ -767,15 +767,12 @@
       "source": "hierarchical_soc.topo_src_clean",
       "dest": "hierarchical_soc.u_island.meta_ff",
       "note": "Parent-reg to child-instance input traces; hierarchical names intact"
-     }
-    ],
-    "ambiguous_controls": [
+     },
      {
       "rule": "CDC001",
-      "source": "hierarchical_soc.sender_status",
-      "dest": "hierarchical_soc.q_raw_ff",
-      "expected": "no_finding",
-      "note": "REAL unsync crossing, INVISIBLE: instance-output -> wire -> instance-input boundaries are not traced (false negative)"
+      "source": "hierarchical_soc.u_sender.status_ff",
+      "dest": "hierarchical_soc.u_consumer.q_raw_ff",
+      "note": "Instance output -> parent wire -> instance input is traced: the unsynchronized clk_a -> clk_b status crossing between two child instances"
      }
     ],
     "absent_rules": [
@@ -933,12 +930,6 @@
    "gap": "Verified handshakes cover only the valid/ready (req/ack) control pair; the payload data the handshake guards is still reported CDC001+CDC002 even for protocol-correct 4-phase and 2-phase designs",
    "severity": "medium",
    "evidence": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv, handshake_2phase_req_ack.sv ambiguous controls"
-  },
-  {
-   "rule": "CDC001",
-   "gap": "Instance-output -> wire -> instance-input paths are not traced: a source register inside a child module feeding another child module's input is invisible (false negatives on hierarchical designs)",
-   "severity": "high",
-   "evidence": "benchmarks/corpus/hierarchical/hierarchical_soc.sv ambiguous control"
   },
   {
    "rule": "CDC006",

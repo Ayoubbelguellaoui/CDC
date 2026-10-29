@@ -16,7 +16,8 @@ the product. Surrounding features (HTML, SARIF, LSP, Python) are secondary.
 | Single-bit 2FF / 3FF / N-stage synchronizer chain at the destination | Async-FIFO pointer *shape* (gray pointers + synced r/w) | Payload data guarded by a handshake |
 | ICG as `AND(clk, en)` (RTL) and library ICG cells (netlist) | Handshake *shape* (valid/ready or req/ack pair only) | Recirculation-mux / mux-feedback synchronizers |
 | False paths and multicycle paths **if declared** (SDC / YAML) | Gated / muxed clocks via explicit `assign` | Timing / metastability proof |
-| Muxed-clock and gated-clock *presence* on a crossing | Generated / divided clocks folded into the parent root | Hierarchical instance-output → instance-input tracing |
+| Muxed-clock and gated-clock *presence* on a crossing | Generated / divided clocks folded into the parent root | |
+| Crossings through instance ports, in both directions, and clocks out of clock-gate instances | | |
 
 Details: [docs/what-we-can-prove.md](docs/what-we-can-prove.md).
 
@@ -30,8 +31,6 @@ These are measured gaps, not a wish list. Evidence lives in
   `info` / `verified_safe`. Correct FIFOs still report CDC001 error.
 - **Handshake payload** is not covered. A valid/ready (or req/ack) pair can
   be recognized; the data bus it guards still fires CDC001 + CDC002.
-- **Hierarchical FN**: a register inside one child instance driving another
-  child instance through a parent wire is not traced.
 - **CDC006** (comb between sync stages) is effectively unreachable on
   single-driver RTL — the bug surfaces as CDC001 instead.
 - **Generated / divided clocks** are folded into the parent root domain. No

@@ -1059,3 +1059,61 @@ TEST(FrontendTest, ParameterIsNoSignal) {
     EXPECT_EQ(fe.graph.find_node_by_name("uarr_param.MASK"), nullptr);
     EXPECT_NE(fe.graph.find_node_by_name("uarr_param.q"), nullptr);
 }
+
+namespace {
+std::vector<cdc_ns::Finding> analyze_fixture(const std::string& file, const std::string& top,
+                                             opencdc::frontend::FrontendResult& fe) {
+    opencdc::frontend::SlangAdapter adapter;
+    fe = adapter.elaborate({fixture_path(file)}, top);
+    if (!fe.ok)
+        return {};
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::CrossingAnalyzer ca;
+    return ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+}
+}  // namespace
+
+TEST(FrontendTest, OutputPortReachesParent) {
+    // A child register drives a parent register of another clock through
+    // an output port: the output connection must reach the parent net.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("output_port.sv", "op_cross", fe);
+    ASSERT_TRUE(fe.ok);
+    bool found = false;
+    for (const auto& f : findings)
+        found = found || (f.rule_id == "CDC001" && f.source_reg_name == "op_cross.u_a.q" &&
+                          f.dest_reg_name == "op_cross.q" && f.severity == "error");
+    EXPECT_TRUE(found);
+}
+
+TEST(FrontendTest, ClockGateInstanceKeepsRootClock) {
+    // clk_o of a clock gate instance is clk_i gated: one domain, no
+    // crossing (the output port was taken for a root clock of its own).
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("output_port.sv", "op_cgate", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("op_cgate.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "clk_i");
+    EXPECT_TRUE(q->clock_is_gated);
+    cdc_clock::DomainExtractor de;
+    EXPECT_EQ(de.extract(fe.graph).domains.size(), 1u);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC001") << f.reason;
+}
+
+TEST(FrontendTest, PathSearchIsLinearInDiamonds) {
+    // 7 four-way diamonds give 4^7 simple paths to one register, above the
+    // 10000-path limit: the search keeps one path per destination and is
+    // not truncated.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("output_port.sv", "op_diamonds", fe);
+    ASSERT_TRUE(fe.ok);
+    bool crossing = false;
+    for (const auto& f : findings) {
+        EXPECT_NE(f.rule_id, "CDC010") << f.reason;
+        crossing = crossing || (f.rule_id == "CDC001" && f.dest_reg_name == "op_diamonds.q");
+    }
+    EXPECT_TRUE(crossing);
+}

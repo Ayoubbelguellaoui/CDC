@@ -113,8 +113,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             trunc.source_loc = src->loc;
             trunc.bus_width = src->width;
             trunc.source_module_path = src->module_path;
-            trunc.reason = "Path traversal truncated at " + std::to_string(path_result.max_paths) +
-                           " paths from register '" + src->hier_name + "'.";
+            trunc.reason =
+                (path_result.truncated_by_depth
+                     ? "Path traversal truncated at depth " + std::to_string(ir::MAX_PATH_DEPTH)
+                     : "Path traversal truncated at " + std::to_string(path_result.max_paths) +
+                           " paths") +
+                " from register '" + src->hier_name + "'.";
             trunc.safety_status = SafetyStatus::Ambiguous;
             trunc.safety_provenance = "Path traversal truncated — some crossings may be missed";
             local_findings.push_back(std::move(trunc));

@@ -1201,8 +1201,12 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                     if (!expression)
                         continue;
 
+                    // An output connection arrives as the Assignment
+                    // `parent = <port>`: its lvalue is the parent signal
+                    // (operand collection of an Assignment finds nothing,
+                    // which cut every signal leaving an instance).
                     std::vector<std::pair<std::string, uint32_t>> parent_values;
-                    collect_named_values(*expression, p, parent_values);
+                    collect_actual_values(*expression, p, parent_values);
                     if (parent_values.empty())
                         continue;
 

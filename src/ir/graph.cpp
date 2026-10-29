@@ -1,6 +1,7 @@
 #include "ir/graph.h"
 
 #include <algorithm>
+#include <deque>
 #include <unordered_set>
 
 namespace opencdc::ir {
@@ -388,7 +389,9 @@ Graph::PathTraversalResult Graph::find_register_paths(uint64_t src_reg_id, size_
         std::unordered_set<uint64_t> on_path;  // O(1) cycle check
     };
 
-    std::vector<Frame> stack;
+    // Breadth-first: with each node expanded once, the recorded path to a
+    // destination is a shortest one, and MAX_PATH_DEPTH bounds its length.
+    std::deque<Frame> stack;
     {
         std::unordered_set<uint64_t> on_path;
         on_path.insert(src_reg_id);
@@ -398,14 +401,23 @@ Graph::PathTraversalResult Graph::find_register_paths(uint64_t src_reg_id, size_
 
     // Local per-call edge tracking (not a member — must stay local)
     std::unordered_set<uint64_t> visited_edges;
+    // Every consumer keeps one path per destination register, so each data
+    // node is expanded once and each destination recorded once: enumerating
+    // every simple path is exponential in the combinational fan-in/fan-out
+    // (a CPU core hit max_paths from one register).
+    std::unordered_set<uint64_t> expanded;
+    std::unordered_set<uint64_t> reached;
 
     while (!stack.empty()) {
-        Frame f = std::move(stack.back());
-        stack.pop_back();
+        Frame f = std::move(stack.front());
+        stack.pop_front();
+        if (!expanded.insert(f.node_id).second)
+            continue;
 
         // E3: Depth limit (on_path.size() == number of nodes on current path)
         if (f.on_path.size() > MAX_PATH_DEPTH) {
             result.truncated = true;
+            result.truncated_by_depth = true;
             continue;
         }
 
@@ -429,6 +441,8 @@ Graph::PathTraversalResult Graph::find_register_paths(uint64_t src_reg_id, size_
             }
 
             if (sn->kind == NodeKind::Register) {
+                if (!reached.insert(succ).second)
+                    continue;
                 // Materialise path only at register endpoints
                 RegPath rp;
                 rp.src_reg_id = src_reg_id;
@@ -447,7 +461,7 @@ Graph::PathTraversalResult Graph::find_register_paths(uint64_t src_reg_id, size_
                     result.truncated = true;
                     return result;
                 }
-            } else if (is_data_node(sn->kind)) {
+            } else if (is_data_node(sn->kind) && !expanded.count(succ)) {
                 Frame nf;
                 nf.node_id = succ;
                 nf.rope_idx = succ_rope_idx;

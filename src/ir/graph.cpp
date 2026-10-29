@@ -184,6 +184,13 @@ uint64_t Graph::add_combinational(const std::string& hier_name, LogicType logic_
     return id;
 }
 
+EdgeRole Graph::edge_role(uint64_t from_id, uint64_t to_id) const {
+    if (from_id > UINT32_MAX || to_id > UINT32_MAX)
+        return EdgeRole::Data;
+    auto it = edge_roles_.find((from_id << 32) | to_id);
+    return it == edge_roles_.end() ? EdgeRole::Data : it->second;
+}
+
 void Graph::add_edge(uint64_t from_id, uint64_t to_id) {
     add_edge(from_id, to_id, EdgeRole::Data);
 }
@@ -207,8 +214,19 @@ void Graph::add_edge(uint64_t from_id, uint64_t to_id, EdgeRole role) {
         }
     } else {
         uint64_t edge_key = (from_id << 32) | to_id;
-        if (!edge_set_.insert(edge_key).second)
+        if (!edge_set_.insert(edge_key).second) {
+            // An existing edge that is also data is a Data edge.
+            if (role == EdgeRole::Data && edge_roles_.erase(edge_key)) {
+                for (auto& e : edges_) {
+                    if (e.from_id == from_id && e.to_id == to_id)
+                        e.role = EdgeRole::Data;
+                }
+                ++generation_;
+            }
             return;
+        }
+        if (role != EdgeRole::Data)
+            edge_roles_[edge_key] = role;
     }
 
     edges_.push_back({from_id, to_id, role});
@@ -263,11 +281,15 @@ void Graph::remove_nodes(const std::vector<uint64_t>& dead_ids) {
     adj_.clear();
     radj_.clear();
     edge_set_.clear();
+    edge_roles_.clear();
     for (const auto& e : edges_) {
         adj_[e.from_id].push_back(e.to_id);
         radj_[e.to_id].push_back(e.from_id);
-        if (e.from_id <= UINT32_MAX && e.to_id <= UINT32_MAX)
+        if (e.from_id <= UINT32_MAX && e.to_id <= UINT32_MAX) {
             edge_set_.insert((e.from_id << 32) | e.to_id);
+            if (e.role != EdgeRole::Data)
+                edge_roles_[(e.from_id << 32) | e.to_id] = e.role;
+        }
     }
     mark_dirty();
 }
@@ -305,15 +327,20 @@ size_t Graph::register_count() const {
                          [](const Node& n) { return n.kind == NodeKind::Register; });
 }
 
-std::vector<uint64_t> Graph::register_predecessors(uint64_t id, bool traverse_combinational) const {
+std::vector<uint64_t> Graph::register_predecessors(uint64_t id, bool traverse_combinational,
+                                                   bool data_only) const {
     std::vector<uint64_t> result;
-    std::vector<uint64_t> stack = predecessors(id);
+    std::vector<std::pair<uint64_t, uint64_t>> stack;  // (node, reached from)
+    for (uint64_t x : predecessors(id))
+        stack.push_back({x, id});
     std::unordered_set<uint64_t> visited;
     visited.insert(id);
 
     while (!stack.empty()) {
-        uint64_t cur = stack.back();
+        auto [cur, from] = stack.back();
         stack.pop_back();
+        if (data_only && edge_role(cur, from) != EdgeRole::Data)
+            continue;
         if (visited.count(cur))
             continue;
         visited.insert(cur);
@@ -326,25 +353,29 @@ std::vector<uint64_t> Graph::register_predecessors(uint64_t id, bool traverse_co
             result.push_back(cur);
         } else if (is_data_node(n->kind) &&
                    (traverse_combinational || n->kind != NodeKind::Combinational)) {
-            auto preds = predecessors(cur);
-            for (uint64_t p : preds) {
-                if (!visited.count(p))
-                    stack.push_back(p);
+            for (uint64_t x : predecessors(cur)) {
+                if (!visited.count(x))
+                    stack.push_back({x, cur});
             }
         }
     }
     return result;
 }
 
-std::vector<uint64_t> Graph::register_successors(uint64_t id, bool traverse_combinational) const {
+std::vector<uint64_t> Graph::register_successors(uint64_t id, bool traverse_combinational,
+                                                 bool data_only) const {
     std::vector<uint64_t> result;
-    std::vector<uint64_t> stack = successors(id);
+    std::vector<std::pair<uint64_t, uint64_t>> stack;  // (node, reached from)
+    for (uint64_t x : successors(id))
+        stack.push_back({x, id});
     std::unordered_set<uint64_t> visited;
     visited.insert(id);
 
     while (!stack.empty()) {
-        uint64_t cur = stack.back();
+        auto [cur, from] = stack.back();
         stack.pop_back();
+        if (data_only && edge_role(from, cur) != EdgeRole::Data)
+            continue;
         if (visited.count(cur))
             continue;
         visited.insert(cur);
@@ -357,10 +388,9 @@ std::vector<uint64_t> Graph::register_successors(uint64_t id, bool traverse_comb
             result.push_back(cur);
         } else if (is_data_node(n->kind) &&
                    (traverse_combinational || n->kind != NodeKind::Combinational)) {
-            auto succs = successors(cur);
-            for (uint64_t s : succs) {
-                if (!visited.count(s))
-                    stack.push_back(s);
+            for (uint64_t x : successors(cur)) {
+                if (!visited.count(x))
+                    stack.push_back({x, cur});
             }
         }
     }

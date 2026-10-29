@@ -160,10 +160,15 @@ class Graph {
     std::vector<uint64_t> successors(uint64_t id) const;
     std::vector<uint64_t> predecessors(uint64_t id) const;
 
-    std::vector<uint64_t> register_predecessors(uint64_t id,
-                                                bool traverse_combinational = true) const;
-    std::vector<uint64_t> register_successors(uint64_t id,
-                                              bool traverse_combinational = true) const;
+    // data_only: follow Data edges only, not Control (an if/case condition)
+    // - a register gated by a value is no stage of a chain carrying it.
+    std::vector<uint64_t> register_predecessors(uint64_t id, bool traverse_combinational = true,
+                                                bool data_only = false) const;
+    std::vector<uint64_t> register_successors(uint64_t id, bool traverse_combinational = true,
+                                              bool data_only = false) const;
+
+    // Role of the edge from -> to (Data when unknown).
+    EdgeRole edge_role(uint64_t from_id, uint64_t to_id) const;
 
     struct RegPath {
         uint64_t src_reg_id;
@@ -231,6 +236,8 @@ class Graph {
     std::unordered_map<uint64_t, std::vector<uint64_t>> adj_;
     std::unordered_map<uint64_t, std::vector<uint64_t>> radj_;
     std::unordered_set<uint64_t> edge_set_;
+    // Roles other than Data, by packed edge key (most edges are Data).
+    std::unordered_map<uint64_t, EdgeRole> edge_roles_;
     uint64_t next_id_ = 1;
     uint64_t generation_ = 0;
     bool truncated_ = false;

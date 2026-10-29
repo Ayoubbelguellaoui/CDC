@@ -77,16 +77,22 @@ TEST_F(StressTest, TotalFindingCount) {
     // +26 once output port connections reach the parent: the crossings
     // between instances of the top module (7 CDC001, see below, and their
     // CDC002/004/005/007/008 companions) were invisible before.
-    EXPECT_EQ(findings.size(), 61u);
+    // +8 once if/case conditions are inputs of the assignments they guard:
+    // u_reconvergence.consumer_valid_r (clk_axi) reaches u_handshake only as
+    // the enable `if (src_valid && ...)` of three clk_bridge registers (3
+    // CDC001, 3 CDC003, 2 CDC008 companions).
+    EXPECT_EQ(findings.size(), 69u);
 }
 
 TEST_F(StressTest, Cdc001_UnsynchronizedCrossing) {
     // 16 inside the modules + 7 between instances of the top module, e.g.
     // the clk_uart -> clk_bridge crossing section 1 of the fixture describes
     // (u_uart_rx.rx_data -> u_sync_2ff_bus.src_reg).
-    EXPECT_EQ(count_by_rule("CDC001"), 23);
+    // + 3 through an enable (see TotalFindingCount).
+    EXPECT_EQ(count_by_rule("CDC001"), 26);
     EXPECT_TRUE(has_finding("CDC001", "u_sync_2ff_bus.src_reg"));
     EXPECT_TRUE(has_finding("CDC001", "u_uart_rx.rx_data"));
+    EXPECT_TRUE(has_finding("CDC001", "u_reconvergence.consumer_valid_r"));
 }
 
 TEST_F(StressTest, Cdc002_MultiBitCrossing) {
@@ -99,7 +105,8 @@ TEST_F(StressTest, Cdc002_MultiBitCrossing) {
 }
 
 TEST_F(StressTest, Cdc003_ReconvergenceDetected) {
-    EXPECT_EQ(count_by_rule("CDC003"), 1);
+    // + 3 on the consumer_valid_r enable crossing into u_handshake.
+    EXPECT_EQ(count_by_rule("CDC003"), 4);
     EXPECT_TRUE(has_finding("CDC003", "u_reconvergence.src_ff"));
 }
 

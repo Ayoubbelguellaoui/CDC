@@ -56,6 +56,8 @@ struct AssignInfo {
     // Stages of a packed shift chain (`s <= {s[W-1:0], tail}`), 0 when the
     // assignment is not such a chain; applied to the destination node.
     uint32_t packed_depth = 0;
+    // rhs is a signal of an enclosing if/case condition: a Control edge.
+    bool is_control = false;
 };
 
 struct MultiAssignInfo {
@@ -848,6 +850,30 @@ static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::stri
     return stages >= 2 ? stages : 0;
 }
 
+// Signals of the if/case conditions enclosing the statement collect_assigns
+// is in: every assignment depends on them as much as on its operands (an
+// asynchronous flag used as an enable is a crossing). The block's own
+// asynchronous reset is left out - that is the reset-domain check.
+static thread_local std::vector<std::pair<std::string, uint32_t>> g_control_operands;
+static thread_local const Symbol* g_async_reset_symbol = nullptr;
+
+// Pushes the signals of `cond` onto g_control_operands; returns how many.
+static size_t push_control_operands(const Expression& cond, const std::string& prefix,
+                                    const FormalMap& formal_map) {
+    std::vector<std::pair<std::string, uint32_t>> vals;
+    collect_named_values(cond, prefix, vals, formal_map);
+    std::string reset =
+        g_async_reset_symbol ? symbol_path(*g_async_reset_symbol, prefix) : std::string();
+    size_t n = 0;
+    for (auto& v : vals) {
+        if (v.first == reset)
+            continue;
+        g_control_operands.push_back(std::move(v));
+        ++n;
+    }
+    return n;
+}
+
 static void collect_assigns(const Statement& stmt, const std::string& prefix,
                             std::vector<AssignInfo>& out, const FormalMap& formal_map = {},
                             size_t depth = 0) {
@@ -952,6 +978,17 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                                            logic_type, true, packed_depth});
                         }
                     }
+                    // Control dependencies: a direct edge each, beside the
+                    // data path (merged into it, an enable would hide a
+                    // synchronizer chain behind logic).
+                    for (const auto& [c, c_width] : g_control_operands) {
+                        bool data = false;
+                        for (const auto& op : rhs_ops)
+                            data = data || op.first == c;
+                        if (!data && c != resolved_lhs)
+                            out.push_back({resolved_lhs, c, l_width, c_width, false,
+                                           ir::LogicType::Unknown, false, 0, true});
+                    }
                 }
             } else if (es.expr.kind == ExpressionKind::Call) {
                 auto& call = static_cast<const CallExpression&>(es.expr);
@@ -986,9 +1023,13 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::Conditional: {
             auto& ifst = static_cast<const ConditionalStatement&>(stmt);
+            size_t pushed = 0;
+            for (const auto& cond : ifst.conditions)
+                pushed += push_control_operands(*cond.expr, prefix, formal_map);
             collect_assigns(ifst.ifTrue, prefix, out, formal_map, depth);
             if (ifst.ifFalse)
                 collect_assigns(*ifst.ifFalse, prefix, out, formal_map, depth);
+            g_control_operands.resize(g_control_operands.size() - pushed);
             break;
         }
         case StatementKind::ForLoop: {
@@ -1034,10 +1075,12 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::Case: {
             auto& cs = static_cast<const CaseStatement&>(stmt);
+            size_t pushed = push_control_operands(cs.expr, prefix, formal_map);
             for (auto& item : cs.items)
                 collect_assigns(*item.stmt, prefix, out, formal_map, depth);
             if (cs.defaultCase)
                 collect_assigns(*cs.defaultCase, prefix, out, formal_map, depth);
+            g_control_operands.resize(g_control_operands.size() - pushed);
             break;
         }
         case StatementKind::PatternCase: {
@@ -1603,7 +1646,9 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                     ir::SourceLoc ir_loc = opt_loc.value_or(ir::SourceLoc{});
 
                     std::vector<AssignInfo> assigns;
+                    g_async_reset_symbol = cr.is_async_reset ? cr.reset_symbol : nullptr;
                     collect_assigns(proc.getBody(), p, assigns);
+                    g_async_reset_symbol = nullptr;
 
                     std::unordered_map<std::string, uint64_t> comb_nodes;
                     for (auto& a : assigns) {
@@ -1699,7 +1744,9 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 src ? src->id
                                     : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
                             if (src_id && dst_id)
-                                graph.add_edge(src_id, dst_id);
+                                graph.add_edge(
+                                    src_id, dst_id,
+                                    a.is_control ? ir::EdgeRole::Control : ir::EdgeRole::Data);
                         }
                     }
                 }

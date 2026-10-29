@@ -528,10 +528,9 @@
      "CDC008",
      "CDC009",
      "CDC011",
-     "CDC012",
-     "CDC013"
+     "CDC012"
     ],
-    "known_behavior": "Pointer registers deliberately avoid wr_ptr/rd_ptr/wptr/rptr naming so only the structural (non-)gray property is tested."
+    "known_behavior": "Pointer registers deliberately avoid wr_ptr/rd_ptr/wptr/rptr naming so only the structural (non-)gray property is tested. CDC013 on mem: the writes are gated by full, derived from the unsynchronized read pointer (an if-condition dependency); not asserted."
    }
   },
   "corpus_hs_4phase": {

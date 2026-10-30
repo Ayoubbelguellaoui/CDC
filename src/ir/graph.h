@@ -60,6 +60,10 @@ struct Node {
     // Mux: how many leading logic_inputs are the select (IR operand order
     // [select..., true, false]); 0 means the one-select default.
     uint32_t mux_select_inputs = 0;
+    // The branches (if/case arms of a procedural block) that assign this
+    // node: a data register and a request register loaded in the same
+    // branch form a handshake (CrossingAnalyzer::handshake_qualifier).
+    std::vector<std::string> load_branches;
     std::string logic_expression;
 
     // Pattern recognition flags

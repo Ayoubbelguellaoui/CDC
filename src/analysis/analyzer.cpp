@@ -1,6 +1,7 @@
 #include "analysis/analyzer.h"
 
 #include <memory>
+#include <unordered_set>
 
 #include "cdc/blackbox.h"
 #include "cdc/cdc006.h"
@@ -321,8 +322,21 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
     auto reset_findings = reset_domain_analyzer.check_reset_crossings(
         result.graph, {}, result.domains.domains, result.domains.register_to_domain,
         &cfg.reset_policy);
+    // synchronized_crossings_safe: no CDC009 on a pair whose crossing is
+    // verified (a synchronizer or a handshake payload): the source's reset is
+    // one more asynchronous change, resolved as the crossing's data is.
+    std::unordered_set<uint64_t> verified_pairs;
+    if (cfg.reset_policy.synchronized_crossings_safe) {
+        for (const auto& f : findings) {
+            if (f.rule_id == "CDC001" && f.safety_status == cdc::SafetyStatus::VerifiedSafe &&
+                f.source_reg_id <= UINT32_MAX && f.dest_reg_id <= UINT32_MAX)
+                verified_pairs.insert((f.source_reg_id << 32) | f.dest_reg_id);
+        }
+    }
     for (auto& f : reset_findings) {
         if (cfg.suppress_reset_crossings && f.rule_id == "CDC009")
+            continue;
+        if (f.rule_id == "CDC009" && verified_pairs.count((f.source_reg_id << 32) | f.dest_reg_id))
             continue;
         findings.push_back(std::move(f));
     }

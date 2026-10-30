@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <string_view>
 #include <system_error>
@@ -59,6 +60,9 @@ struct AssignInfo {
     uint32_t packed_depth = 0;
     // rhs is a signal of an enclosing if/case condition: a Control edge.
     bool is_control = false;
+    // The if/case arm the assignment is in (empty outside any): see
+    // ir::Node::load_branches.
+    std::string branch;
 };
 
 struct MultiAssignInfo {
@@ -908,6 +912,15 @@ static std::vector<ConcatTarget> split_concat_assignment(const Expression& lhs,
 // asynchronous flag used as an enable is a crossing). The block's own
 // asynchronous reset is left out - that is the reset-domain check.
 static thread_local std::vector<std::pair<std::string, uint32_t>> g_control_operands;
+// The if/case arms enclosing the statement collect_assigns is in, each named
+// by its statement and arm ("if@<stmt>:T", "case@<stmt>#2").
+static thread_local std::vector<std::string> g_branch_path;
+
+static std::string branch_id(const void* stmt, const std::string& arm) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%p", stmt);
+    return std::string(buf) + arm;
+}
 static thread_local const Symbol* g_async_reset_symbol = nullptr;
 
 // Pushes the signals of `cond` onto g_control_operands; returns how many.
@@ -949,6 +962,20 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::ExpressionStatement: {
             auto& es = static_cast<const ExpressionStatement&>(stmt);
+            // Every assignment this statement adds is in the current arm.
+            struct BranchTag {
+                std::vector<AssignInfo>& out;
+                size_t first;
+                ~BranchTag() {
+                    if (g_branch_path.empty())
+                        return;
+                    std::string path;
+                    for (const auto& b : g_branch_path)
+                        path += b + "/";
+                    for (size_t i = first; i < out.size(); ++i)
+                        out[i].branch = path;
+                }
+            } branch_tag{out, out.size()};
             if (es.expr.kind == ExpressionKind::Assignment &&
                 static_cast<const AssignmentExpression&>(es.expr).left().kind ==
                     ExpressionKind::Concatenation) {
@@ -1099,9 +1126,18 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
             size_t pushed = 0;
             for (const auto& cond : ifst.conditions)
                 pushed += push_control_operands(*cond.expr, prefix, formal_map);
+            // An if testing nothing but the block's asynchronous reset (or a
+            // constant) opens no arm: its else holds every register of the
+            // block, which loading together does not relate.
+            if (pushed)
+                g_branch_path.push_back(branch_id(&stmt, ":T"));
             collect_assigns(ifst.ifTrue, prefix, out, formal_map, depth);
+            if (pushed)
+                g_branch_path.back() = branch_id(&stmt, ":F");
             if (ifst.ifFalse)
                 collect_assigns(*ifst.ifFalse, prefix, out, formal_map, depth);
+            if (pushed)
+                g_branch_path.pop_back();
             g_control_operands.resize(g_control_operands.size() - pushed);
             break;
         }
@@ -1149,10 +1185,16 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         case StatementKind::Case: {
             auto& cs = static_cast<const CaseStatement&>(stmt);
             size_t pushed = push_control_operands(cs.expr, prefix, formal_map);
-            for (auto& item : cs.items)
+            g_branch_path.push_back(std::string());
+            size_t arm = 0;
+            for (auto& item : cs.items) {
+                g_branch_path.back() = branch_id(&stmt, "#" + std::to_string(arm++));
                 collect_assigns(*item.stmt, prefix, out, formal_map, depth);
+            }
+            g_branch_path.back() = branch_id(&stmt, "#default");
             if (cs.defaultCase)
                 collect_assigns(*cs.defaultCase, prefix, out, formal_map, depth);
+            g_branch_path.pop_back();
             g_control_operands.resize(g_control_operands.size() - pushed);
             break;
         }
@@ -1882,6 +1924,13 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                        ? graph.add_net(a.lhs, a.lhs_width, ir_loc, p, module_type)
                                        : graph.add_register(a.lhs, cr.clock, a.lhs_width, ir_loc, p,
                                                             module_type));
+                        if (!a.branch.empty() && !a.is_control) {
+                            if (auto* n = graph.find_node_mutable(dst_id)) {
+                                if (std::find(n->load_branches.begin(), n->load_branches.end(),
+                                              a.branch) == n->load_branches.end())
+                                    n->load_branches.push_back(a.branch);
+                            }
+                        }
                         if (dst && cr.clock != "comb" && dst->kind != ir::NodeKind::Register) {
                             auto* mutable_dst = graph.find_node_mutable(dst_id);
                             if (mutable_dst) {

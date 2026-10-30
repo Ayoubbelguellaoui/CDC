@@ -557,15 +557,15 @@
       "rule": "CDC001",
       "source": "handshake_4phase_valid_ready.hs_data",
       "dest": "handshake_4phase_valid_ready.hs_capture",
-      "expected": "fires-today",
-      "note": "Correct-by-protocol payload flagged: is_verified_safe_crossing verifies only the valid/ready pair, not the data it guards"
+      "expected": "info",
+      "note": "Handshake payload: loaded with the request, captured under its synchronized copy - verified (CDC001 info)"
      },
      {
       "rule": "CDC002",
       "source": "handshake_4phase_valid_ready.hs_data",
       "dest": "handshake_4phase_valid_ready.hs_capture",
-      "expected": "fires-today",
-      "note": "Same limitation on the multi-bit rule"
+      "expected": "no_finding",
+      "note": "A held handshake payload has no bit skew: no CDC002"
      }
     ],
     "absent_rules": [
@@ -606,15 +606,15 @@
       "rule": "CDC001",
       "source": "handshake_2phase_req_ack.hs_data",
       "dest": "handshake_2phase_req_ack.hs_capture",
-      "expected": "fires-today",
-      "note": "Correct-by-protocol payload flagged (control-pair-only verification)"
+      "expected": "info",
+      "note": "Handshake payload: loaded with the request, captured under its synchronized copy - verified (CDC001 info)"
      },
      {
       "rule": "CDC002",
       "source": "handshake_2phase_req_ack.hs_data",
       "dest": "handshake_2phase_req_ack.hs_capture",
-      "expected": "fires-today",
-      "note": "Same limitation on the multi-bit rule"
+      "expected": "no_finding",
+      "note": "A held handshake payload has no bit skew: no CDC002"
      }
     ],
     "absent_rules": [
@@ -1593,16 +1593,26 @@
       "severity": "info"
      }
     ],
-    "negative_controls": [],
-    "ambiguous_controls": [
+    "negative_controls": [
      {
       "rule": "CDC001",
       "source": "cf_handshake4.data_a",
       "dest": "cf_handshake4.data_b",
       "exact": true,
-      "severity": "error",
+      "severity": [
+       "error",
+       "warning"
+      ],
       "expected": "no_finding",
-      "note": "correct by protocol: the source holds the payload while the synchronized qualifier is active - opencdc does not verify protocols (known gap), so the payload is CDC001 + CDC002 error; waive it"
+      "note": "handshake payload: loaded with the request, captured under its synchronized copy - verified (CDC001 info)"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_handshake4.data_a",
+      "dest": "cf_handshake4.data_b",
+      "exact": true,
+      "expected": "no_finding",
+      "note": "a held payload has no bit skew"
      }
     ]
    }
@@ -1621,16 +1631,26 @@
       "severity": "info"
      }
     ],
-    "negative_controls": [],
-    "ambiguous_controls": [
+    "negative_controls": [
      {
       "rule": "CDC001",
       "source": "cf_data_enable.data_a",
       "dest": "cf_data_enable.data_b",
       "exact": true,
-      "severity": "error",
+      "severity": [
+       "error",
+       "warning"
+      ],
       "expected": "no_finding",
-      "note": "correct by protocol: the source holds the payload while the synchronized qualifier is active - opencdc does not verify protocols (known gap), so the payload is CDC001 + CDC002 error; waive it"
+      "note": "handshake payload: loaded with the request, captured under its synchronized copy - verified (CDC001 info)"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_data_enable.data_a",
+      "dest": "cf_data_enable.data_b",
+      "exact": true,
+      "expected": "no_finding",
+      "note": "a held payload has no bit skew"
      }
     ]
    }
@@ -2053,6 +2073,30 @@
      }
     ]
    }
+  },
+  "conf_counter_qualified": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_counter_qualified",
+   "description": "Conformance: a free-running counter captured under a synchronized request it is not loaded with",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_counter_qualified.cnt",
+      "dest": "cf_counter_qualified.q",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_counter_qualified.cnt",
+      "dest": "cf_counter_qualified.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
   }
  },
  "known_gaps": [
@@ -2075,9 +2119,9 @@
   },
   {
    "rule": "CDC001/CDC002",
-   "gap": "Verified handshakes cover only the valid/ready (req/ack) control pair; the payload data the handshake guards is still reported CDC001+CDC002 even for protocol-correct 4-phase and 2-phase designs",
+   "gap": "A handshake payload is verified when it is loaded in the same if/case arm as the request whose synchronized copy gates its capture (PULP cdc_2phase / cdc_4phase); a FIFO memory read under synchronized pointers is no such handshake, so FIFO payloads are still reported CDC001 + CDC002",
    "severity": "medium",
-   "evidence": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv, handshake_2phase_req_ack.sv ambiguous controls; benchmarks/corpus/conformance/cdc_protocols.sv cf_handshake4, cf_data_enable"
+   "evidence": "benchmarks/corpus/handshake/*.sv, benchmarks/corpus/conformance/cdc_protocols.sv"
   },
   {
    "rule": "CDC006",

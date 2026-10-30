@@ -130,3 +130,19 @@ module cf_data_enable (input logic clk_a, input logic clk_b, input logic load,
     always_ff @(posedge clk_b) if (v1 != v2) data_b <= data_a;
     assign q = data_b;
 endmodule
+
+// A free-running counter captured under a synchronized request it is not
+// loaded with: the counter changes while it is sampled - an error.
+module cf_counter_qualified (input logic clk_a, input logic clk_b, input logic valid,
+                             output logic [7:0] q);
+    logic req, r0, r1, r2;
+    logic [7:0] cnt;
+    always_ff @(posedge clk_a) cnt <= cnt + 1'b1;
+    always_ff @(posedge clk_a) if (valid) req <= ~req;
+    always_ff @(posedge clk_b) begin
+        r0 <= req;
+        r1 <= r0;
+        r2 <= r1;
+    end
+    always_ff @(posedge clk_b) if (r1 != r2) q <= cnt;
+endmodule

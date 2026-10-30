@@ -144,6 +144,16 @@ class CrossingAnalyzer {
     bool is_path_through_safe_blackbox(const ir::Graph& graph,
                                        const std::vector<uint64_t>& path_node_ids) const;
 
+    // The payload of a handshake: src is loaded in the same if/case arm as a
+    // request register whose synchronizer chain, in dst's clock, gates dst
+    // through a condition (data held with the request, used once the request
+    // is synchronized - PULP cdc_2phase / cdc_4phase). Returns the gating
+    // synchronizer stage, else null. `request` is set to the request.
+    const ir::Node* handshake_qualifier(
+        uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+        const std::unordered_map<uint64_t, size_t>& register_to_domain,
+        const ir::Node*& request) const;
+
     SynchronizerMatcher sync_matcher_;
     PatternRecognizer* pattern_recognizer_ = nullptr;
     const clock::ClockConstraints* clock_constraints_ = nullptr;

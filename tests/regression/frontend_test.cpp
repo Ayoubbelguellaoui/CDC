@@ -1544,3 +1544,22 @@ TEST(FrontendTest, ResetCrossingIntoASynchronizer) {
         EXPECT_EQ(found, !safe) << "synchronized_crossings_safe=" << safe;
     }
 }
+
+TEST(FrontendTest, HandshakePayloads) {
+    struct {
+        const char* top;
+        const char* dest;
+        const char* severity;
+    } cases[] = {{"hs_2phase", "hs_2phase.q", "info"},
+                 {"hs_4phase", "hs_4phase.q", "info"},
+                 {"hs_counter", "hs_counter.q", "error"}};
+    for (const auto& c : cases) {
+        opencdc::frontend::FrontendResult fe;
+        auto findings = analyze_fixture("handshake.sv", c.top, fe);
+        ASSERT_TRUE(fe.ok) << c.top;
+        EXPECT_EQ(severity_into(findings, "CDC001", c.dest), c.severity) << c.top;
+        EXPECT_EQ(severity_into(findings, "CDC002", c.dest),
+                  std::string(c.severity) == "info" ? "" : "error")
+            << c.top;
+    }
+}

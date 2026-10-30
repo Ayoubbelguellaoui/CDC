@@ -1295,3 +1295,12 @@ TEST(FrontendTest, FirstStageReadByOutputPortIsFlagged) {
     ASSERT_TRUE(fe.ok);
     EXPECT_EQ(severity_into(findings, "CDC001", "cd_tap_port.s0"), "warning");
 }
+
+TEST(FrontendTest, SecondStageUsedAsConditionIsNoFanout) {
+    // ack copies s1 (so it looks like a third stage) and s1 enables a
+    // capture: a condition use of the synchronized output, no warning.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_stage2_condition", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_stage2_condition.s0"), "info");
+}

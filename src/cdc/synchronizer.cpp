@@ -37,14 +37,30 @@ std::string SynchronizerMatcher::validate_stage_reset(const ir::Graph& graph, ui
     return {};
 }
 
-bool SynchronizerMatcher::validate_stage_fanout(const ir::Graph& graph, uint64_t stage1_id) const {
+bool SynchronizerMatcher::validate_stage_fanout(const ir::Graph& graph, uint64_t stage1_id,
+                                                bool first) const {
     const ir::Node* stage1 = graph.find_node(stage1_id);
     if (!stage1)
         return true;
 
-    // A stage before the last may still be metastable: it must feed the
-    // next stage only. Any other register it reaches - through nets, ports
-    // or logic - or a top-level output port reads the unresolved value.
+    // A later stage: a second same-domain register it feeds as data shortens
+    // the chain the designer chose. Its value used as a condition (a
+    // handshake ack, a data-enable qualifier) is the synchronized output, and
+    // a register copying it may be no stage at all.
+    if (!first) {
+        size_t same_domain = 0;
+        for (uint64_t succ : graph.register_successors(stage1_id, false, true)) {
+            const ir::Node* n = graph.find_node(succ);
+            if (n && n->clock_domain == stage1->clock_domain && ++same_domain > 1)
+                return false;
+        }
+        return true;
+    }
+
+    // The first stage may still be metastable: it must feed the second stage
+    // only. Any other register it reaches - through nets, ports or logic, as
+    // data or condition - or a top-level output port reads the unresolved
+    // value.
     size_t registers = 0;
     std::unordered_set<uint64_t> visited{stage1_id};
     std::vector<uint64_t> stack = graph.successors(stage1_id);
@@ -88,7 +104,7 @@ void SynchronizerMatcher::collect_chain_warnings(const ir::Graph& graph,
 
     // Check fanout from every intermediate stage (not just stage 1)
     for (size_t i = 0; i + 1 < chain.stage_ids.size(); ++i) {
-        if (!validate_stage_fanout(graph, chain.stage_ids[i])) {
+        if (!validate_stage_fanout(graph, chain.stage_ids[i], i == 0)) {
             chain.warnings.push_back("Stage " + std::to_string(i + 1) +
                                      " fanout: multiple same-domain successors detected");
         }
@@ -265,7 +281,7 @@ bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t de
             return true;
 
         // Check fanout from every intermediate stage
-        if (!validate_stage_fanout(graph, current))
+        if (!validate_stage_fanout(graph, current, current == dest_reg_id))
             return true;
 
         current = next_id;

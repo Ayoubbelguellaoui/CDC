@@ -35,6 +35,9 @@ struct ProfileSettings {
     // Suppression
     bool suppress_reset_crossings = false;
 
+    // Conservative policy (Config::muxed_clock_domain)
+    bool muxed_clock_domain = false;
+
     // Multicycle policy
     bool multicycle_suppress_findings = true;
     std::vector<std::string> multicycle_suppress_rules = {"CDC001"};

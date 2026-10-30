@@ -1304,6 +1304,7 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     result.input_type = "rtl";
     Compilation compilation;
     allow_user_annotation_ = options.allow_user_annotation;
+    muxed_clock_domain_ = options.muxed_clock_domain;
     frontend_warnings_.clear();
     scope_depth_ = 0;
 
@@ -1772,6 +1773,17 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
 
         std::vector<std::pair<std::string, uint32_t>> rhs_ops;
         collect_named_values(asgn.right(), p, rhs_ops);
+        // A mux: its select operands come first (collect_named_values visits
+        // the conditions before the two values) - the clock resolver needs
+        // the values of a clock mux, not its select.
+        uint32_t mux_selects = 0;
+        if (asgn.right().kind == ExpressionKind::ConditionalOp) {
+            std::vector<std::pair<std::string, uint32_t>> sel;
+            for (const auto& cond :
+                 static_cast<const ConditionalExpression&>(asgn.right()).conditions)
+                collect_named_values(*cond.expr, p, sel);
+            mux_selects = static_cast<uint32_t>(sel.size());
+        }
 
         // `assign g = b ^ (b >> 1)` or `assign g = b2g(b)` encodes gray, as
         // the same right-hand side does in a procedural block.
@@ -1826,6 +1838,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 std::string comb_name = lhs_name + "$comb";
                 uint64_t comb_id = graph.add_combinational(comb_name, logic_type, input_ids,
                                                            lhs_width, {}, p, module_type);
+                if (logic_type == ir::LogicType::Mux) {
+                    if (auto* comb = graph.find_node_mutable(comb_id))
+                        comb->mux_select_inputs = mux_selects;
+                }
                 if (comb_id)
                     graph.add_edge(comb_id, lhs_id);
             } else {
@@ -1868,6 +1884,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
 
 void SlangAdapter::resolve_clocks(ir::Graph& graph) {
     clock::ClockResolver resolver;
+    resolver.set_muxed_clock_domain(muxed_clock_domain_);
     auto result = resolver.resolve(graph);
 
     // Pre-build top-level port sets with a single O(N) pass.
@@ -1911,7 +1928,10 @@ void SlangAdapter::resolve_clocks(ir::Graph& graph) {
             node.root_clock.empty() ? nullptr : graph.find_node_by_name(node.root_clock);
         bool black_box_root = root_node && root_node->kind == ir::NodeKind::Port &&
                               graph.predecessors(root_node->id).empty();
-        if (!black_box_root && (node.root_clock.empty() || !is_top(node.root_clock))) {
+        // So is a mux of two clocks (ClockResolver::trace_clock_mux).
+        bool mux_root = root_node && it != result.clock_map.end() && it->second.is_muxed &&
+                        root_node->hier_name == node.root_clock;
+        if (!black_box_root && !mux_root && (node.root_clock.empty() || !is_top(node.root_clock))) {
             std::string source = trace_to_top_level_source(node.clock_domain, graph);
             if (!source.empty() && source != node.clock_domain) {
                 node.root_clock = source;
@@ -1926,7 +1946,7 @@ bool SlangAdapter::is_top_level_input(const std::string& hier_name, const ir::Gr
 }
 
 std::string SlangAdapter::trace_to_top_level_source(const std::string& clock_name,
-                                                    const ir::Graph& graph) {
+                                                    const ir::Graph& graph, int depth) {
     // Build top-level port index once per graph (Port nodes with exactly 1 dot).
     // Keyed by graph identity AND generation: two Graph instances can share a
     // generation number, and mutating a graph bumps its generation.
@@ -2002,7 +2022,14 @@ std::string SlangAdapter::trace_to_top_level_source(const std::string& clock_nam
         }
 
         if (cn->kind == ir::NodeKind::Register) {
-            return cn->root_clock.empty() ? cn->clock_domain : cn->root_clock;
+            // A divided clock: the source of the dividing register's clock
+            // (its root may not be resolved yet, and its raw clock name is
+            // no root - it split one clock into two domains).
+            if (!cn->root_clock.empty())
+                return cn->root_clock;
+            if (depth < 8 && !cn->clock_domain.empty() && cn->clock_domain != clock_name)
+                return trace_to_top_level_source(cn->clock_domain, graph, depth + 1);
+            return cn->clock_domain;
         }
 
         bool found_next = false;

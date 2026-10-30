@@ -75,11 +75,13 @@ class SlangAdapter : public IFrontend {
     static bool is_top_level_input(const std::string& hier_name, const ir::Graph& graph,
                                    const std::unordered_set<std::string>& top_level_ports);
 
+    // depth: registers passed (a divided clock of a divided clock).
     static std::string trace_to_top_level_source(const std::string& clock_name,
-                                                 const ir::Graph& graph);
+                                                 const ir::Graph& graph, int depth = 0);
 
     std::unique_ptr<slang::SourceManager> source_manager_;
     bool allow_user_annotation_ = true;
+    bool muxed_clock_domain_ = false;  // FrontendOptions::muxed_clock_domain
     // Non-fatal elaboration notes (e.g. skipped unknown-clock blocks).
     std::vector<std::string> frontend_warnings_;
     // Recursion depth guard for instance/generate nesting (walk_* recursion).

@@ -42,7 +42,9 @@ class SynchronizerMatcher {
     std::string validate_stage_reset(const ir::Graph& graph, uint64_t stage_id,
                                      uint64_t prev_stage_id) const;
 
-    bool validate_stage_fanout(const ir::Graph& graph, uint64_t stage1_id) const;
+    // first: the chain's first stage (any fanout but the second stage is a
+    // hazard); otherwise a later stage (a second data successor is).
+    bool validate_stage_fanout(const ir::Graph& graph, uint64_t stage1_id, bool first) const;
 
     void collect_chain_warnings(const ir::Graph& graph, SynchronizerChain& chain) const;
 };

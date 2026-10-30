@@ -59,3 +59,22 @@ module cd_tap_port (input logic clk_a, input logic clk_b, input logic d, output 
     assign q = s1;
     assign early = s0;
 endmodule
+
+// cd_stage2_condition: the second stage is used as a condition (a handshake
+// ack copies it, a capture is enabled by it): the synchronized output, no
+// fanout hazard.
+module cd_stage2_condition (input logic clk_a, input logic clk_b, input logic d,
+                            input logic [7:0] e, output logic [7:0] q);
+    logic a_r, s0, s1, ack;
+    logic [7:0] b_r;
+    always_ff @(posedge clk_a) a_r <= d;
+    always_ff @(posedge clk_b) begin
+        s0 <= a_r;
+        s1 <= s0;
+    end
+    always_ff @(posedge clk_b) begin
+        ack <= s1;
+        if (s1 && !ack) b_r <= e;
+    end
+    assign q = b_r;
+endmodule

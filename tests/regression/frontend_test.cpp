@@ -1466,3 +1466,15 @@ TEST(FrontendTest, SelectIngressOfPackedSynchronizerIsAChain) {
     ASSERT_TRUE(fe.ok);
     EXPECT_EQ(severity_into(findings, "CDC001", "cd_packed_select.s"), "info");
 }
+
+TEST(FrontendTest, RealDesignElaboration) {
+    // Only the requested top is elaborated (el_unused would be an error),
+    // a use above its declaration is accepted, the assertion is skipped
+    // without a warning, and the `always @(*)` logic carries the crossing.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("elaboration.sv", "el_top", fe);
+    ASSERT_TRUE(fe.ok) << (fe.errors.empty() ? "" : fe.errors.front());
+    for (const auto& w : fe.warnings)
+        EXPECT_EQ(w.find("unrecoverable clock"), std::string::npos) << w;
+    EXPECT_EQ(severity_into(findings, "CDC001", "el_top.q"), "error");
+}

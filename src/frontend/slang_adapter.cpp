@@ -35,6 +35,7 @@
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
 #include "slang/parsing/Preprocessor.h"
+#include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
@@ -1216,6 +1217,29 @@ static bool is_reset_name(const std::string& name) {
     // set_valid, set_data, set_enable etc. "preset" is already caught above.
 }
 
+// `always @*` / `always @(a or b)`: no edge in the event control, so the
+// block is combinational logic, like always_comb (it had no clock and was
+// skipped, dropping the logic).
+static bool is_level_sensitive(const ProceduralBlockSymbol& proc) {
+    const Statement& body = proc.getBody();
+    if (body.kind != StatementKind::Timed)
+        return false;
+    const TimingControl& t = static_cast<const TimedStatement&>(body).timing;
+    if (t.kind == TimingControlKind::ImplicitEvent)
+        return true;
+    if (t.kind == TimingControlKind::SignalEvent)
+        return static_cast<const SignalEventControl&>(t).edge == EdgeKind::None;
+    if (t.kind == TimingControlKind::EventList) {
+        for (const auto* ev : static_cast<const EventListControl&>(t).events) {
+            if (!ev || ev->kind != TimingControlKind::SignalEvent ||
+                static_cast<const SignalEventControl&>(*ev).edge != EdgeKind::None)
+                return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 // The declaration of a signal event that is a plain named value, else null.
 static const Symbol* event_symbol(const TimingControl& event) {
     if (event.kind != TimingControlKind::SignalEvent)
@@ -1373,7 +1397,6 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
                                        const FrontendOptions& options) {
     FrontendResult result;
     result.input_type = "rtl";
-    Compilation compilation;
     allow_user_annotation_ = options.allow_user_annotation;
     muxed_clock_domain_ = options.muxed_clock_domain;
     frontend_warnings_.clear();
@@ -1424,6 +1447,8 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     slang::Bag bag;
     bag.set(pp);
 
+    std::vector<std::shared_ptr<SyntaxTree>> trees;
+    bool top_declared = false;
     for (const auto& file : files) {
         auto treeOrErr = SyntaxTree::fromFile(file, *source_manager_, bag);
         if (!treeOrErr) {
@@ -1431,8 +1456,32 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
             result.ok = false;
             return result;
         }
-        compilation.addSyntaxTree(*treeOrErr);
+        const auto& unit = (*treeOrErr)->root();
+        if (unit.kind == SyntaxKind::CompilationUnit) {
+            for (const auto* member : unit.as<CompilationUnitSyntax>().members) {
+                if (member->kind == SyntaxKind::ModuleDeclaration &&
+                    member->as<ModuleDeclarationSyntax>().header->name.valueText() == top_module)
+                    top_declared = true;
+            }
+        }
+        trees.push_back(*treeOrErr);
     }
+    // Elaborate the requested top only: left to choose, slang takes every
+    // uninstantiated module for a top and elaborates library modules with
+    // their default parameters - for type-parameterized IP (PULP AXI) that
+    // is a compile error in a correct design. An unknown top keeps slang's
+    // choice, so the "not found" hint below lists the modules.
+    CompilationOptions copts;
+    if (top_declared)
+        copts.topModules.emplace(top_module);
+    // A signal used above its declaration: illegal in strict LRM terms, but
+    // accepted by the simulators and synthesis tools designs are built
+    // with (Verilator, VCS, Xcelium); the meaning is the same either way.
+    copts.flags |= CompilationFlags::AllowUseBeforeDeclare;
+    bag.set(copts);
+    Compilation compilation(bag);
+    for (const auto& tree : trees)
+        compilation.addSyntaxTree(tree);
 
     const RootSymbol& root = compilation.getRoot();
 
@@ -1682,13 +1731,17 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             }
             case SymbolKind::ProceduralBlock: {
                 auto& proc = static_cast<const ProceduralBlockSymbol&>(member);
+                // A concurrent assertion: no logic, nothing to model.
+                if (proc.isFromAssertion)
+                    break;
                 if (proc.procedureKind == ProceduralBlockKind::AlwaysFF ||
                     proc.procedureKind == ProceduralBlockKind::Always ||
                     proc.procedureKind == ProceduralBlockKind::AlwaysLatch ||
                     proc.procedureKind == ProceduralBlockKind::AlwaysComb) {
                     ClockResetInfo cr;
                     if (proc.procedureKind == ProceduralBlockKind::AlwaysFF ||
-                        proc.procedureKind == ProceduralBlockKind::Always ||
+                        (proc.procedureKind == ProceduralBlockKind::Always &&
+                         !is_level_sensitive(proc)) ||
                         proc.procedureKind == ProceduralBlockKind::AlwaysLatch) {
                         cr = extract_clock_reset(proc);
                         // Skip blocks with no recoverable clock so "unknown" never

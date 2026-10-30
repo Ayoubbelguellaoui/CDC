@@ -66,6 +66,7 @@ ProfileSettings get_profile_settings(MethodologyProfile profile) {
             s.multicycle_suppress_findings = false;
             s.severity_overrides.push_back({"CDC007", "error"});
             s.muxed_clock_domain = true;
+            s.report_double_synchronization = true;
             break;
 
         case MethodologyProfile::AsicSignoff:
@@ -83,6 +84,7 @@ ProfileSettings get_profile_settings(MethodologyProfile profile) {
             s.severity_overrides.push_back({"CDC007", "error"});
             s.severity_overrides.push_back({"CDC003", "error"});
             s.muxed_clock_domain = true;
+            s.report_double_synchronization = true;
             break;
 
         case MethodologyProfile::Fpga:
@@ -144,6 +146,7 @@ void apply_profile(ProfileSettings& settings, Config& cfg) {
     cfg.require_structural_proof = settings.require_structural_proof;
     cfg.allow_user_annotation = settings.allow_annotation;
     cfg.muxed_clock_domain = settings.muxed_clock_domain;
+    cfg.report_double_synchronization = settings.report_double_synchronization;
 
     cfg.multicycle_path_policy.suppress_findings = settings.multicycle_suppress_findings;
     cfg.multicycle_path_policy.suppress_rules = settings.multicycle_suppress_rules;

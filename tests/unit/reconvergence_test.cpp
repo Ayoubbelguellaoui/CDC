@@ -97,6 +97,33 @@ TEST_F(ReconvergenceTest, SyncedPathsNotReconvergent) {
     EXPECT_TRUE(reconv.empty());
 }
 
+TEST_F(ReconvergenceTest, SyncedTwiceIsReconvergentUnderSignoffPolicy) {
+    // The same two independent chains with report_double_synchronization:
+    // each may resolve the transition in a different cycle, so the copies
+    // disagree for a cycle at the consumer.
+    uint64_t src = graph.add_register("mod.src", "clk_a", 1, {"mod.sv", 5, 5});
+    uint64_t meta1 = graph.add_register("mod.meta1", "clk_b", 1, {"mod.sv", 8, 5});
+    uint64_t sync1 = graph.add_register("mod.sync1", "clk_b", 1, {"mod.sv", 9, 5});
+    uint64_t meta2 = graph.add_register("mod.meta2", "clk_b", 1, {"mod.sv", 10, 5});
+    uint64_t sync2 = graph.add_register("mod.sync2", "clk_b", 1, {"mod.sv", 11, 5});
+    uint64_t consumer = graph.add_register("mod.consumer", "clk_b", 1, {"mod.sv", 12, 5});
+
+    graph.add_edge(src, meta1);
+    graph.add_edge(meta1, sync1);
+    graph.add_edge(src, meta2);
+    graph.add_edge(meta2, sync2);
+    graph.add_edge(sync1, consumer);
+    graph.add_edge(sync2, consumer);
+
+    auto dr = domain_extractor.extract(graph);
+    auto crossings = crossing_analyzer.analyze(graph, dr.domains, dr.register_to_domain);
+    reconvergence_analyzer.set_report_double_synchronization(true);
+    auto reconv = reconvergence_analyzer.analyze(graph, dr.domains, crossings);
+
+    ASSERT_EQ(reconv.size(), 1u);
+    EXPECT_NE(reconv[0].reason.find("synchronized twice"), std::string::npos) << reconv[0].reason;
+}
+
 TEST_F(ReconvergenceTest, OnlyCDC001CrossingsFeedReconvergence) {
     uint64_t src = graph.add_register("mod.src", "clk_a", 2, {"mod.sv", 5, 5});
     uint64_t dst1 = graph.add_register("mod.dst1", "clk_b", 1, {"mod.sv", 8, 5});

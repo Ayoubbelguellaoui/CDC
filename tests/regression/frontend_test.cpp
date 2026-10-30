@@ -1399,3 +1399,56 @@ TEST(FrontendTest, ResetSynchronizedInItsOwnClockDomainIsClean) {
     for (const auto& f : findings)
         EXPECT_NE(f.rule_id, "CDC009") << f.reason;
 }
+
+namespace {
+std::vector<cdc_ns::Finding> reconvergence_of(const std::string& top,
+                                              opencdc::frontend::FrontendResult& fe,
+                                              bool double_sync = false) {
+    auto crossings = analyze_fixture("control_dep.sv", top, fe);
+    if (!fe.ok)
+        return {};
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::ReconvergenceAnalyzer ra;
+    ra.set_report_double_synchronization(double_sync);
+    return ra.analyze(fe.graph, dr.domains, crossings);
+}
+}  // namespace
+
+TEST(FrontendTest, SourceSynchronizedTwiceIsTakenAsSafeByDefault) {
+    opencdc::frontend::FrontendResult fe;
+    auto reconv = reconvergence_of("cd_sync_twice", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_TRUE(reconv.empty());
+}
+
+TEST(FrontendTest, SourceSynchronizedTwiceReconverges) {
+    // report_double_synchronization.
+    opencdc::frontend::FrontendResult fe;
+    auto reconv = reconvergence_of("cd_sync_twice", fe, true);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(reconv.size(), 1u);
+    EXPECT_EQ(reconv[0].source_reg_name, "cd_sync_twice.a_r");
+}
+
+TEST(FrontendTest, SourceSynchronizedOnceDoesNotReconverge) {
+    opencdc::frontend::FrontendResult fe;
+    auto reconv = reconvergence_of("cd_sync_once", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_TRUE(reconv.empty());
+}
+
+TEST(FrontendTest, CorrelatedSourcesReconvergeAtAPort) {
+    opencdc::frontend::FrontendResult fe;
+    auto reconv = reconvergence_of("cd_correlated", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(reconv.size(), 1u);
+    EXPECT_NE(reconv[0].reason.find("cd_correlated.q"), std::string::npos) << reconv[0].reason;
+}
+
+TEST(FrontendTest, IndependentSourcesDoNotReconverge) {
+    opencdc::frontend::FrontendResult fe;
+    auto reconv = reconvergence_of("cd_independent", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_TRUE(reconv.empty());
+}

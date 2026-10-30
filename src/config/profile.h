@@ -35,8 +35,10 @@ struct ProfileSettings {
     // Suppression
     bool suppress_reset_crossings = false;
 
-    // Conservative policy (Config::muxed_clock_domain)
+    // Conservative policies (Config::muxed_clock_domain,
+    // Config::report_double_synchronization)
     bool muxed_clock_domain = false;
+    bool report_double_synchronization = false;
 
     // Multicycle policy
     bool multicycle_suppress_findings = true;

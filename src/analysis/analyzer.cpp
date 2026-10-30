@@ -301,6 +301,7 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
     // 9. Reconvergence.
     cdc::ReconvergenceAnalyzer reconvergence_analyzer;
     reconvergence_analyzer.set_max_hops(cfg.reconvergence_depth);
+    reconvergence_analyzer.set_report_double_synchronization(cfg.report_double_synchronization);
     auto reconv_findings =
         reconvergence_analyzer.analyze(result.graph, result.domains.domains, findings);
     for (auto& f : reconv_findings) {

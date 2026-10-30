@@ -850,6 +850,45 @@ static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::stri
     return stages >= 2 ? stages : 0;
 }
 
+// The targets of an assignment to a concatenation `{a, b[3:0], c} = rhs`
+// (nested concatenations flattened), each with the right-hand side that
+// drives it: the element of a right-hand side concatenation of the same
+// shape (`{s1, s0} <= {s0, d}` is a shift), else the whole right-hand side.
+// Empty when an element is no lvalue extract_lvalue can name.
+struct ConcatTarget {
+    std::pair<std::string, uint32_t> lvalue;
+    const Expression* rhs;
+};
+
+static void flatten_concat(const Expression& e, std::vector<const Expression*>& out) {
+    if (e.kind == ExpressionKind::Concatenation) {
+        for (const auto* op : static_cast<const ConcatenationExpression&>(e).operands())
+            flatten_concat(*op, out);
+    } else {
+        out.push_back(&e);
+    }
+}
+
+static std::vector<ConcatTarget> split_concat_assignment(const Expression& lhs,
+                                                         const Expression& rhs,
+                                                         const std::string& prefix) {
+    std::vector<const Expression*> lhs_ops, rhs_ops;
+    flatten_concat(lhs, lhs_ops);
+    if (rhs.kind == ExpressionKind::Concatenation)
+        flatten_concat(rhs, rhs_ops);
+    bool paired = rhs_ops.size() == lhs_ops.size();
+    for (size_t i = 0; paired && i < lhs_ops.size(); ++i)
+        paired = type_width(*lhs_ops[i]->type) == type_width(*rhs_ops[i]->type);
+    std::vector<ConcatTarget> out;
+    for (size_t i = 0; i < lhs_ops.size(); ++i) {
+        auto lv = extract_lvalue(*lhs_ops[i], prefix);
+        if (!lv)
+            return {};
+        out.push_back({*lv, paired ? rhs_ops[i] : &rhs});
+    }
+    return out;
+}
+
 // Signals of the if/case conditions enclosing the statement collect_assigns
 // is in: every assignment depends on them as much as on its operands (an
 // asynchronous flag used as an enable is a crossing). The block's own
@@ -896,7 +935,27 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::ExpressionStatement: {
             auto& es = static_cast<const ExpressionStatement&>(stmt);
-            if (es.expr.kind == ExpressionKind::Assignment) {
+            if (es.expr.kind == ExpressionKind::Assignment &&
+                static_cast<const AssignmentExpression&>(es.expr).left().kind ==
+                    ExpressionKind::Concatenation) {
+                // `{a, b} <= ...`: one assignment per element, each a direct
+                // dependency (no logic node) on its own right-hand side.
+                auto& assign = static_cast<const AssignmentExpression&>(es.expr);
+                for (const auto& t :
+                     split_concat_assignment(assign.left(), assign.right(), prefix)) {
+                    std::vector<std::pair<std::string, uint32_t>> ops;
+                    collect_named_values(*t.rhs, prefix, ops, formal_map);
+                    if (ops.empty())
+                        out.push_back({t.lvalue.first, std::string(), t.lvalue.second, 0, false,
+                                       ir::LogicType::Unknown, false, 0});
+                    for (const auto& [r, r_width] : ops)
+                        out.push_back({t.lvalue.first, r, t.lvalue.second, r_width, false,
+                                       ir::LogicType::Unknown, false, 0});
+                    for (const auto& [c, c_width] : g_control_operands)
+                        out.push_back({t.lvalue.first, c, t.lvalue.second, c_width, false,
+                                       ir::LogicType::Unknown, false, 0, true});
+                }
+            } else if (es.expr.kind == ExpressionKind::Assignment) {
                 auto& assign = static_cast<const AssignmentExpression&>(es.expr);
                 auto lhs = extract_lvalue(assign.left(), prefix);
                 if (lhs) {
@@ -1766,6 +1825,25 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
         if (assign_expr.kind != ExpressionKind::Assignment)
             continue;
         auto& asgn = static_cast<const AssignmentExpression&>(assign_expr);
+        if (asgn.left().kind == ExpressionKind::Concatenation) {
+            // `assign {c, s} = ...`: each element depends on its own
+            // right-hand side (see split_concat_assignment).
+            for (const auto& t : split_concat_assignment(asgn.left(), asgn.right(), p)) {
+                const ir::Node* existing = graph.find_node_by_name(t.lvalue.first);
+                uint64_t lhs_id =
+                    existing ? existing->id
+                             : graph.add_net(t.lvalue.first, t.lvalue.second, {}, p, module_type);
+                std::vector<std::pair<std::string, uint32_t>> ops;
+                collect_named_values(*t.rhs, p, ops);
+                for (const auto& [r, r_width] : ops) {
+                    const ir::Node* src = graph.find_node_by_name(r);
+                    uint64_t src_id = src ? src->id : graph.add_net(r, r_width, {}, p, module_type);
+                    if (src_id && lhs_id)
+                        graph.add_edge(src_id, lhs_id);
+                }
+            }
+            continue;
+        }
         auto lhs = extract_lvalue(asgn.left(), p);
         if (!lhs)
             continue;

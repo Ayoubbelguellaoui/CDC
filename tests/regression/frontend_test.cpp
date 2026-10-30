@@ -1342,3 +1342,40 @@ TEST(FrontendTest, ClockMuxOfTwoClocksIsItsOwnDomain) {
     EXPECT_TRUE(q->clock_is_muxed);
     EXPECT_EQ(severity_into(findings, "CDC001", "dc_mux.q"), "error");
 }
+
+TEST(FrontendTest, ConcatenationShiftIsASynchronizer) {
+    // `{s1, s0} <= {s0, a_r}`: the elements are registers, s0 -> s1 a chain.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("concat_lhs.sv", "cl_sync", fe);
+    ASSERT_TRUE(fe.ok);
+    for (const char* name : {"cl_sync.s0", "cl_sync.s1"}) {
+        const auto* n = fe.graph.find_node_by_name(name);
+        ASSERT_NE(n, nullptr) << name;
+        EXPECT_EQ(n->kind, NodeKind::Register) << name;
+    }
+    EXPECT_EQ(severity_into(findings, "CDC001", "cl_sync.s0"), "info");
+}
+
+TEST(FrontendTest, ConcatenationLoadedRegistersCross) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("concat_lhs.sv", "cl_unsync", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cl_unsync.q0"), "error");
+    EXPECT_EQ(severity_into(findings, "CDC001", "cl_unsync.q1"), "error");
+}
+
+TEST(FrontendTest, ContinuousConcatenationAssignFeedsTheCrossing) {
+    // `assign {c, s} = a_r + b_r`: s and c depend on both registers.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("concat_lhs.sv", "cl_assign", fe);
+    ASSERT_TRUE(fe.ok);
+    bool a = false, b = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.dest_reg_name == "cl_assign.q") {
+            a = a || f.source_reg_name == "cl_assign.a_r";
+            b = b || f.source_reg_name == "cl_assign.b_r";
+        }
+    }
+    EXPECT_TRUE(a);
+    EXPECT_TRUE(b);
+}

@@ -1294,6 +1294,61 @@ std::string SlangAdapter::event_signal_name(const TimingControl& event) const {
     return compact;
 }
 
+// The signals the leading `if` of a clocked block's body tests: in
+// `@(posedge clk or negedge rst_n) if (!rst_n) ...` the asynchronous control
+// is the event signal tested there (synthesis semantics), the clock the one
+// that is not.
+static void collect_symbols(const Expression& e, std::unordered_set<const Symbol*>& out) {
+    switch (e.kind) {
+        case ExpressionKind::NamedValue:
+            out.insert(&static_cast<const NamedValueExpression&>(e).symbol);
+            break;
+        case ExpressionKind::Conversion:
+            collect_symbols(static_cast<const ConversionExpression&>(e).operand(), out);
+            break;
+        case ExpressionKind::UnaryOp:
+            collect_symbols(static_cast<const UnaryExpression&>(e).operand(), out);
+            break;
+        case ExpressionKind::BinaryOp: {
+            auto& b = static_cast<const BinaryExpression&>(e);
+            collect_symbols(b.left(), out);
+            collect_symbols(b.right(), out);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+static std::unordered_set<const Symbol*> leading_if_symbols(const Statement& stmt) {
+    std::unordered_set<const Symbol*> out;
+    const Statement* s = &stmt;
+    for (int depth = 0; depth < 8; ++depth) {
+        if (s->kind == StatementKind::Block) {
+            s = &static_cast<const BlockStatement&>(*s).body;
+        } else if (s->kind == StatementKind::List) {
+            // The first statement after block-local declarations.
+            const Statement* first = nullptr;
+            for (const auto* st : static_cast<const StatementList&>(*s).list) {
+                if (st->kind != StatementKind::VariableDeclaration) {
+                    first = st;
+                    break;
+                }
+            }
+            if (!first)
+                return out;
+            s = first;
+        } else {
+            break;
+        }
+    }
+    if (s->kind != StatementKind::Conditional)
+        return out;
+    for (const auto& cond : static_cast<const ConditionalStatement&>(*s).conditions)
+        collect_symbols(*cond.expr, out);
+    return out;
+}
+
 ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& proc) const {
     ClockResetInfo info;
     info.clock = "unknown";
@@ -1313,6 +1368,46 @@ ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& pr
         }
     } else if (timing.kind == TimingControlKind::EventList) {
         auto& el = static_cast<const EventListControl&>(timing);
+        // By structure: the edge events the leading if tests are the
+        // asynchronous controls; exactly one untested edge event is the
+        // clock. Names decide only when the structure does not (a reset
+        // named `trst_ni` or `IwAsyncRstIn_an` was taken for the clock).
+        {
+            auto tested = leading_if_symbols(timed.stmt);
+            const TimingControl* clock_ev = nullptr;
+            const SignalEventControl* reset_ev = nullptr;
+            size_t untested = 0;
+            for (auto& ev : el.events) {
+                if (!ev || ev->kind != TimingControlKind::SignalEvent)
+                    continue;
+                auto& se = static_cast<const SignalEventControl&>(*ev);
+                if (se.edge != EdgeKind::NegEdge && se.edge != EdgeKind::PosEdge)
+                    continue;
+                const Symbol* sym = event_symbol(*ev);
+                if (sym && tested.count(sym)) {
+                    if (!reset_ev)
+                        reset_ev = &se;
+                } else {
+                    clock_ev = ev;
+                    ++untested;
+                }
+            }
+            if (reset_ev && untested == 1) {
+                std::string clock = event_signal_name(*clock_ev);
+                std::string reset = event_signal_name(*reset_ev);
+                if (!clock.empty() && !reset.empty()) {
+                    info.clock = clock;
+                    info.clock_symbol = event_symbol(*clock_ev);
+                    info.reset = reset;
+                    info.reset_symbol = event_symbol(*reset_ev);
+                    info.reset_pol = (reset_ev->edge == EdgeKind::NegEdge)
+                                         ? ir::ResetPolarity::ActiveLow
+                                         : ir::ResetPolarity::ActiveHigh;
+                    info.is_async_reset = true;
+                    return info;
+                }
+            }
+        }
         // Classify each event by role (reset vs clock) instead of position.
         // The clock is the last non-reset edge event, matching the Verilog
         // convention `@(posedge reset or posedge clk)`.

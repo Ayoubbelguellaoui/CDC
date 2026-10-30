@@ -44,7 +44,11 @@ class ClockResolver {
     // clock node back through nets, instance ports and gating/muxing logic
     // (not through registers) to the top-level ports that feed it. Empty
     // root_clock when that does not decide the source.
-    ClockInfo trace_through_hierarchy(const std::string& clock_name, const ir::Graph& graph) const;
+    // require_child_output: decide only clocks that leave an instance through
+    // an output port (the others keep the existing tracing); off, any clock
+    // with a decidable source (the inputs of a clock mux).
+    ClockInfo trace_through_hierarchy(const std::string& clock_name, const ir::Graph& graph,
+                                      bool require_child_output = true) const;
 
     // A clock driven by a mux whose values trace to two or more different
     // roots is a clock domain of its own, named by the clock node, so that

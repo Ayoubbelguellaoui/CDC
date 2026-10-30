@@ -1478,3 +1478,37 @@ TEST(FrontendTest, RealDesignElaboration) {
         EXPECT_EQ(w.find("unrecoverable clock"), std::string::npos) << w;
     EXPECT_EQ(severity_into(findings, "CDC001", "el_top.q"), "error");
 }
+
+TEST(FrontendTest, ClockAndResetByStructure) {
+    opencdc::frontend::FrontendResult fe;
+    analyze_fixture("clock_roles.sv", "cr_roles", fe);
+    ASSERT_TRUE(fe.ok);
+    struct {
+        const char* reg;
+        const char* clock;
+        const char* reset;
+    } cases[] = {{"cr_roles.q1", "IwClockIn", "IwAsyncRstIn_an"},
+                 {"cr_roles.q2", "tck", "trst_ni"},
+                 {"cr_roles.q3", "clk", "rstb"}};
+    for (const auto& c : cases) {
+        const auto* n = fe.graph.find_node_by_name(c.reg);
+        ASSERT_NE(n, nullptr) << c.reg;
+        EXPECT_EQ(n->root_clock, c.clock) << c.reg;
+        EXPECT_EQ(n->reset_signal, c.reset) << c.reg;
+        EXPECT_TRUE(n->is_async_reset) << c.reg;
+    }
+}
+
+TEST(FrontendTest, InvertedAndBypassedClockIsOneRoot) {
+    // Even with muxed_clock_domain the mux of tck and ~tck is one root.
+    opencdc::frontend::FrontendResult fe;
+    opencdc::frontend::FrontendOptions options;
+    options.muxed_clock_domain = true;
+    auto findings = analyze_fixture("clock_roles.sv", "cr_inv_mux", fe, options);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("cr_inv_mux.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "tck");
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC001") << f.reason;
+}

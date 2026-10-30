@@ -111,7 +111,8 @@ std::string ClockResolver::trace_to_top_port(const std::string& port_name,
 }
 
 ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
-                                                 const ir::Graph& graph) const {
+                                                 const ir::Graph& graph,
+                                                 bool require_child_output) const {
     ClockInfo info;
     info.name = clock_name;
     const ir::Node* start = graph.find_node_by_name(clock_name);
@@ -161,7 +162,7 @@ ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
     }
     // Only a clock that leaves a child instance through an output port is
     // decided here; other shapes keep the existing tracing.
-    if (!through_child_output || roots.empty())
+    if ((require_child_output && !through_child_output) || roots.empty())
         return info;
 
     // A clock gate or mux reaches its enable or select too: the source is
@@ -235,7 +236,11 @@ ClockInfo ClockResolver::trace_clock_mux(const std::string& clock_name, const ir
             std::count(in->hier_name.begin(), in->hier_name.end(), '.') == 1) {
             root = in->hier_name.substr(in->hier_name.rfind('.') + 1);
         } else if (depth < 8) {
+            // Every input resolved the same way (an inverted and a bypassed
+            // copy of one clock are one root).
             ClockInfo sub = trace_clock_mux(in->hier_name, graph, depth + 1);
+            if (sub.root_clock.empty())
+                sub = trace_through_hierarchy(in->hier_name, graph, false);
             root = sub.root_clock.empty() ? trace_clock(in->hier_name, graph).root_clock
                                           : sub.root_clock;
         }

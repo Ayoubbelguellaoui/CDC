@@ -29,6 +29,7 @@ set(OPENCDC_CORE_SOURCES
     report/report.cpp
     report/html_reporter.cpp
     report/sarif_reporter.cpp
+    report/domain_report.cpp
     config/config.cpp
     config/profile.cpp
     analysis/trend.cpp

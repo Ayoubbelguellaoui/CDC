@@ -161,6 +161,7 @@ These exist and are tested; they do not substitute for detection accuracy.
 - Waivers (substring / wildcard / regex) — [docs/waivers.md](docs/waivers.md)
 - Baseline trend (`--save-baseline` / `--compare-baseline`)
 - JSON, text, SARIF, interactive HTML reports
+- Register inventories: the registers of each clock domain (`--clock-report <file>`) and of each reset signal, with the clock domains it reaches (`--reset-report <file>`)
 - LSP server (`opencdc lsp`)
 - Methodology profiles (`--profile asic_signoff|strict|fpga|…`)
 - Optional Python bindings (`BUILD_PYTHON_BINDINGS=ON`)

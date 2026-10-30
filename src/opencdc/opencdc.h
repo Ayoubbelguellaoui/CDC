@@ -20,6 +20,9 @@ struct CheckOptions {
     bool verbose = false;
     size_t num_threads = 0;
     std::string save_baseline;
+    // Register inventory reports (report/domain_report.h); empty: none.
+    std::string clock_report;
+    std::string reset_report;
     std::string compare_baseline;
     std::vector<std::string> disable_rules;
     std::vector<std::string> severity_overrides;

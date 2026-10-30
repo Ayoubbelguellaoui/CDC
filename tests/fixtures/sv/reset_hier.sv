@@ -48,3 +48,24 @@ module rh_two (
     rh_ff_b u_a (.clk(clk), .rst_n(rst_n), .d(d), .q(a_q));
     rh_ff_b u_b (.clk(clk), .rst_n(rst_sync), .d(a_q), .q(q));
 endmodule
+
+// rh_wrong_domain: a reset synchronized in clk_a is the asynchronous reset of
+// a clk_b register - its release is not synchronized to clk_b.
+// rh_right_domain: the same with the synchronizer in clk_b - correct.
+module rh_wrong_domain (input logic clk_a, input logic clk_b, input logic rst_n, input logic d,
+                        output logic q);
+    logic rst_meta, rst_sync;
+    always_ff @(posedge clk_a or negedge rst_n)
+        if (!rst_n) {rst_sync, rst_meta} <= 2'b00;
+        else {rst_sync, rst_meta} <= {rst_meta, 1'b1};
+    rh_ff_b u_b (.clk(clk_b), .rst_n(rst_sync), .d(d), .q(q));
+endmodule
+
+module rh_right_domain (input logic clk_a, input logic clk_b, input logic rst_n, input logic d,
+                        output logic q);
+    logic rst_meta, rst_sync;
+    always_ff @(posedge clk_b or negedge rst_n)
+        if (!rst_n) {rst_sync, rst_meta} <= 2'b00;
+        else {rst_sync, rst_meta} <= {rst_meta, 1'b1};
+    rh_ff_b u_b (.clk(clk_b), .rst_n(rst_sync), .d(d), .q(q));
+endmodule

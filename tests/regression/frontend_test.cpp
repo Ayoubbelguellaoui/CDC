@@ -1379,3 +1379,23 @@ TEST(FrontendTest, ContinuousConcatenationAssignFeedsTheCrossing) {
     EXPECT_TRUE(a);
     EXPECT_TRUE(b);
 }
+
+TEST(FrontendTest, ResetSynchronizedInAnotherClockDomainIsFlagged) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_crossings("rh_wrong_domain", fe);
+    ASSERT_TRUE(fe.ok);
+    bool found = false;
+    for (const auto& f : findings)
+        found =
+            found || (f.rule_id == "CDC009" && f.source_reg_name == "rh_wrong_domain.rst_sync" &&
+                      f.dest_reg_name == "rh_wrong_domain.u_b.q" && f.severity == "error");
+    EXPECT_TRUE(found);
+}
+
+TEST(FrontendTest, ResetSynchronizedInItsOwnClockDomainIsClean) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_crossings("rh_right_domain", fe);
+    ASSERT_TRUE(fe.ok);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC009") << f.reason;
+}

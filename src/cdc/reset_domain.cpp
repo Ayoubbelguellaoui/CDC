@@ -152,6 +152,49 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
         }
     }
 
+    // A reset synchronized in one clock domain and used as the asynchronous
+    // reset of another clock's registers: its release reaches them
+    // asynchronously to their clock - the synchronizer is in the wrong
+    // domain. The source is the register the reset traces to
+    // (SlangAdapter::resolve_resets).
+    auto clock_of = [&](uint64_t id) -> const clock::ClockDomain* {
+        auto it = register_to_clock_domain.find(id);
+        if (it == register_to_clock_domain.end() || it->second >= clock_domains.size())
+            return nullptr;
+        return &clock_domains[it->second];
+    };
+    for (const auto& reg : graph.nodes()) {
+        if (reg.kind != ir::NodeKind::Register || !reg.is_async_reset || reg.reset_signal.empty())
+            continue;
+        const ir::Node* source = graph.find_node_by_name(reg.reset_signal);
+        if (!source || source->kind != ir::NodeKind::Register || source->id == reg.id)
+            continue;
+        const clock::ClockDomain* reg_clock = clock_of(reg.id);
+        const clock::ClockDomain* source_clock = clock_of(source->id);
+        if (!reg_clock || !source_clock || reg_clock->id == source_clock->id)
+            continue;
+        Finding f;
+        f.rule_id = "CDC009";
+        f.rule_name = "reset_domain_crossing";
+        f.severity = "error";
+        f.source_reg_id = source->id;
+        f.dest_reg_id = reg.id;
+        f.source_reg_name = source->hier_name;
+        f.dest_reg_name = reg.hier_name;
+        f.source_domain = source_clock->name;
+        f.dest_domain = reg_clock->name;
+        f.path.node_ids = {source->id, reg.id};
+        f.source_loc = source->loc;
+        f.bus_width = reg.width;
+        f.safety_status = SafetyStatus::VerifiedUnsafe;
+        f.safety_provenance = "Async reset released from another clock domain";
+        f.reason = "The asynchronous reset of '" + reg.hier_name + "' (clock domain '" +
+                   reg_clock->name + "') comes from register '" + source->hier_name +
+                   "' in clock domain '" + source_clock->name +
+                   "': its release is not synchronized to the register's clock.";
+        findings.push_back(std::move(f));
+    }
+
     return findings;
 }
 

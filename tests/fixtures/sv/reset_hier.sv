@@ -69,3 +69,23 @@ module rh_right_domain (input logic clk_a, input logic clk_b, input logic rst_n,
         else {rst_sync, rst_meta} <= {rst_meta, 1'b1};
     rh_ff_b u_b (.clk(clk_b), .rst_n(rst_sync), .d(d), .q(q));
 endmodule
+
+// rh_into_sync: a register with its own asynchronous reset feeds a 2FF
+// synchronizer of another clock and reset - the chain resolves the reset's
+// asynchronous change like any other (synchronized_crossings_safe).
+module rh_into_sync (input logic clk_a, input logic clk_b, input logic rst_a_n,
+                     input logic rst_b_n, input logic d, output logic q);
+    logic a_r, s0, s1;
+    always_ff @(posedge clk_a or negedge rst_a_n)
+        if (!rst_a_n) a_r <= 1'b0;
+        else a_r <= d;
+    always_ff @(posedge clk_b or negedge rst_b_n)
+        if (!rst_b_n) begin
+            s0 <= 1'b0;
+            s1 <= 1'b0;
+        end else begin
+            s0 <= a_r;
+            s1 <= s0;
+        end
+    assign q = s1;
+endmodule

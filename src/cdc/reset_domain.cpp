@@ -2,6 +2,7 @@
 
 #include <unordered_set>
 
+#include "cdc/synchronizer.h"
 #include "config/config.h"
 
 namespace opencdc::cdc {
@@ -110,6 +111,14 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
                 if (!check_same)
                     continue;
             }
+
+            // Across clocks into a synchronizer: the source's asynchronous
+            // reset is one more asynchronous change of the source, which the
+            // destination's chain resolves like any other (policy).
+            if (policy && policy->synchronized_crossings_safe && src_clock->id != dst_clock->id &&
+                SynchronizerMatcher().find_pattern_for_dest(dst_id, graph, true) !=
+                    SyncPattern::None)
+                continue;
 
             // Reset synchronizer suppression: dst with 2-stage same-reset chain.
             if (policy && policy->detect_reset_synchronizer &&

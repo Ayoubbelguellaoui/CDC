@@ -45,6 +45,11 @@ struct ResetPolicyConfig {
     bool require_cdc_register_reset = false;
     bool check_same_clock_reset_crossings = false;
     bool detect_reset_synchronizer = true;
+    // A register with an asynchronous reset feeding a synchronizer chain of
+    // another clock is no reset-domain crossing: the reset changes the
+    // source asynchronously to the destination clock, as any data change
+    // does, and the chain resolves it. Off (default): CDC009 is reported.
+    bool synchronized_crossings_safe = false;
 };
 
 struct MulticyclePathPolicy {

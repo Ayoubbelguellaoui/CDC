@@ -183,6 +183,7 @@ reset_policy:
   require_cdc_register_reset: false
   check_same_clock_reset_crossings: false
   detect_reset_synchronizer: true
+  synchronized_crossings_safe: false  # no CDC009 into a synchronizer of another clock
 
 multicycle_path_policy:
   suppress_findings: true

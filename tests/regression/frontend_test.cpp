@@ -1199,7 +1199,8 @@ TEST(FrontendTest, BlackBoxPllOutputsAreClockSources) {
 namespace {
 // CDC009 findings of `top` in reset_hier.sv, same-clock crossings checked.
 std::vector<cdc_ns::Finding> reset_crossings(const std::string& top,
-                                             opencdc::frontend::FrontendResult& fe) {
+                                             opencdc::frontend::FrontendResult& fe,
+                                             bool synchronized_safe = false) {
     opencdc::frontend::SlangAdapter adapter;
     fe = adapter.elaborate({fixture_path("reset_hier.sv")}, top);
     if (!fe.ok)
@@ -1210,6 +1211,7 @@ std::vector<cdc_ns::Finding> reset_crossings(const std::string& top,
     auto rd = ra.extract_reset_domains(fe.graph);
     opencdc::config::ResetPolicyConfig policy;
     policy.check_same_clock_reset_crossings = true;
+    policy.synchronized_crossings_safe = synchronized_safe;
     return ra.check_reset_crossings(fe.graph, rd.domains, dr.domains, dr.register_to_domain,
                                     &policy);
 }
@@ -1526,5 +1528,19 @@ TEST(FrontendTest, SynchronizerStylesOfRealIp) {
         ASSERT_TRUE(fe.ok) << c.top;
         EXPECT_EQ(severity_into(findings, "CDC001", c.dest), "info") << c.top;
         EXPECT_EQ(severity_into(findings, "CDC002", c.dest), "") << c.top;
+    }
+}
+
+TEST(FrontendTest, ResetCrossingIntoASynchronizer) {
+    // Default: CDC009 is reported; synchronized_crossings_safe: the chain
+    // resolves the source's asynchronous reset like any data change.
+    for (bool safe : {false, true}) {
+        opencdc::frontend::FrontendResult fe;
+        auto findings = reset_crossings("rh_into_sync", fe, safe);
+        ASSERT_TRUE(fe.ok);
+        bool found = false;
+        for (const auto& f : findings)
+            found = found || (f.rule_id == "CDC009" && f.dest_reg_name == "rh_into_sync.s0");
+        EXPECT_EQ(found, !safe) << "synchronized_crossings_safe=" << safe;
     }
 }

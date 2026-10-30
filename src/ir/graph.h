@@ -57,6 +57,9 @@ struct Node {
     // Combinational logic tracking
     LogicType logic_type = LogicType::None;
     std::vector<uint64_t> logic_inputs;
+    // Mux: how many leading logic_inputs are the select (IR operand order
+    // [select..., true, false]); 0 means the one-select default.
+    uint32_t mux_select_inputs = 0;
     std::string logic_expression;
 
     // Pattern recognition flags

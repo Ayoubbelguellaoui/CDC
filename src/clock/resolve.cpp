@@ -206,11 +206,60 @@ ClockInfo ClockResolver::trace_through_hierarchy(const std::string& clock_name,
     return info;
 }
 
+ClockInfo ClockResolver::trace_clock_mux(const std::string& clock_name, const ir::Graph& graph,
+                                         int depth) const {
+    ClockInfo info;
+    info.name = clock_name;
+    const ir::Node* n = graph.find_node_by_name(clock_name);
+    // Back through nets and ports with one driver each to the mux.
+    for (int hop = 0; n && hop < 64; ++hop) {
+        if (n->kind == ir::NodeKind::Combinational)
+            break;
+        if (n->kind != ir::NodeKind::Net && n->kind != ir::NodeKind::Port)
+            return info;
+        auto preds = graph.predecessors(n->id);
+        if (preds.size() != 1)
+            return info;
+        n = graph.find_node(preds.front());
+    }
+    if (!n || n->kind != ir::NodeKind::Combinational || n->logic_type != ir::LogicType::Mux)
+        return info;
+    size_t selects = n->mux_select_inputs ? n->mux_select_inputs : 1;
+    std::unordered_set<std::string> roots;
+    for (size_t i = selects; i < n->logic_inputs.size(); ++i) {
+        const ir::Node* in = graph.find_node(n->logic_inputs[i]);
+        if (!in)
+            continue;
+        std::string root;
+        if (in->kind == ir::NodeKind::Port &&
+            std::count(in->hier_name.begin(), in->hier_name.end(), '.') == 1) {
+            root = in->hier_name.substr(in->hier_name.rfind('.') + 1);
+        } else if (depth < 8) {
+            ClockInfo sub = trace_clock_mux(in->hier_name, graph, depth + 1);
+            root = sub.root_clock.empty() ? trace_clock(in->hier_name, graph).root_clock
+                                          : sub.root_clock;
+        }
+        if (!root.empty())
+            roots.insert(root);
+    }
+    if (roots.size() < 2)
+        return info;
+    info.root_clock = clock_name;
+    info.is_muxed = true;
+    return info;
+}
+
 ClockInfo ClockResolver::trace_clock(const std::string& clock_name, const ir::Graph& graph) const {
     ClockInfo info;
     info.name = clock_name;
 
     ensure_port_index(graph);
+
+    if (muxed_clock_domain_) {
+        ClockInfo muxed = trace_clock_mux(clock_name, graph, 0);
+        if (!muxed.root_clock.empty())
+            return muxed;
+    }
 
     ClockInfo through = trace_through_hierarchy(clock_name, graph);
     if (!through.root_clock.empty())

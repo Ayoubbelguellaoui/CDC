@@ -1,0 +1,3 @@
+# The conservative sign-off policy (set by the strict and asic_signoff
+# profiles): a mux of two clocks is a clock domain of its own.
+muxed_clock_domain: true

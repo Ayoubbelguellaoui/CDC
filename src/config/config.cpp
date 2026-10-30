@@ -598,6 +598,7 @@ static Config parse_yaml_content(const std::string& content, std::string* error)
                                        "min_sync_stages",
                                        "require_structural_proof",
                                        "allow_user_annotation",
+                                       "muxed_clock_domain",
                                        "suppress_reset_crossings"};
         for (auto it = root.begin(); it != root.end(); ++it) {
             std::string key;
@@ -701,6 +702,12 @@ static Config parse_yaml_content(const std::string& content, std::string* error)
         if (!parse_yaml_bool(root["allow_user_annotation"], b, error, "allow_user_annotation"))
             return Config();
         config.allow_user_annotation = b;
+    }
+    if (root["muxed_clock_domain"]) {
+        bool b = false;
+        if (!parse_yaml_bool(root["muxed_clock_domain"], b, error, "muxed_clock_domain"))
+            return Config();
+        config.muxed_clock_domain = b;
     }
     // Also accept the nested output.suppress_reset_crossings spelling.
     if (root["output"] && root["output"].IsMap() && root["output"]["suppress_reset_crossings"]) {

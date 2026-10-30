@@ -1065,10 +1065,11 @@ TEST(FrontendTest, ParameterIsNoSignal) {
 
 namespace {
 // Elaborates and analyzes like the CLI: patterns annotated, recognizer set.
-std::vector<cdc_ns::Finding> analyze_fixture(const std::string& file, const std::string& top,
-                                             opencdc::frontend::FrontendResult& fe) {
+std::vector<cdc_ns::Finding> analyze_fixture(
+    const std::string& file, const std::string& top, opencdc::frontend::FrontendResult& fe,
+    const opencdc::frontend::FrontendOptions& options = {}) {
     opencdc::frontend::SlangAdapter adapter;
-    fe = adapter.elaborate({fixture_path(file)}, top);
+    fe = adapter.elaborate({fixture_path(file)}, top, options);
     if (!fe.ok)
         return {};
     cdc_clock::DomainExtractor de;
@@ -1303,4 +1304,41 @@ TEST(FrontendTest, SecondStageUsedAsConditionIsNoFanout) {
     auto findings = analyze_fixture("control_dep.sv", "cd_stage2_condition", fe);
     ASSERT_TRUE(fe.ok);
     EXPECT_EQ(severity_into(findings, "CDC001", "cd_stage2_condition.s0"), "info");
+}
+
+TEST(FrontendTest, DividedClockFoldsIntoItsRoot) {
+    // q is clocked by a register dividing clk_a: root clk_a, one domain.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("derived_clock.sv", "dc_div", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("dc_div.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "clk_a");
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC001") << f.reason;
+}
+
+TEST(FrontendTest, ClockMuxIsRepresentedByAnInputByDefault) {
+    // Default policy: the mux takes the root of one input (no new domain).
+    opencdc::frontend::FrontendResult fe;
+    analyze_fixture("derived_clock.sv", "dc_mux", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("dc_mux.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_NE(q->root_clock, "dc_mux.mclk");
+}
+
+TEST(FrontendTest, ClockMuxOfTwoClocksIsItsOwnDomain) {
+    // muxed_clock_domain: q's clock is clk_a or clk_b - a domain of its own,
+    // so a_r -> q crosses.
+    opencdc::frontend::FrontendResult fe;
+    opencdc::frontend::FrontendOptions options;
+    options.muxed_clock_domain = true;
+    auto findings = analyze_fixture("derived_clock.sv", "dc_mux", fe, options);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("dc_mux.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "dc_mux.mclk");
+    EXPECT_TRUE(q->clock_is_muxed);
+    EXPECT_EQ(severity_into(findings, "CDC001", "dc_mux.q"), "error");
 }

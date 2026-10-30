@@ -76,6 +76,11 @@ struct Config {
     int min_sync_stages = 2;
     bool require_structural_proof = false;
     bool allow_user_annotation = true;
+    // Conservative sign-off policy (set by the strict and asic_signoff
+    // profiles): a mux of two clocks is a clock domain of its own, so its
+    // registers cross from either clock; off, the mux is represented by its
+    // default-path input.
+    bool muxed_clock_domain = false;
     // Input frontend selection: "auto" (default), "rtl", or "netlist".
     // CLI --input-type overrides this.
     std::string input_type = "auto";

@@ -945,3 +945,41 @@ TEST(FrontendTest, ToggleUnaryCreatesNotNode) {
     }
     EXPECT_TRUE(found_not);
 }
+
+TEST(FrontendTest, GenerateLoopIterationsAreSeparateCopies) {
+    // Each loop iteration is its own scope g[i] (an empty entry name merged
+    // all copies into one node), and the loop reads the module's signals:
+    // clk_a reaches the instance clock (no domain of the instance port) and
+    // b_q reads the module register a_m, a crossing per iteration.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("generate_scope.sv")}, "generate_scope");
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(fe.graph.register_count(), 9u);
+
+    for (int i = 0; i < 4; ++i) {
+        std::string g = "generate_scope.g[" + std::to_string(i) + "]";
+        const auto* b_q = fe.graph.find_node_by_name(g + ".b_q");
+        ASSERT_NE(b_q, nullptr) << g;
+        EXPECT_EQ(b_q->kind, NodeKind::Register);
+        EXPECT_EQ(b_q->clock_domain, "generate_scope.clk_b");
+        const auto* a_q = fe.graph.find_node_by_name(g + ".u_a.q");
+        ASSERT_NE(a_q, nullptr) << g;
+        EXPECT_EQ(a_q->kind, NodeKind::Register);
+    }
+    EXPECT_EQ(fe.graph.find_node_by_name("generate_scope.g..b_q"), nullptr);
+    EXPECT_EQ(fe.graph.find_node_by_name("generate_scope.g[0].a_m"), nullptr);
+
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    EXPECT_EQ(dr.domains.size(), 2u);
+
+    cdc_ns::CrossingAnalyzer ca;
+    auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+    for (int i = 0; i < 4; ++i) {
+        std::string dest = "generate_scope.g[" + std::to_string(i) + "].b_q";
+        bool found = false;
+        for (const auto& f : findings)
+            found = found || (f.rule_id == "CDC001" && f.dest_reg_name == dest);
+        EXPECT_TRUE(found) << dest;
+    }
+}

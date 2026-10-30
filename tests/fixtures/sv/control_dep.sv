@@ -142,3 +142,27 @@ module cd_independent (input logic clk_a, input logic clk_b, input logic d, inpu
     end
     assign q = s_r[1] ^ s_s[1];
 endmodule
+
+// cd_packed_logic: logic of two clk_a registers in front of a packed 2FF
+// (`{s[0], a & e}`) can glitch into it - no synchronizer.
+// cd_packed_select: a select of one signal as the ingress - a synchronizer.
+module cd_packed_logic (input logic clk_a, input logic clk_b, input logic d, input logic e,
+                        output logic q);
+    logic a_r, e_r;
+    logic [1:0] s;
+    always_ff @(posedge clk_a) begin
+        a_r <= d;
+        e_r <= e;
+    end
+    always_ff @(posedge clk_b) s <= {s[0], a_r & e_r};
+    assign q = s[1];
+endmodule
+
+module cd_packed_select (input logic clk_a, input logic clk_b, input logic [1:0] d,
+                         output logic q);
+    logic [1:0] a_r;
+    logic [1:0] s;
+    always_ff @(posedge clk_a) a_r <= d;
+    always_ff @(posedge clk_b) s <= {s[0], a_r[1]};
+    assign q = s[1];
+endmodule

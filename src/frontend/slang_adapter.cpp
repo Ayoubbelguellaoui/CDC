@@ -806,9 +806,9 @@ static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
 // cross-domain source of a vector-packed synchronizer — and every other
 // operand must be the lhs range below its own target position shifted up by
 // the tail width, so values flow strictly upward through the vector with no
-// shortcuts. `sync <= {sync[0], src}` is the canonical two-stage form.
-// Concatenation operands are ordered MSB-first. Returns floor(lhs_width /
-// tail_width) when that is >= 2 stages, otherwise 0 (not a chain).
+// shortcuts. `sync <= {sync[0], src}` is the canonical two-stage form; the
+// tail must be a signal, not logic. Concatenation operands are ordered MSB-first. Returns
+// floor(lhs_width / tail_width) when that is >= 2 stages, otherwise 0 (not a chain).
 static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::string& lhs_name,
                                           const std::string& prefix, uint32_t lhs_width) {
     if (rhs.kind != ExpressionKind::Concatenation || lhs_width < 2)
@@ -820,6 +820,18 @@ static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::stri
 
     uint32_t tail_width = ops.back()->type ? (uint32_t)ops.back()->type->getBitWidth() : 0;
     if (tail_width == 0 || tail_width >= lhs_width)
+        return 0;
+    // The ingress is a signal (or a select of one), as the first stage of a
+    // scalar chain reads one: logic in front of the synchronizer (`{s[0],
+    // a & b}`) can glitch into it, so that is no synchronizer chain.
+    const Expression* tail = ops.back();
+    while (tail->kind == ExpressionKind::Conversion)
+        tail = &static_cast<const ConversionExpression&>(*tail).operand();
+    while (tail->kind == ExpressionKind::ElementSelect || tail->kind == ExpressionKind::RangeSelect)
+        tail = tail->kind == ExpressionKind::ElementSelect
+                   ? &static_cast<const ElementSelectExpression&>(*tail).value()
+                   : &static_cast<const RangeSelectExpression&>(*tail).value();
+    if (tail->kind != ExpressionKind::NamedValue)
         return 0;
 
     // Each upper operand must select from lhs at exactly its target range

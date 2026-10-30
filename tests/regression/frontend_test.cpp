@@ -1452,3 +1452,17 @@ TEST(FrontendTest, IndependentSourcesDoNotReconverge) {
     ASSERT_TRUE(fe.ok);
     EXPECT_TRUE(reconv.empty());
 }
+
+TEST(FrontendTest, LogicInFrontOfPackedSynchronizerIsNoChain) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_packed_logic", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_packed_logic.s"), "error");
+}
+
+TEST(FrontendTest, SelectIngressOfPackedSynchronizerIsAChain) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_packed_select", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_packed_select.s"), "info");
+}

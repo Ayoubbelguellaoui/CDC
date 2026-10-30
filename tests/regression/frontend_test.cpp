@@ -1584,3 +1584,10 @@ TEST(FrontendTest, DeepCrossingIsNotTruncated) {
         EXPECT_NE(f.rule_id, "CDC010") << f.reason;
     EXPECT_EQ(severity_into(findings, "CDC001", "hs_deep.q"), "error");
 }
+
+TEST(FrontendTest, PackedSynchronizerReadAtFirstStageIsFlagged) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("sync_styles.sv", "ss_pulp_tap", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "ss_pulp_tap.reg_q"), "warning");
+}

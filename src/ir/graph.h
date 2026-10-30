@@ -94,6 +94,10 @@ struct Node {
     // (0 = not such a chain). The synchronizer matcher uses the tag to
     // recognize vector-packed 2FF/3FF chains that span no second node.
     uint32_t packed_shift_depth = 0;
+    // A packed shift chain whose first stage (its lowest tail-width bits) is
+    // read somewhere other than by its own shift: the still-metastable stage
+    // is used (set by the RTL frontend).
+    bool packed_early_tap = false;
 };
 
 enum class EdgeRole : uint8_t { Data, Control, Clock, Reset };

@@ -239,6 +239,9 @@ bool SynchronizerMatcher::has_chain_warnings(const ir::Graph& graph, uint64_t de
     const ir::Node* dest = graph.find_node(dest_reg_id);
     if (!dest)
         return false;
+    // A packed chain read in its first stage: the frontend saw the bits.
+    if (dest->packed_shift_depth >= 2 && dest->packed_early_tap)
+        return true;
 
     // Check reset validation for stage pairs in the chain
     uint64_t current = dest_reg_id;

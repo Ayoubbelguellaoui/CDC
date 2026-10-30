@@ -338,6 +338,22 @@ static const Symbol* unpacked_array_symbol(const Expression& expr) {
 // written as an array is a chain. Any other array is one node.
 static thread_local const std::unordered_set<const Symbol*>* g_split_arrays = nullptr;
 
+// The lowest bit of each signal read anywhere (a whole read is bit 0), but
+// for the reads of an assignment's own target (a shift reading itself): a
+// packed synchronizer read in its first stage is tapped early
+// (ir::Node::packed_early_tap).
+static thread_local std::unordered_map<std::string, int64_t> g_lowest_bit_read;
+static thread_local const std::string* g_reading_for_lhs = nullptr;
+static thread_local int64_t g_select_lo = 0;
+
+static void record_read(const std::string& name) {
+    if (g_reading_for_lhs && name == *g_reading_for_lhs)
+        return;
+    auto [it, fresh] = g_lowest_bit_read.emplace(name, g_select_lo);
+    if (!fresh && g_select_lo < it->second)
+        it->second = g_select_lo;
+}
+
 // Node name of the element select `value[selector]` when value is a split
 // array, else nullopt.
 static std::optional<std::string> split_element_name(const ElementSelectExpression& es,
@@ -484,6 +500,7 @@ static void collect_named_values(const Expression& expr, const std::string& pref
                 width = type_width(var.getType());
             }
         }
+        record_read(name);
         out.push_back({name, width});
     } else if (expr.kind == ExpressionKind::BinaryOp) {
         auto& binary = static_cast<const BinaryExpression&>(expr);
@@ -507,11 +524,20 @@ static void collect_named_values(const Expression& expr, const std::string& pref
             out.push_back({*element, type_width(*expr.type)});
             return;
         }
+        int64_t saved = g_select_lo;
+        auto index = static_index(es.selector());
+        g_select_lo = index && *index >= 0 ? *index : 0;
         collect_named_values(es.value(), prefix, out, formal_map);
+        g_select_lo = saved;
         collect_named_values(es.selector(), prefix, out, formal_map);
     } else if (expr.kind == ExpressionKind::RangeSelect) {
         auto& rs = static_cast<const RangeSelectExpression&>(expr);
+        int64_t saved = g_select_lo;
+        auto lo = rs.getSelectionKind() == RangeSelectionKind::Simple ? static_index(rs.right())
+                                                                      : static_index(rs.left());
+        g_select_lo = lo && *lo >= 0 ? *lo : 0;
         collect_named_values(rs.value(), prefix, out, formal_map);
+        g_select_lo = saved;
     } else if (expr.kind == ExpressionKind::Concatenation) {
         auto& cat = static_cast<const ConcatenationExpression&>(expr);
         for (auto& op : cat.operands())
@@ -1012,7 +1038,9 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                         }
                     }
                     std::vector<std::pair<std::string, uint32_t>> rhs_ops;
+                    g_reading_for_lhs = &resolved_lhs;
                     collect_named_values(assign.right(), prefix, rhs_ops, formal_map);
+                    g_reading_for_lhs = nullptr;
                     bool is_gray_transform = false;
                     ir::LogicType logic_type = ir::LogicType::Unknown;
                     bool is_multi_operand = false;
@@ -1681,11 +1709,22 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     g_split_arrays = &split_arrays_;
     scope_paths_.clear();
     reset_paths_.clear();
+    g_lowest_bit_read.clear();
     g_scope_paths = &scope_paths_;
     walk_instance(*top_inst, result.graph, "");
     g_scope_paths = nullptr;
     g_split_arrays = nullptr;
     propagate_gray_captures(result.graph);
+    // A packed synchronizer read within its first stage (its lowest
+    // tail-width bits) other than by its own shift is tapped early.
+    for (auto& node : result.graph.nodes_mutable()) {
+        if (node.kind != ir::NodeKind::Register || node.packed_shift_depth < 2)
+            continue;
+        auto it = g_lowest_bit_read.find(node.hier_name);
+        if (it != g_lowest_bit_read.end() &&
+            it->second < static_cast<int64_t>(node.width / node.packed_shift_depth))
+            node.packed_early_tap = true;
+    }
     resolve_resets(result.graph);
     if (result.graph.truncated()) {
         result.errors.push_back("IR graph exceeded node or edge safety limit; analysis incomplete");

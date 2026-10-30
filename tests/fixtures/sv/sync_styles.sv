@@ -43,3 +43,14 @@ module ss_gray_enable (input logic clk_a, input logic clk_b, input logic inc,
     end
     assign q = s1;
 endmodule
+
+// ss_pulp_tap: the PULP sync read at its first stage, reg_q[0] - tapped
+// early; ss_pulp reads reg_q[STAGES-1] only.
+module ss_pulp_tap #(parameter int unsigned STAGES = 2) (input logic clk_a, input logic clk_b,
+                                                        input logic d, output logic q);
+    logic a_r;
+    logic [STAGES-1:0] reg_q;
+    always_ff @(posedge clk_a) a_r <= d;
+    always_ff @(posedge clk_b) reg_q <= {reg_q[STAGES-2:0], a_r};
+    assign q = reg_q[0];
+endmodule

@@ -1,6 +1,6 @@
 {
- "version": "1.2",
- "description": "Expected results for OpenCDC benchmark fixtures. Each fixture tests specific rules with positive/negative/ambiguous controls. v1.2 adds benchmarks/corpus/: realistic designs across clean/violations/fifo/handshake/clocks/hierarchical/blackbox/tricky. Optional per-entry keys: config/waiver/constraints (project-root-relative paths), args (extra CLI flags), absent_rules (rules with zero findings), present_rules (rules with >=1 finding), reason_contains (substring match on finding reason). Ambiguous controls are reported, never fail.",
+ "version": "1.3",
+ "description": "Expected results for OpenCDC benchmark fixtures. Each fixture tests specific rules with positive/negative/ambiguous controls. v1.2 adds benchmarks/corpus/: realistic designs across clean/violations/fifo/handshake/clocks/hierarchical/blackbox/tricky. Optional per-entry keys: config/waiver/constraints (project-root-relative paths), args (extra CLI flags), absent_rules (rules with zero findings), present_rules (rules with >=1 finding), reason_contains (substring match on finding reason). Ambiguous controls are reported, never fail. v1.3 adds benchmarks/corpus/conformance/: one design per CDC/RDC bug class with correct twins; controls may name exact registers (exact) and a severity (a name or a list), since a correct synchronizer is CDC001 info and a bug CDC001 error or warning.",
  "generated_at": "2026-08-18",
  "benchmarks": {
   "cdc001_benchmark": {
@@ -904,6 +904,1155 @@
      "CDC013"
     ]
    }
+  },
+  "conf_unsync_bit": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_unsync_bit",
+   "description": "Conformance: Unsynchronized single bit",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_unsync_bit.a_r",
+      "dest": "cf_unsync_bit.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_unsync_bus": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_unsync_bus",
+   "description": "Conformance: Unsynchronized 8-bit bus",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_unsync_bus.a_r",
+      "dest": "cf_unsync_bus.q",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_unsync_bus.a_r",
+      "dest": "cf_unsync_bus.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_sync1": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync1",
+   "description": "Conformance: One flop is no synchronizer",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync1.a_r",
+      "dest": "cf_sync1.s0",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_sync2": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync2",
+   "description": "Conformance: Correct 2FF synchronizer",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync2.a_r",
+      "dest": "cf_sync2.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_sync3": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync3",
+   "description": "Conformance: Correct 3FF synchronizer",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync3.a_r",
+      "dest": "cf_sync3.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_sync_packed": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync_packed",
+   "description": "Conformance: Correct 2FF as one packed vector",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync_packed.a_r",
+      "dest": "cf_sync_packed.s",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_sync_reset": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync_reset",
+   "description": "Conformance: Correct 2FF with an asynchronous reset",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync_reset.a_r",
+      "dest": "cf_sync_reset.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_sync_enable": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync_enable",
+   "description": "Conformance: Correct 2FF whose stages have an enable of their own clock",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync_enable.a_r",
+      "dest": "cf_sync_enable.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_sync_consumer": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_sync_consumer",
+   "description": "Conformance: Correct 2FF; a register using the output as a condition is no stage",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sync_consumer.a_r",
+      "dest": "cf_sync_consumer.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_concat_sync": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_concat_sync",
+   "description": "Conformance: Correct 2FF written as a concatenation shift",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_concat_sync.a_r",
+      "dest": "cf_concat_sync.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002",
+     "CDC003"
+    ]
+   }
+  },
+  "conf_tap_logic": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_tap_logic",
+   "description": "Conformance: The metastable first stage read through logic",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_tap_logic.a_r",
+      "dest": "cf_tap_logic.s0",
+      "exact": true,
+      "severity": "warning"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_tap_port": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_tap_port",
+   "description": "Conformance: The metastable first stage drives an output port",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_tap_port.a_r",
+      "dest": "cf_tap_port.s0",
+      "exact": true,
+      "severity": "warning"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_logic_before": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_logic_before",
+   "description": "Conformance: Logic of two source registers in front of the first stage",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_logic_before.a_r",
+      "dest": "cf_logic_before.s0",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_logic_before.a2_r",
+      "dest": "cf_logic_before.s0",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_packed_logic": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_packed_logic",
+   "description": "Conformance: Logic of two source registers in front of a packed 2FF",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_packed_logic.a_r",
+      "dest": "cf_packed_logic.s",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_packed_logic.e_r",
+      "dest": "cf_packed_logic.s",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_enable_if": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_enable_if",
+   "description": "Conformance: An asynchronous flag used only as an if-condition",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_enable_if.a_r",
+      "dest": "cf_enable_if.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_enable_case": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_enable_case",
+   "description": "Conformance: An asynchronous selector used only as a case expression",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_enable_case.a_r",
+      "dest": "cf_enable_case.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_bus_bitwise_sync": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_bus_bitwise_sync",
+   "description": "Conformance: A binary bus through a 2FF chain, bit by bit",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_bus_bitwise_sync.a_r",
+      "dest": "cf_bus_bitwise_sync.s0",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_bus_bitwise_sync.a_r",
+      "dest": "cf_bus_bitwise_sync.s0",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_reconverge": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_reconverge",
+   "description": "Conformance: One source synchronized twice and recombined (muxed_clock_domain / report_double_synchronization)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC003",
+      "source": "cf_reconverge.a_r",
+      "exact": true,
+      "reason_contains": "synchronized twice"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_reconverge.a_r",
+      "dest": "cf_reconverge.s0a",
+      "exact": true,
+      "severity": "info"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_reconverge.a_r",
+      "dest": "cf_reconverge.s0b",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": []
+   },
+   "config": "benchmarks/corpus/conformance/signoff.yaml"
+  },
+  "conf_reconverge_correlated": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_reconverge_correlated",
+   "description": "Conformance: Correlated sources synchronized separately, recombined at an output port",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC003",
+      "source": "cf_reconverge_correlated.a_r",
+      "exact": true,
+      "reason_contains": "Correlated"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_independent_combined": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_independent_combined",
+   "description": "Conformance: Two unrelated synchronized sources combined",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_independent_combined.a_r",
+      "dest": "cf_independent_combined.s_r",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC003"
+    ]
+   }
+  },
+  "conf_concat_unsync": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_concat_unsync",
+   "description": "Conformance: Two registers loaded together from the other clock",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_concat_unsync.a0",
+      "dest": "cf_concat_unsync.q0",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_concat_unsync.a1",
+      "dest": "cf_concat_unsync.q1",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_same_clock_edges": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_same_clock_edges",
+   "description": "Conformance: Rising and falling edge of one clock",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "absent_rules": [
+     "CDC001",
+     "CDC002"
+    ]
+   }
+  },
+  "conf_pulse_toggle": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_pulse_toggle",
+   "description": "Conformance: Correct toggle pulse synchronizer",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_pulse_toggle.tgl",
+      "dest": "cf_pulse_toggle.s",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002"
+    ]
+   }
+  },
+  "conf_gray_shift": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_gray_shift",
+   "description": "Conformance: Gray pointer (shift form) through a 5-bit 2FF",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_gray_shift.ptr_g",
+      "dest": "cf_gray_shift.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002"
+    ]
+   }
+  },
+  "conf_gray_bitwise": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_gray_bitwise",
+   "description": "Conformance: Gray pointer built bit by bit, continuously assigned",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_gray_bitwise.ptr_g",
+      "dest": "cf_gray_bitwise.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ],
+    "absent_rules": [
+     "CDC002"
+    ]
+   }
+  },
+  "conf_ptr_binary": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_ptr_binary",
+   "description": "Conformance: Binary pointer through a 2FF chain",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_ptr_binary.cnt",
+      "dest": "cf_ptr_binary.s0",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_ptr_binary.cnt",
+      "dest": "cf_ptr_binary.s0",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_gray_decoded": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_gray_decoded",
+   "description": "Conformance: Gray register decoded to binary before it crosses",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_gray_decoded.g_r",
+      "dest": "cf_gray_decoded.s0",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC002",
+      "source": "cf_gray_decoded.g_r",
+      "dest": "cf_gray_decoded.s0",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_handshake4": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_handshake4",
+   "description": "Conformance: 4-phase req/ack handshake with an 8-bit payload",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_handshake4.req",
+      "dest": "cf_handshake4.req_s0",
+      "exact": true,
+      "severity": "info"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_handshake4.ack",
+      "dest": "cf_handshake4.ack_s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_handshake4.data_a",
+      "dest": "cf_handshake4.data_b",
+      "exact": true,
+      "severity": "error",
+      "expected": "no_finding",
+      "note": "correct by protocol: the source holds the payload while the synchronized qualifier is active - opencdc does not verify protocols (known gap), so the payload is CDC001 + CDC002 error; waive it"
+     }
+    ]
+   }
+  },
+  "conf_data_enable": {
+   "file": "benchmarks/corpus/conformance/cdc_protocols.sv",
+   "top": "cf_data_enable",
+   "description": "Conformance: Data-enable synchronizer: the bus sampled on a synchronized toggle",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_data_enable.valid",
+      "dest": "cf_data_enable.v0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_data_enable.data_a",
+      "dest": "cf_data_enable.data_b",
+      "exact": true,
+      "severity": "error",
+      "expected": "no_finding",
+      "note": "correct by protocol: the source holds the payload while the synchronized qualifier is active - opencdc does not verify protocols (known gap), so the payload is CDC001 + CDC002 error; waive it"
+     }
+    ]
+   }
+  },
+  "conf_child_to_parent": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_child_to_parent",
+   "description": "Conformance: A child register drives a parent register of the other clock",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_child_to_parent.u_a.q",
+      "dest": "cf_child_to_parent.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_sibling": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_sibling",
+   "description": "Conformance: A child register drives a sibling of the other clock",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_sibling.u_a.q",
+      "dest": "cf_sibling.u_b.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_parent_to_sync": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_parent_to_sync",
+   "description": "Conformance: A parent register synchronized by a child module",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_parent_to_sync.a_r",
+      "dest": "cf_parent_to_sync.u_sync.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ]
+   }
+  },
+  "conf_deep_sync": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_deep_sync",
+   "description": "Conformance: The clock reaches the synchronizer under another name, two levels down",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_deep_sync.a_r",
+      "dest": "cf_deep_sync.u_wrap.u_inner.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ]
+   }
+  },
+  "conf_generate_unsync": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_generate_unsync",
+   "description": "Conformance: A generate loop of unsynchronized crossings",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_unsync.g[0].a_r",
+      "dest": "cf_generate_unsync.q",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_unsync.g[1].a_r",
+      "dest": "cf_generate_unsync.q",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_unsync.g[2].a_r",
+      "dest": "cf_generate_unsync.q",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_unsync.g[3].a_r",
+      "dest": "cf_generate_unsync.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_generate_sync": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_generate_sync",
+   "description": "Conformance: A generate loop of synchronizer instances",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_sync.g[0].a_r",
+      "dest": "cf_generate_sync.g[0].u_sync.s0",
+      "exact": true,
+      "severity": "info"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_sync.g[1].a_r",
+      "dest": "cf_generate_sync.g[1].u_sync.s0",
+      "exact": true,
+      "severity": "info"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_sync.g[2].a_r",
+      "dest": "cf_generate_sync.g[2].u_sync.s0",
+      "exact": true,
+      "severity": "info"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_generate_sync.g[3].a_r",
+      "dest": "cf_generate_sync.g[3].u_sync.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ]
+   }
+  },
+  "conf_array_loop_sync": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_array_loop_sync",
+   "description": "Conformance: A 3FF as an unpacked array shifted by a for loop",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_array_loop_sync.a_r",
+      "dest": "cf_array_loop_sync.s[0]",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [
+     {
+      "rule": "CDC001",
+      "severity": [
+       "error",
+       "warning"
+      ],
+      "expected": "no_finding",
+      "note": "a correct design: no CDC001 error or warning"
+     }
+    ]
+   }
+  },
+  "conf_pll_clocks": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_pll_clocks",
+   "description": "Conformance: Clocks from a black-box PLL: one synchronized, one raw crossing",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_pll_clocks.a_r",
+      "dest": "cf_pll_clocks.q_raw",
+      "exact": true,
+      "severity": "error"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_pll_clocks.a_r",
+      "dest": "cf_pll_clocks.u_sync.s0",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": []
+   }
+  },
+  "conf_clock_gate": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_clock_gate",
+   "description": "Conformance: A clock-gate instance: one clock domain",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "absent_rules": [
+     "CDC001"
+    ]
+   }
+  },
+  "conf_clock_div": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_clock_div",
+   "description": "Conformance: A divided clock folds into its root",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "absent_rules": [
+     "CDC001"
+    ]
+   }
+  },
+  "conf_clock_mux": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_clock_mux",
+   "description": "Conformance: A mux of two clocks is a domain of its own (muxed_clock_domain / report_double_synchronization)",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_clock_mux.a_r",
+      "dest": "cf_clock_mux.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   },
+   "config": "benchmarks/corpus/conformance/signoff.yaml"
+  },
+  "conf_rst_same_name": {
+   "file": "benchmarks/corpus/conformance/rdc.sv",
+   "top": "cf_rst_same_name",
+   "description": "Conformance: Two reset nets under one port name",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC009",
+      "source": "cf_rst_same_name.u_a.q",
+      "dest": "cf_rst_same_name.u_b.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   },
+   "config": "benchmarks/corpus/conformance/rdc.yaml"
+  },
+  "conf_rst_two_ports": {
+   "file": "benchmarks/corpus/conformance/rdc.sv",
+   "top": "cf_rst_two_ports",
+   "description": "Conformance: Two independent asynchronous resets, one clock",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC009",
+      "source": "cf_rst_two_ports.a_q",
+      "dest": "cf_rst_two_ports.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   },
+   "config": "benchmarks/corpus/conformance/rdc.yaml"
+  },
+  "conf_rst_wrong_domain": {
+   "file": "benchmarks/corpus/conformance/rdc.sv",
+   "top": "cf_rst_wrong_domain",
+   "description": "Conformance: A reset synchronized in clk_a resets clk_b registers",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC009",
+      "source": "cf_rst_wrong_domain.rst_sync_a",
+      "dest": "cf_rst_wrong_domain.b_r",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   },
+   "config": "benchmarks/corpus/conformance/rdc.yaml"
+  },
+  "conf_rst_polarity": {
+   "file": "benchmarks/corpus/conformance/rdc.sv",
+   "top": "cf_rst_polarity",
+   "description": "Conformance: One reset net used active-high and active-low",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC009",
+      "source": "cf_rst_polarity.a_q",
+      "dest": "cf_rst_polarity.q",
+      "exact": true,
+      "severity": "error"
+     }
+    ],
+    "negative_controls": []
+   },
+   "config": "benchmarks/corpus/conformance/rdc.yaml"
+  },
+  "conf_rst_renamed": {
+   "file": "benchmarks/corpus/conformance/rdc.sv",
+   "top": "cf_rst_renamed",
+   "description": "Conformance: One reset net under two port names",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "absent_rules": [
+     "CDC009"
+    ]
+   },
+   "config": "benchmarks/corpus/conformance/rdc.yaml"
+  },
+  "conf_rst_sync_all": {
+   "file": "benchmarks/corpus/conformance/rdc.sv",
+   "top": "cf_rst_sync_all",
+   "description": "Conformance: Every data register under one synchronized reset",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "absent_rules": [
+     "CDC009"
+    ]
+   },
+   "config": "benchmarks/corpus/conformance/rdc.yaml"
+  },
+  "conf_clock_mux_default": {
+   "file": "benchmarks/corpus/conformance/cdc_structure.sv",
+   "top": "cf_clock_mux",
+   "description": "Conformance: A mux of two clocks is a domain of its own - default policy",
+   "expected": {
+    "positive_controls": [],
+    "negative_controls": [],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_clock_mux.a_r",
+      "dest": "cf_clock_mux.q",
+      "exact": true,
+      "severity": "error",
+      "expected": "finding",
+      "note": "the default policy represents a clock mux by one input, so this crossing is not reported; set muxed_clock_domain (or the strict / asic_signoff profile) for sign-off"
+     }
+    ]
+   }
+  },
+  "conf_reconverge_default": {
+   "file": "benchmarks/corpus/conformance/cdc_sync.sv",
+   "top": "cf_reconverge",
+   "description": "Conformance: One source synchronized twice and recombined - default policy",
+   "expected": {
+    "positive_controls": [
+     {
+      "rule": "CDC001",
+      "source": "cf_reconverge.a_r",
+      "dest": "cf_reconverge.s0a",
+      "exact": true,
+      "severity": "info"
+     },
+     {
+      "rule": "CDC001",
+      "source": "cf_reconverge.a_r",
+      "dest": "cf_reconverge.s0b",
+      "exact": true,
+      "severity": "info"
+     }
+    ],
+    "negative_controls": [],
+    "ambiguous_controls": [
+     {
+      "rule": "CDC003",
+      "source": "cf_reconverge.a_r",
+      "exact": true,
+      "reason_contains": "synchronized twice",
+      "expected": "finding",
+      "note": "the default policy takes two synchronized single-bit paths as safe; set report_double_synchronization (or the strict / asic_signoff profile) for sign-off"
+     }
+    ]
+   }
   }
  },
  "known_gaps": [
@@ -928,7 +2077,7 @@
    "rule": "CDC001/CDC002",
    "gap": "Verified handshakes cover only the valid/ready (req/ack) control pair; the payload data the handshake guards is still reported CDC001+CDC002 even for protocol-correct 4-phase and 2-phase designs",
    "severity": "medium",
-   "evidence": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv, handshake_2phase_req_ack.sv ambiguous controls"
+   "evidence": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv, handshake_2phase_req_ack.sv ambiguous controls; benchmarks/corpus/conformance/cdc_protocols.sv cf_handshake4, cf_data_enable"
   },
   {
    "rule": "CDC006",

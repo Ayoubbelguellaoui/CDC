@@ -37,6 +37,27 @@ class RuleMetrics:
         return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
 
 
+def control_matches(af, ctrl):
+    """Does finding `af` match the control: same rule, source/dest
+    substrings (or exact names under "exact": true), reason substring, and
+    severity - a name or a list of names - when given."""
+    if af["rule_id"] != ctrl["rule"]:
+        return False
+    exact = ctrl.get("exact", False)
+    for key in ("source", "dest"):
+        want = ctrl.get(key, "")
+        have = af.get(key, "")
+        if want and (have != want if exact else want not in have):
+            return False
+    want_reason = ctrl.get("reason_contains", "")
+    if want_reason and want_reason not in af.get("reason", ""):
+        return False
+    sev = ctrl.get("severity")
+    if sev and af.get("severity") not in ([sev] if isinstance(sev, str) else sev):
+        return False
+    return True
+
+
 def run_opencdc(binary, fixture, top, extra_args=None):
     cmd = [binary, "check", fixture, "--top", top] + list(extra_args or []) + [
         "--format", "json"]
@@ -132,21 +153,8 @@ def main():
         fp = 0
         for pos in positives:
             rule = pos["rule"]
-            src = pos.get("source", "")
-            dst = pos.get("dest", "")
-            want_reason = pos.get("reason_contains", "")
 
-            found = False
-            for af in actual_findings:
-                if af["rule_id"] == rule:
-                    if src and src not in af.get("source", ""):
-                        continue
-                    if dst and dst not in af.get("dest", ""):
-                        continue
-                    if want_reason and want_reason not in af.get("reason", ""):
-                        continue
-                    found = True
-                    break
+            found = any(control_matches(af, pos) for af in actual_findings)
 
             if found:
                 tp += 1
@@ -164,21 +172,8 @@ def main():
         for neg in negatives:
             rule = neg["rule"]
             expected_behavior = neg.get("expected", "no_finding")
-            src = neg.get("source", "")
-            dst = neg.get("dest", "")
-            want_reason = neg.get("reason_contains", "")
 
-            found = False
-            for af in actual_findings:
-                if af["rule_id"] == rule:
-                    if src and src not in af.get("source", ""):
-                        continue
-                    if dst and dst not in af.get("dest", ""):
-                        continue
-                    if want_reason and want_reason not in af.get("reason", ""):
-                        continue
-                    found = True
-                    break
+            found = any(control_matches(af, neg) for af in actual_findings)
 
             if rule not in rule_metrics:
                 rule_metrics[rule] = RuleMetrics(rule_id=rule)
@@ -209,12 +204,7 @@ def main():
             src = amb.get("source", "")
             dst = amb.get("dest", "")
             want = amb.get("expected", "undecided")
-            found = any(
-                af["rule_id"] == rule
-                and (not src or src in af.get("source", ""))
-                and (not dst or dst in af.get("dest", ""))
-                for af in actual_findings
-            )
+            found = any(control_matches(af, amb) for af in actual_findings)
             print(f"  [AMBIG] {fixture_key}: {rule} {src} -> {dst}: "
                   f"found={found} expected={want} ({amb.get('note', '')})")
 

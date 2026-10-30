@@ -114,7 +114,9 @@ struct ValidationResult {
 // E1-E3: Safety limits to prevent OOM on pathological designs
 static constexpr size_t MAX_GRAPH_NODES = 500000;
 static constexpr size_t MAX_GRAPH_EDGES = 1000000;
-static constexpr size_t MAX_PATH_DEPTH = 50;
+// Nodes on one register-to-register path (a CPU's logic, every port a node,
+// exceeds 50); the search is linear in the graph, so depth costs no time.
+static constexpr size_t MAX_PATH_DEPTH = 1000;
 
 // Edge dedup key packs two IDs into uint64_t as (from << 32) | to.
 // Verify node IDs always fit in 32 bits.

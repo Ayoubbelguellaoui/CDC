@@ -398,6 +398,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 f.safety_status = SafetyStatus::VerifiedSafe;
                 f.safety_provenance = "synchronizer chain detected at destination";
             } else if (handshake_gate) {
+                f.handshake_payload = true;
                 f.severity = "info";
                 f.safety_status = SafetyStatus::VerifiedSafe;
                 f.safety_provenance =
@@ -784,8 +785,11 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
         if (node.value_uncertain)
             work.push_back(node.id);
     }
+    // Uncertainty spreads at most this many hops (its own horizon, not the
+    // path search's depth limit).
+    static constexpr size_t kUncertaintyHops = 50;
     size_t hops = 0;
-    while (!work.empty() && hops < ir::MAX_PATH_DEPTH) {
+    while (!work.empty() && hops < kUncertaintyHops) {
         ++hops;
         std::vector<uint64_t> next;
         for (uint64_t id : work) {

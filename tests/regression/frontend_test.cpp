@@ -1563,3 +1563,24 @@ TEST(FrontendTest, HandshakePayloads) {
             << c.top;
     }
 }
+
+TEST(FrontendTest, HandshakePayloadFanoutDoesNotReconverge) {
+    opencdc::frontend::FrontendResult fe;
+    auto crossings = analyze_fixture("handshake.sv", "hs_fanout", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(crossings, "CDC001", "hs_fanout.c0"), "info");
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::ReconvergenceAnalyzer ra;
+    ra.set_report_double_synchronization(true);
+    EXPECT_TRUE(ra.analyze(fe.graph, dr.domains, crossings).empty());
+}
+
+TEST(FrontendTest, DeepCrossingIsNotTruncated) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("handshake.sv", "hs_deep", fe);
+    ASSERT_TRUE(fe.ok);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC010") << f.reason;
+    EXPECT_EQ(severity_into(findings, "CDC001", "hs_deep.q"), "error");
+}

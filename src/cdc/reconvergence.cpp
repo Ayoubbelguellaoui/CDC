@@ -77,6 +77,10 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
 
             if (a->dest_reg_id == b->dest_reg_id)
                 continue;
+            // A handshake payload is held while it is sampled: its copies
+            // cannot disagree, wherever they meet.
+            if (a->handshake_payload || b->handshake_payload)
+                continue;
 
             // Two synchronized single-bit paths of one source are taken as
             // safe unless report_double_sync_: independent synchronizers may
@@ -223,6 +227,8 @@ std::vector<Finding> ReconvergenceAnalyzer::check_correlated(
                 return findings;
             const Finding* a = cdc[i];
             const Finding* b = cdc[j];
+            if (a->handshake_payload || b->handshake_payload)
+                continue;
             if (a->source_reg_id == b->source_reg_id || a->dest_reg_id == b->dest_reg_id ||
                 a->source_domain != b->source_domain || a->dest_domain != b->dest_domain)
                 continue;

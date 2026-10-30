@@ -73,6 +73,9 @@ struct Finding {
     uint32_t bus_width = 1;
     bool is_gray_coded = false;
     bool has_handshake = false;
+    // A handshake payload (CrossingAnalyzer::handshake_qualifier): held
+    // while it is sampled, so copies of it cannot disagree.
+    bool handshake_payload = false;
     bool has_multicycle_exception = false;
     int multicycle_cycles = 0;
     std::string constraint_source;

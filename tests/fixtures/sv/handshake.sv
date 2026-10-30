@@ -58,3 +58,40 @@ module hs_counter (input logic clk_a, input logic clk_b, input logic valid,
     end
     always_ff @(posedge clk_b) if (r1 != r2) q <= cnt;
 endmodule
+
+// hs_fanout: a handshake payload used by two consumers that recombine - held
+// while sampled, the copies cannot disagree (no CDC003).
+module hs_fanout (input logic clk_a, input logic clk_b, input logic valid,
+                  input logic [7:0] d, output logic [7:0] q);
+    logic req, r0, r1, r2;
+    logic [7:0] data, c0, c1;
+    always_ff @(posedge clk_a)
+        if (valid) begin
+            req <= ~req;
+            data <= d;
+        end
+    always_ff @(posedge clk_b) begin
+        r0 <= req;
+        r1 <= r0;
+        r2 <= r1;
+    end
+    always_ff @(posedge clk_b)
+        if (r1 != r2) begin
+            c0 <= data;
+            c1 <= ~data;
+        end
+    always_ff @(posedge clk_b) q <= c0 ^ c1;
+endmodule
+
+// hs_deep: a crossing through 80 stages of logic - a path of more than 50
+// nodes, which the search reported as truncated (CDC010).
+module hs_deep (input logic clk_a, input logic clk_b, input logic d, output logic q);
+    logic a_r;
+    logic w[81];
+    always_ff @(posedge clk_a) a_r <= d;
+    assign w[0] = a_r;
+    for (genvar i = 0; i < 80; i++) begin : g
+        assign w[i+1] = ~w[i];
+    end
+    always_ff @(posedge clk_b) q <= w[80];
+endmodule

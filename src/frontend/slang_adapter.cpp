@@ -261,12 +261,27 @@ static std::optional<LoopUnroll> unroll_for(const ForLoopStatement& fl) {
             step = -1;
     } else if (st.kind == ExpressionKind::Assignment) {
         auto& a = static_cast<const AssignmentExpression&>(st);
-        auto k = static_index(a.right());
-        if (a.isCompound() && is_var(a.left()) && k) {
-            if (*a.op == BinaryOperator::Add)
-                step = *k;
-            else if (*a.op == BinaryOperator::Subtract)
-                step = -*k;
+        if (a.isCompound()) {
+            auto k = static_index(a.right());
+            if (is_var(a.left()) && k) {
+                if (*a.op == BinaryOperator::Add)
+                    step = *k;
+                else if (*a.op == BinaryOperator::Subtract)
+                    step = -*k;
+            }
+        } else if (is_var(a.left()) && a.right().kind == ExpressionKind::BinaryOp) {
+            // `i = i + k` / `i = i - k` / `i = k + i` (Verilog-2001 loops).
+            auto& b = static_cast<const BinaryExpression&>(a.right());
+            if (is_var(b.left())) {
+                auto k = static_index(b.right());
+                if (k && b.op == BinaryOperator::Add)
+                    step = *k;
+                else if (k && b.op == BinaryOperator::Subtract)
+                    step = -*k;
+            } else if (is_var(b.right()) && b.op == BinaryOperator::Add) {
+                if (auto k = static_index(b.left()))
+                    step = *k;
+            }
         }
     }
     if (step == 0)
@@ -754,31 +769,17 @@ static bool function_computes_gray(const CallExpression& call, const std::string
     return call_computes_gray_of_named(call, prefix, {}, 0);
 }
 
-// Constant integer value of a select bound. Only literal (possibly
-// conversion-wrapped) expressions are accepted; anything else — parameter
-// references, arithmetic — yields nullopt so callers stay conservative.
-static std::optional<uint64_t> const_int_value(const Expression& expr) {
-    const Expression* e = &expr;
-    while (e->kind == ExpressionKind::Conversion)
-        e = &static_cast<const ConversionExpression&>(*e).operand();
-    if (e->kind != ExpressionKind::IntegerLiteral)
-        return std::nullopt;
-    auto& lit = static_cast<const IntegerLiteral&>(*e);
-    if (lit.getValue().hasUnknown())
-        return std::nullopt;
-    return lit.getValue().as<uint64_t>();
-}
-
 // The constant [hi:lo] range an operand selects from lhs, or false when the
-// operand is not an element/range select of lhs with literal bounds (any
+// operand is not an element/range select of lhs with static bounds -
+// literals, parameters, `STAGES-2` (any
 // other shape is treated conservatively as "not a verified shift step").
 static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
                              const std::string& prefix, uint32_t& hi, uint32_t& lo) {
     const Expression* base = nullptr;
     if (op.kind == ExpressionKind::ElementSelect) {
         auto& es = static_cast<const ElementSelectExpression&>(op);
-        auto idx = const_int_value(es.selector());
-        if (!idx || *idx > 0xFFFFFFFFull)
+        auto idx = static_index(es.selector());
+        if (!idx || *idx < 0 || *idx > 0xFFFFFFFFll)
             return false;
         hi = lo = static_cast<uint32_t>(*idx);
         base = &es.value();
@@ -786,9 +787,9 @@ static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
         auto& rs = static_cast<const RangeSelectExpression&>(op);
         if (rs.getSelectionKind() != RangeSelectionKind::Simple)
             return false;
-        auto left = const_int_value(rs.left());
-        auto right = const_int_value(rs.right());
-        if (!left || !right || *left > 0xFFFFFFFFull || *right > 0xFFFFFFFFull || *left < *right)
+        auto left = static_index(rs.left());
+        auto right = static_index(rs.right());
+        if (!left || !right || *right < 0 || *left > 0xFFFFFFFFll || *left < *right)
             return false;
         hi = static_cast<uint32_t>(*left);
         lo = static_cast<uint32_t>(*right);
@@ -1673,8 +1674,10 @@ void SlangAdapter::propagate_gray_captures(ir::Graph& graph) {
             const ir::Node* input = nullptr;
             bool one_input = true;
             for (uint64_t pred_id : graph.predecessors(node.id)) {
-                if (pred_id == node.id)
-                    continue;  // a register holding its value
+                // A register holding its value; an enable (Control edge)
+                // decides when, not what, is captured.
+                if (pred_id == node.id || graph.edge_role(pred_id, node.id) != ir::EdgeRole::Data)
+                    continue;
                 if (input && input->id != pred_id) {
                     one_input = false;
                     break;

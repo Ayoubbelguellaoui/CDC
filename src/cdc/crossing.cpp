@@ -717,7 +717,8 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
         uf.severity = "warning";
         uf.source_reg_id = node.id;
         uf.source_reg_name = node.hier_name;
-        uf.source_domain = node.clock_domain;
+        // The domain as the other findings name it (the resolved root).
+        uf.source_domain = node.root_clock.empty() ? node.clock_domain : node.root_clock;
         uf.path.node_ids.push_back(node.id);
         uf.source_loc = node.loc;
         uf.bus_width = node.width;

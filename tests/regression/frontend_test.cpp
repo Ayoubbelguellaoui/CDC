@@ -1512,3 +1512,19 @@ TEST(FrontendTest, InvertedAndBypassedClockIsOneRoot) {
     for (const auto& f : findings)
         EXPECT_NE(f.rule_id, "CDC001") << f.reason;
 }
+
+TEST(FrontendTest, SynchronizerStylesOfRealIp) {
+    struct {
+        const char* top;
+        const char* dest;
+    } cases[] = {{"ss_v2001", "ss_v2001.s[0]"},
+                 {"ss_pulp", "ss_pulp.reg_q"},
+                 {"ss_gray_enable", "ss_gray_enable.s0"}};
+    for (const auto& c : cases) {
+        opencdc::frontend::FrontendResult fe;
+        auto findings = analyze_fixture("sync_styles.sv", c.top, fe);
+        ASSERT_TRUE(fe.ok) << c.top;
+        EXPECT_EQ(severity_into(findings, "CDC001", c.dest), "info") << c.top;
+        EXPECT_EQ(severity_into(findings, "CDC002", c.dest), "") << c.top;
+    }
+}

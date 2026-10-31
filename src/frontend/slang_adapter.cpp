@@ -66,6 +66,25 @@ static std::string sv_to_string(std::string_view sv) {
     return std::string(sv);
 }
 
+// SlangAdapter::scope_paths_ while elaborate() walks the design, for the
+// free functions below that name signals.
+static thread_local const std::unordered_map<const Scope*, std::string>* g_scope_paths = nullptr;
+
+// Hierarchical name of a signal: the path of the scope that declares it, or
+// `prefix` for a scope the walk did not enter (subroutine and statement-block
+// locals, packages). A generate block reads its module's signals, so naming
+// them after the block would split one net into several nodes.
+static std::string symbol_path(const Symbol& sym, const std::string& prefix) {
+    if (g_scope_paths) {
+        if (const Scope* scope = sym.getParentScope()) {
+            auto it = g_scope_paths->find(scope);
+            if (it != g_scope_paths->end())
+                return it->second + "." + sv_to_string(sym.name);
+        }
+    }
+    return prefix + "." + sv_to_string(sym.name);
+}
+
 // A gray transform is `x ^ (x >> 1)` or `x ^ (x << 1)` (either operand
 // order): one operand is the signal itself, the other the same signal
 // shifted. Requiring the shared signal keeps arbitrary XOR expressions
@@ -130,7 +149,7 @@ static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expr
                                                                       const std::string& prefix) {
     if (expr.kind == ExpressionKind::NamedValue) {
         auto& nv = static_cast<const NamedValueExpression&>(expr);
-        return std::make_pair(prefix + "." + sv_to_string(nv.symbol.name),
+        return std::make_pair(symbol_path(nv.symbol, prefix),
                               static_cast<uint32_t>(expr.type->getBitWidth()));
     }
     if (expr.kind == ExpressionKind::MemberAccess) {
@@ -200,7 +219,7 @@ static void collect_named_values(const Expression& expr, const std::string& pref
             name = fm_it->second.first;
             width = fm_it->second.second;
         } else {
-            name = prefix + "." + raw_name;
+            name = symbol_path(nv.symbol, prefix);
             if (nv.symbol.kind == SymbolKind::Variable) {
                 auto& var = static_cast<const VariableSymbol&>(nv.symbol);
                 width = var.getType().getBitWidth();
@@ -416,7 +435,7 @@ static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
     if (base->kind != ExpressionKind::NamedValue)
         return false;
     auto& nv = static_cast<const NamedValueExpression&>(*base);
-    return prefix + "." + sv_to_string(nv.symbol.name) == lhs_name;
+    return symbol_path(nv.symbol, prefix) == lhs_name;
 }
 
 // Stage count of a packed shift chain `lhs <= {lhs_hi..., tail}`: the tail
@@ -494,15 +513,16 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                 auto& assign = static_cast<const AssignmentExpression&>(es.expr);
                 auto lhs = extract_lvalue(assign.left(), prefix);
                 if (lhs) {
-                    std::string l = lhs->first.substr(prefix.size() + 1);
+                    // Formals are keyed by their bare name; a signal of an
+                    // enclosing scope (named by symbol_path) is no formal.
                     uint32_t l_width = lhs->second;
-                    auto fm_it = formal_map.find(l);
-                    std::string resolved_lhs;
-                    if (fm_it != formal_map.end()) {
-                        resolved_lhs = fm_it->second.first;
-                        l_width = fm_it->second.second;
-                    } else {
-                        resolved_lhs = prefix + "." + l;
+                    std::string resolved_lhs = lhs->first;
+                    if (lhs->first.compare(0, prefix.size() + 1, prefix + ".") == 0) {
+                        auto fm_it = formal_map.find(lhs->first.substr(prefix.size() + 1));
+                        if (fm_it != formal_map.end()) {
+                            resolved_lhs = fm_it->second.first;
+                            l_width = fm_it->second.second;
+                        }
                     }
                     std::vector<std::pair<std::string, uint32_t>> rhs_ops;
                     collect_named_values(assign.right(), prefix, rhs_ops, formal_map);
@@ -710,6 +730,16 @@ static bool is_reset_name(const std::string& name) {
     // set_valid, set_data, set_enable etc. "preset" is already caught above.
 }
 
+// The declaration of a signal event that is a plain named value, else null.
+static const Symbol* event_symbol(const TimingControl& event) {
+    if (event.kind != TimingControlKind::SignalEvent)
+        return nullptr;
+    auto& se = static_cast<const SignalEventControl&>(event);
+    if (se.expr.kind != ExpressionKind::NamedValue)
+        return nullptr;
+    return &static_cast<const NamedValueExpression&>(se.expr).symbol;
+}
+
 // Extract a readable signal name from an arbitrary event expression. Named
 // values use the symbol name; anything else (hierarchical refs, selects) is
 // recovered from source text so the always block is not silently dropped.
@@ -767,14 +797,17 @@ ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& pr
 
     if (timing.kind == TimingControlKind::SignalEvent) {
         std::string name = event_signal_name(timing);
-        if (!name.empty())
+        if (!name.empty()) {
             info.clock = name;
+            info.clock_symbol = event_symbol(timing);
+        }
     } else if (timing.kind == TimingControlKind::EventList) {
         auto& el = static_cast<const EventListControl&>(timing);
         // Classify each event by role (reset vs clock) instead of position.
         // The clock is the last non-reset edge event, matching the Verilog
         // convention `@(posedge reset or posedge clk)`.
         std::string clock_candidate;
+        const Symbol* clock_candidate_symbol = nullptr;
         for (auto& ev : el.events) {
             if (!ev || ev->kind != TimingControlKind::SignalEvent)
                 continue;
@@ -793,10 +826,12 @@ ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& pr
                 info.is_async_reset = true;
             } else {
                 clock_candidate = name;
+                clock_candidate_symbol = event_symbol(*ev);
             }
         }
         if (!clock_candidate.empty()) {
             info.clock = clock_candidate;
+            info.clock_symbol = clock_candidate_symbol;
         } else if (!el.events.empty()) {
             // All events matched the reset heuristic — fall back to the first
             // edge event as clock so the block is not dropped entirely.
@@ -809,6 +844,7 @@ ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& pr
                 std::string name = event_signal_name(*ev);
                 if (!name.empty()) {
                     info.clock = name;
+                    info.clock_symbol = event_symbol(*ev);
                     break;
                 }
             }
@@ -964,7 +1000,10 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
         return result;
     }
 
+    scope_paths_.clear();
+    g_scope_paths = &scope_paths_;
     walk_instance(*top_inst, result.graph, "");
+    g_scope_paths = nullptr;
     if (result.graph.truncated()) {
         result.errors.push_back("IR graph exceeded node or edge safety limit; analysis incomplete");
         return result;
@@ -996,6 +1035,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
         return;
     }
     ++scope_depth_;
+    scope_paths_[&scope] = p;
     for (auto& member : scope.members()) {
         switch (member.kind) {
             case SymbolKind::Port: {
@@ -1069,10 +1109,16 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             case SymbolKind::GenerateBlockArray: {
                 auto& array = static_cast<const GenerateBlockArraySymbol&>(member);
                 std::string array_prefix = p + "." + sv_to_string(array.name);
+                // Entries of a loop have no name of their own: `g[0]`, `g[1]`, ...
+                // (one path for all of them merged the copies into one node).
                 for (const auto* entry : array.entries) {
                     if (entry && !entry->isUninstantiated) {
-                        walk_scope(*entry, graph, array_prefix + "." + sv_to_string(entry->name),
-                                   module_type);
+                        std::string entry_prefix =
+                            entry->arrayIndex
+                                ? array_prefix + "[" +
+                                      entry->arrayIndex->toString(LiteralBase::Decimal, false) + "]"
+                                : array_prefix + "." + sv_to_string(entry->name);
+                        walk_scope(*entry, graph, entry_prefix, module_type);
                     }
                 }
                 break;
@@ -1101,8 +1147,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 "Skipped procedural block with unrecoverable clock at " + where);
                             break;
                         }
-                        if (!p.empty() && cr.clock.find('.') == std::string::npos &&
-                            cr.clock != "unknown") {
+                        if (cr.clock_symbol) {
+                            cr.clock = symbol_path(*cr.clock_symbol, p);
+                        } else if (!p.empty() && cr.clock.find('.') == std::string::npos &&
+                                   cr.clock != "unknown") {
                             cr.clock = p + "." + cr.clock;
                         }
                     } else {
@@ -1286,8 +1334,12 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             }
         }
 
-        std::string wire_name = lhs_name.substr(p.size() + 1);
-        std::string qualified_wire = p + "." + wire_name;
+        // lhs_name is the path of the scope that declares the wire, which is
+        // an enclosing one when the assign sits in a generate block.
+        std::string qualified_wire = lhs_name;
+        std::string wire_name = lhs_name.compare(0, p.size() + 1, p + ".") == 0
+                                    ? lhs_name.substr(p.size() + 1)
+                                    : lhs_name.substr(lhs_name.rfind('.') + 1);
 
         if (asgn.right().kind == ExpressionKind::ConditionalOp) {
             // Only conditional assigns indicate a muxed clock — mark registers

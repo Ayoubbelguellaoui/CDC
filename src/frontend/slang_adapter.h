@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -20,6 +21,7 @@ namespace slang::ast {
 class Compilation;
 class InstanceSymbol;
 class Scope;
+class Symbol;
 class ProceduralBlockSymbol;
 class TimingControl;
 }  // namespace slang::ast
@@ -28,6 +30,9 @@ namespace opencdc::frontend {
 
 struct ClockResetInfo {
     std::string clock;
+    // Declaration of the clock when the event is a plain named value, so the
+    // clock is named after the scope that declares it (see scope_paths_).
+    const slang::ast::Symbol* clock_symbol = nullptr;
     std::string reset;
     ir::ResetPolarity reset_pol = ir::ResetPolarity::None;
     bool is_async_reset = false;
@@ -74,6 +79,10 @@ class SlangAdapter : public IFrontend {
     // Recursion depth guard for instance/generate nesting (walk_* recursion).
     size_t scope_depth_ = 0;
     static constexpr size_t kMaxScopeDepth = 64;
+    // Hierarchical path of every scope walk_scope entered (instance bodies,
+    // generate blocks). A signal is named after the scope that declares it,
+    // not the one that reads it: a generate block reads its module's signals.
+    std::unordered_map<const slang::ast::Scope*, std::string> scope_paths_;
 };
 
 }  // namespace opencdc::frontend

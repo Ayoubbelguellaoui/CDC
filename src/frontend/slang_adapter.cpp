@@ -70,6 +70,25 @@ static std::string sv_to_string(std::string_view sv) {
 // free functions below that name signals.
 static thread_local const std::unordered_map<const Scope*, std::string>* g_scope_paths = nullptr;
 
+// Publishes a scope map to symbol_path() for the lifetime of the guard and
+// restores the previous one on every exit, an exception included, so
+// g_scope_paths never outlives the adapter that owns the map.
+class ScopePathsGuard {
+   public:
+    explicit ScopePathsGuard(const std::unordered_map<const Scope*, std::string>& paths)
+        : previous_(g_scope_paths) {
+        g_scope_paths = &paths;
+    }
+    ~ScopePathsGuard() {
+        g_scope_paths = previous_;
+    }
+    ScopePathsGuard(const ScopePathsGuard&) = delete;
+    ScopePathsGuard& operator=(const ScopePathsGuard&) = delete;
+
+   private:
+    const std::unordered_map<const Scope*, std::string>* previous_;
+};
+
 // Hierarchical name of a signal: the path of the scope that declares it, or
 // `prefix` for a scope the walk did not enter (subroutine and statement-block
 // locals, packages). A generate block reads its module's signals, so naming
@@ -1001,9 +1020,10 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     }
 
     scope_paths_.clear();
-    g_scope_paths = &scope_paths_;
-    walk_instance(*top_inst, result.graph, "");
-    g_scope_paths = nullptr;
+    {
+        ScopePathsGuard scope_paths_guard(scope_paths_);
+        walk_instance(*top_inst, result.graph, "");
+    }
     if (result.graph.truncated()) {
         result.errors.push_back("IR graph exceeded node or edge safety limit; analysis incomplete");
         return result;

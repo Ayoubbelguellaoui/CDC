@@ -73,3 +73,29 @@ module rr_two_clk (
         if (!rst_n) qb <= 1'b0;
         else qb <= d;
 endmodule
+
+// rr_dft: the reset synchronizer, then the usual test-mode bypass
+// (test_mode ? rst_n : rst_sync) before the registers. Without case
+// analysis: one finding, the mux (logic), not the synchronizer stages;
+// with test_mode at 0 (set_case_analysis): none; at 1: the raw port.
+module rr_dft (
+    input  logic clk,
+    input  logic rst_n,
+    input  logic test_mode,
+    input  logic d,
+    output logic q
+);
+    logic rst_meta, rst_sync, rst_dft;
+    always_ff @(posedge clk or negedge rst_n)
+        if (!rst_n) begin
+            rst_meta <= 1'b0;
+            rst_sync <= 1'b0;
+        end else begin
+            rst_meta <= 1'b1;
+            rst_sync <= rst_meta;
+        end
+    assign rst_dft = test_mode ? rst_n : rst_sync;
+    always_ff @(posedge clk or negedge rst_dft)
+        if (!rst_dft) q <= 1'b0;
+        else q <= d;
+endmodule

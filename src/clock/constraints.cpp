@@ -760,10 +760,45 @@ ClockConstraints SdcReader::parse_sdc_content(const std::string& content) {
             parse_set_multicycle_path(line, constraints);
         } else if (line.find("set_clock_groups") == 0) {
             parse_set_clock_groups(line, constraints);
+        } else if (line.find("set_case_analysis") == 0) {
+            parse_set_case_analysis(line, constraints);
         }
     }
 
     return constraints;
+}
+
+// set_case_analysis <0|1|zero|one> <ports>: ports as [get_ports {a b}],
+// [get_ports a] or bare names. Other values (rising, falling) are ignored
+// with a warning.
+void SdcReader::parse_set_case_analysis(const std::string& line, ClockConstraints& constraints) {
+    auto tokens = tokenize(line);
+    if (tokens.size() < 3) {
+        constraints.warnings.push_back("set_case_analysis without a value and objects: " + line);
+        return;
+    }
+    const std::string& v = tokens[1];
+    int value = (v == "0" || v == "zero") ? 0 : (v == "1" || v == "one") ? 1 : -1;
+    if (value < 0) {
+        constraints.warnings.push_back("set_case_analysis " + v +
+                                       " ignored (only 0 and 1): " + line);
+        return;
+    }
+    // The port names: every word of the object list but the command
+    // (get_ports) and the brackets, braces and quotes around them.
+    for (size_t i = 2; i < tokens.size(); ++i) {
+        std::string word;
+        for (char c : tokens[i] + " ") {
+            if (std::isspace(static_cast<unsigned char>(c)) || c == '[' || c == ']' || c == '{' ||
+                c == '}' || c == '"') {
+                if (!word.empty() && word != "get_ports")
+                    constraints.case_analysis[word] = value;
+                word.clear();
+            } else {
+                word += c;
+            }
+        }
+    }
 }
 
 std::string trim(const std::string& s) {

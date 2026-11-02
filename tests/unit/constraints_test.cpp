@@ -585,3 +585,16 @@ TEST_F(SdcReaderTest, ParseFalsePathMultipleThrough) {
     EXPECT_EQ(constraints.false_paths[0].through[0], "u_mux");
     EXPECT_EQ(constraints.false_paths[0].through[1], "u_buf");
 }
+TEST_F(ConstraintsTest, ParseSdcCaseAnalysis) {
+    SdcReader reader;
+    std::string sdc =
+        "set_case_analysis 0 [get_ports test_mode]\n"
+        "set_case_analysis 1 [get_ports {scan_en bist_en}]\n"
+        "set_case_analysis rising [get_ports clk_sel]\n";
+    auto constraints = reader.parse_sdc_content(sdc);
+    ASSERT_EQ(constraints.case_analysis.size(), 3u);
+    EXPECT_EQ(constraints.case_analysis.at("test_mode"), 0);
+    EXPECT_EQ(constraints.case_analysis.at("scan_en"), 1);
+    EXPECT_EQ(constraints.case_analysis.at("bist_en"), 1);
+    EXPECT_EQ(constraints.warnings.size(), 1u);
+}

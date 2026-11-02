@@ -209,9 +209,74 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
     return findings;
 }
 
+// The node an asynchronous reset comes from, as SlangAdapter::resolve_resets
+// names it (reset_signal), followed on: through nets and inner ports with
+// one driver, and through a mux whose select is a port held constant by
+// set_case_analysis (a test-mode reset bypass in functional mode). nullptr
+// when the reset names a top-level port the graph has no node for.
+static const ir::Node* trace_reset(const ir::Graph& graph, const ir::Node& reg,
+                                   const std::unordered_map<std::string, int>* constants) {
+    auto is_top_port = [](const ir::Node* n) {
+        return n->kind == ir::NodeKind::Port &&
+               std::count(n->hier_name.begin(), n->hier_name.end(), '.') == 1;
+    };
+    // The constant of a mux select: back through single-driver nets to a
+    // top-level port named in the case analysis; -1 if none.
+    auto constant_of = [&](uint64_t id) -> int {
+        const ir::Node* n = graph.find_node(id);
+        for (int hop = 0; n && hop < 64; ++hop) {
+            if (is_top_port(n)) {
+                auto it = constants->find(n->hier_name.substr(n->hier_name.find('.') + 1));
+                return it == constants->end() ? -1 : it->second;
+            }
+            auto preds = graph.predecessors(n->id);
+            if (n->kind == ir::NodeKind::Register || preds.size() != 1)
+                return -1;
+            n = graph.find_node(preds.front());
+        }
+        return -1;
+    };
+    const ir::Node* n = graph.find_node_by_name(reg.reset_signal);
+    for (int hop = 0; n && hop < 64; ++hop) {
+        if (is_top_port(n))
+            return n;
+        if (n->kind == ir::NodeKind::Net || n->kind == ir::NodeKind::Port) {
+            auto preds = graph.predecessors(n->id);
+            if (preds.size() != 1)
+                return n;
+            n = graph.find_node(preds.front());
+            continue;
+        }
+        if (constants && !constants->empty() && n->kind == ir::NodeKind::Combinational &&
+            n->logic_type == ir::LogicType::Mux && n->mux_select_inputs <= 1 &&
+            n->logic_inputs.size() == 3) {
+            int sel = constant_of(n->logic_inputs[0]);
+            if (sel >= 0) {
+                n = graph.find_node(n->logic_inputs[sel ? 1 : 2]);
+                continue;
+            }
+        }
+        return n;
+    }
+    return n;
+}
+
+// The name of a reset source for a finding: the port name, or the node
+// path without the internal suffix of a logic node ("rst$comb" -> "rst").
+static std::string reset_name(const ir::Node* source, const ir::Node& reg) {
+    if (!source)
+        return reg.reset_signal;
+    std::string name = source->hier_name;
+    if (source->kind == ir::NodeKind::Port && std::count(name.begin(), name.end(), '.') == 1)
+        return name.substr(name.find('.') + 1);
+    size_t dollar = name.find('$');
+    return dollar == std::string::npos ? name : name.substr(0, dollar);
+}
+
 std::vector<Finding> ResetDomainAnalyzer::check_reset_release(
     const ir::Graph& graph, const std::vector<clock::ClockDomain>& clock_domains,
-    const std::unordered_map<uint64_t, size_t>& register_to_clock_domain) const {
+    const std::unordered_map<uint64_t, size_t>& register_to_clock_domain,
+    const std::unordered_map<std::string, int>* constants) const {
     auto clock_of = [&](uint64_t id) -> long {
         auto it = register_to_clock_domain.find(id);
         if (it == register_to_clock_domain.end() || it->second >= clock_domains.size())
@@ -219,16 +284,33 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_release(
         return static_cast<long>(it->second);
     };
 
-    // Registers whose output is the asynchronous reset of other registers:
-    // the last stage of a reset synchronizer (SlangAdapter::resolve_resets
-    // names such a reset by the register's path).
+    // Registers whose output reaches the asynchronous reset of other
+    // registers - directly or through logic (a test-mode mux, a reset
+    // combined with another): the last stage of a reset synchronizer.
     std::unordered_set<uint64_t> reset_sources;
+    std::unordered_set<uint64_t> traced;
     for (const auto& reg : graph.nodes()) {
         if (reg.kind != ir::NodeKind::Register || !reg.is_async_reset || reg.reset_signal.empty())
             continue;
-        const ir::Node* source = graph.find_node_by_name(reg.reset_signal);
-        if (source && source->kind == ir::NodeKind::Register && source->id != reg.id)
-            reset_sources.insert(source->id);
+        const ir::Node* start = graph.find_node_by_name(reg.reset_signal);
+        if (!start || !traced.insert(start->id).second)
+            continue;
+        std::vector<uint64_t> todo{start->id};
+        std::unordered_set<uint64_t> seen{start->id};
+        while (!todo.empty() && seen.size() < 256) {
+            const ir::Node* n = graph.find_node(todo.back());
+            todo.pop_back();
+            if (!n)
+                continue;
+            if (n->kind == ir::NodeKind::Register) {
+                if (n->id != reg.id)
+                    reset_sources.insert(n->id);
+                continue;
+            }
+            for (uint64_t p : graph.predecessors(n->id))
+                if (seen.insert(p).second)
+                    todo.push_back(p);
+        }
     }
 
     // A register released by the raw reset is fine when it is a stage of a
@@ -263,13 +345,13 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_release(
     for (const auto& reg : graph.nodes()) {
         if (reg.kind != ir::NodeKind::Register || !reg.is_async_reset || reg.reset_signal.empty())
             continue;
-        const ir::Node* source = graph.find_node_by_name(reg.reset_signal);
+        const ir::Node* source = trace_reset(graph, reg, constants);
         if (source && source->kind == ir::NodeKind::Register)
             continue;
         long clock = clock_of(reg.id);
         if (clock < 0 || in_reset_synchronizer(reg))
             continue;
-        released[{reg.reset_signal, clock}].push_back(&reg);
+        released[{reset_name(source, reg), clock}].push_back(&reg);
     }
 
     std::vector<Finding> findings;

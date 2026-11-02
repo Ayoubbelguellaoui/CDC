@@ -1251,8 +1251,9 @@ TEST(FrontendTest, TwoResetsBehindOnePortNameCross) {
 
 namespace {
 // CDC014 findings of `top` in reset_release.sv.
-std::vector<cdc_ns::Finding> reset_releases(const std::string& top,
-                                            opencdc::frontend::FrontendResult& fe) {
+std::vector<cdc_ns::Finding> reset_releases(
+    const std::string& top, opencdc::frontend::FrontendResult& fe,
+    const std::unordered_map<std::string, int>* constants = nullptr) {
     opencdc::frontend::SlangAdapter adapter;
     fe = adapter.elaborate({fixture_path("reset_release.sv")}, top);
     if (!fe.ok)
@@ -1260,7 +1261,7 @@ std::vector<cdc_ns::Finding> reset_releases(const std::string& top,
     cdc_clock::DomainExtractor de;
     auto dr = de.extract(fe.graph);
     cdc_ns::ResetDomainAnalyzer ra;
-    return ra.check_reset_release(fe.graph, dr.domains, dr.register_to_domain);
+    return ra.check_reset_release(fe.graph, dr.domains, dr.register_to_domain, constants);
 }
 }  // namespace
 
@@ -1297,6 +1298,39 @@ TEST(FrontendTest, ResetSynchronizedForOneClockOnly) {
     ASSERT_TRUE(fe.ok);
     ASSERT_EQ(findings.size(), 1u);
     EXPECT_EQ(findings[0].dest_reg_name, "rr_two_clk.qb");
+}
+
+TEST(FrontendTest, TestModeResetBypassWithoutCaseAnalysis) {
+    // The mux is logic: one finding; the synchronizer stages, whose output
+    // reaches the reset through the mux, none; no internal name shown.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_releases("rr_dft", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].dest_reg_name, "rr_dft.q");
+    EXPECT_EQ(findings[0].source_reg_name.find('$'), std::string::npos)
+        << findings[0].source_reg_name;
+}
+
+TEST(FrontendTest, TestModeResetBypassInFunctionalMode) {
+    // set_case_analysis 0 test_mode: the mux selects the synchronized reset.
+    opencdc::frontend::FrontendResult fe;
+    std::unordered_map<std::string, int> constants{{"test_mode", 0}};
+    auto findings = reset_releases("rr_dft", fe, &constants);
+    ASSERT_TRUE(fe.ok);
+    for (const auto& f : findings)
+        ADD_FAILURE() << f.reason;
+}
+
+TEST(FrontendTest, TestModeResetBypassInTestMode) {
+    // set_case_analysis 1 test_mode: the raw port releases rr_dft.q.
+    opencdc::frontend::FrontendResult fe;
+    std::unordered_map<std::string, int> constants{{"test_mode", 1}};
+    auto findings = reset_releases("rr_dft", fe, &constants);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].source_reg_name, "rst_n");
+    EXPECT_EQ(findings[0].dest_reg_name, "rr_dft.q");
 }
 
 TEST(FrontendTest, CrossingThroughAnEnable) {

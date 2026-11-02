@@ -342,7 +342,8 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
     }
     if (cfg.reset_policy.check_reset_release) {
         for (auto& f : reset_domain_analyzer.check_reset_release(
-                 result.graph, result.domains.domains, result.domains.register_to_domain))
+                 result.graph, result.domains.domains, result.domains.register_to_domain,
+                 &constraints.case_analysis))
             findings.push_back(std::move(f));
     }
 

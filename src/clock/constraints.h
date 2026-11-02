@@ -70,6 +70,9 @@ struct ClockConstraints {
     std::vector<MultiCyclePath> multi_cycle_paths;
     std::vector<ClockGroup> clock_groups;
     std::vector<std::string> warnings;
+    // set_case_analysis 0|1 <ports>: the constant of each port in this
+    // mode (e.g. test_mode 0), read by the reset trace (CDC014).
+    std::unordered_map<std::string, int> case_analysis;
 
     std::unordered_map<std::string, ClockDefinition> clock_map;
 
@@ -92,6 +95,7 @@ class SdcReader {
     void parse_set_false_path(const std::string& line, ClockConstraints& constraints);
     void parse_set_multicycle_path(const std::string& line, ClockConstraints& constraints);
     void parse_set_clock_groups(const std::string& line, ClockConstraints& constraints);
+    void parse_set_case_analysis(const std::string& line, ClockConstraints& constraints);
 
     std::string extract_quoted_string(const std::string& s, size_t& pos);
     std::vector<std::string> tokenize(const std::string& line);

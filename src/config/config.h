@@ -50,6 +50,10 @@ struct ResetPolicyConfig {
     // source asynchronously to the destination clock, as any data change
     // does, and the chain resolves it. Off (default): CDC009 is reported.
     bool synchronized_crossings_safe = false;
+    // CDC014: an asynchronous reset from a port or logic (not a register)
+    // released into a clock domain without a reset synchronizer of that
+    // domain. Off (default): not checked.
+    bool check_reset_release = false;
 };
 
 struct MulticyclePathPolicy {

@@ -1249,6 +1249,56 @@ TEST(FrontendTest, TwoResetsBehindOnePortNameCross) {
     EXPECT_TRUE(crossing);
 }
 
+namespace {
+// CDC014 findings of `top` in reset_release.sv.
+std::vector<cdc_ns::Finding> reset_releases(const std::string& top,
+                                            opencdc::frontend::FrontendResult& fe) {
+    opencdc::frontend::SlangAdapter adapter;
+    fe = adapter.elaborate({fixture_path("reset_release.sv")}, top);
+    if (!fe.ok)
+        return {};
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::ResetDomainAnalyzer ra;
+    return ra.check_reset_release(fe.graph, dr.domains, dr.register_to_domain);
+}
+}  // namespace
+
+TEST(FrontendTest, PortResetReleasedUnsynchronized) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_releases("rr_raw", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].rule_id, "CDC014");
+    EXPECT_EQ(findings[0].source_reg_name, "rst_n");
+    EXPECT_EQ(findings[0].dest_reg_name, "rr_raw.q");
+}
+
+TEST(FrontendTest, PortResetThroughResetSynchronizer) {
+    // The synchronizer stages run on the raw reset; the rest on its output.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_releases("rr_sync", fe);
+    ASSERT_TRUE(fe.ok);
+    for (const auto& f : findings)
+        ADD_FAILURE() << f.reason;
+}
+
+TEST(FrontendTest, ResetFromLogicReleasedUnsynchronized) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_releases("rr_logic", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].dest_reg_name, "rr_logic.q");
+}
+
+TEST(FrontendTest, ResetSynchronizedForOneClockOnly) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_releases("rr_two_clk", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_EQ(findings.size(), 1u);
+    EXPECT_EQ(findings[0].dest_reg_name, "rr_two_clk.qb");
+}
+
 TEST(FrontendTest, CrossingThroughAnEnable) {
     // `if (a_r) q <= 1'b1;`: a_r reaches q only through the condition.
     opencdc::frontend::FrontendResult fe;

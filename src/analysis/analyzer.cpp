@@ -340,6 +340,11 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
             continue;
         findings.push_back(std::move(f));
     }
+    if (cfg.reset_policy.check_reset_release) {
+        for (auto& f : reset_domain_analyzer.check_reset_release(
+                 result.graph, result.domains.domains, result.domains.register_to_domain))
+            findings.push_back(std::move(f));
+    }
 
     // 11b. Low-power isolation cells: CDC001 whose path crosses a node
     // flagged by the netlist frontend as an isolation cell is downgraded to

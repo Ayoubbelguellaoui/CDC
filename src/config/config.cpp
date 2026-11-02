@@ -457,6 +457,13 @@ static void parse_reset_policy_node(const YAML::Node& node, Config& config, std:
             return;
         config.reset_policy.synchronized_crossings_safe = b;
     }
+    if (node["check_reset_release"]) {
+        bool b = false;
+        if (!parse_yaml_bool(node["check_reset_release"], b, error,
+                             "reset_policy.check_reset_release"))
+            return;
+        config.reset_policy.check_reset_release = b;
+    }
 }
 
 static void parse_multicycle_node(const YAML::Node& node, Config& config, std::string* error) {

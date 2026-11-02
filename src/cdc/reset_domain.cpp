@@ -1,5 +1,7 @@
 #include "cdc/reset_domain.h"
 
+#include <algorithm>
+#include <map>
 #include <unordered_set>
 
 #include "cdc/synchronizer.h"
@@ -204,6 +206,100 @@ std::vector<Finding> ResetDomainAnalyzer::check_reset_crossings(
         findings.push_back(std::move(f));
     }
 
+    return findings;
+}
+
+std::vector<Finding> ResetDomainAnalyzer::check_reset_release(
+    const ir::Graph& graph, const std::vector<clock::ClockDomain>& clock_domains,
+    const std::unordered_map<uint64_t, size_t>& register_to_clock_domain) const {
+    auto clock_of = [&](uint64_t id) -> long {
+        auto it = register_to_clock_domain.find(id);
+        if (it == register_to_clock_domain.end() || it->second >= clock_domains.size())
+            return -1;
+        return static_cast<long>(it->second);
+    };
+
+    // Registers whose output is the asynchronous reset of other registers:
+    // the last stage of a reset synchronizer (SlangAdapter::resolve_resets
+    // names such a reset by the register's path).
+    std::unordered_set<uint64_t> reset_sources;
+    for (const auto& reg : graph.nodes()) {
+        if (reg.kind != ir::NodeKind::Register || !reg.is_async_reset || reg.reset_signal.empty())
+            continue;
+        const ir::Node* source = graph.find_node_by_name(reg.reset_signal);
+        if (source && source->kind == ir::NodeKind::Register && source->id != reg.id)
+            reset_sources.insert(source->id);
+    }
+
+    // A register released by the raw reset is fine when it is a stage of a
+    // reset synchronizer: up to four registers on the same reset and clock,
+    // ending on a register used as a reset.
+    constexpr int kMaxStages = 4;
+    auto in_reset_synchronizer = [&](const ir::Node& reg) {
+        long clock = clock_of(reg.id);
+        std::vector<uint64_t> stage{reg.id};
+        std::unordered_set<uint64_t> seen{reg.id};
+        for (int i = 0; i < kMaxStages && !stage.empty(); ++i) {
+            std::vector<uint64_t> next;
+            for (uint64_t id : stage) {
+                if (reset_sources.count(id))
+                    return true;
+                for (uint64_t succ : graph.register_successors(id)) {
+                    const ir::Node* n = graph.find_node(succ);
+                    if (n && n->kind == ir::NodeKind::Register &&
+                        n->reset_signal == reg.reset_signal && clock_of(succ) == clock &&
+                        seen.insert(succ).second)
+                        next.push_back(succ);
+                }
+            }
+            stage = std::move(next);
+        }
+        return false;
+    };
+
+    // Registers released by a port or logic, per reset and clock domain. A
+    // reset from a register of another clock is CDC009.
+    std::map<std::pair<std::string, long>, std::vector<const ir::Node*>> released;
+    for (const auto& reg : graph.nodes()) {
+        if (reg.kind != ir::NodeKind::Register || !reg.is_async_reset || reg.reset_signal.empty())
+            continue;
+        const ir::Node* source = graph.find_node_by_name(reg.reset_signal);
+        if (source && source->kind == ir::NodeKind::Register)
+            continue;
+        long clock = clock_of(reg.id);
+        if (clock < 0 || in_reset_synchronizer(reg))
+            continue;
+        released[{reg.reset_signal, clock}].push_back(&reg);
+    }
+
+    std::vector<Finding> findings;
+    for (auto& [key, regs] : released) {
+        std::sort(regs.begin(), regs.end(),
+                  [](const ir::Node* a, const ir::Node* b) { return a->hier_name < b->hier_name; });
+        const ir::Node* first = regs.front();
+        const auto& clock = clock_domains[static_cast<size_t>(key.second)];
+        Finding f;
+        f.rule_id = "CDC014";
+        f.rule_name = "unsynchronized_reset_release";
+        f.severity = "error";
+        f.source_reg_id = first->id;
+        f.dest_reg_id = first->id;
+        f.source_reg_name = key.first;
+        f.dest_reg_name = first->hier_name;
+        f.source_domain = key.first;
+        f.dest_domain = clock.name;
+        f.path.node_ids = {first->id};
+        f.source_loc = first->loc;
+        f.bus_width = first->width;
+        f.safety_status = SafetyStatus::VerifiedUnsafe;
+        f.safety_provenance = "Async reset released without a reset synchronizer";
+        f.reason = "Asynchronous reset '" + key.first + "' is released into clock domain '" +
+                   clock.name +
+                   "' without a reset synchronizer of that domain: " + std::to_string(regs.size()) +
+                   " register(s), e.g. '" + first->hier_name +
+                   "', leave reset asynchronously to their clock.";
+        findings.push_back(std::move(f));
+    }
     return findings;
 }
 

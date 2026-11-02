@@ -57,6 +57,9 @@ struct Node {
     // Combinational logic tracking
     LogicType logic_type = LogicType::None;
     std::vector<uint64_t> logic_inputs;
+    // Mux: how many leading logic_inputs are the select (IR operand order
+    // [select..., true, false]); 0 means the one-select default.
+    uint32_t mux_select_inputs = 0;
     std::string logic_expression;
 
     // Pattern recognition flags
@@ -160,10 +163,15 @@ class Graph {
     std::vector<uint64_t> successors(uint64_t id) const;
     std::vector<uint64_t> predecessors(uint64_t id) const;
 
-    std::vector<uint64_t> register_predecessors(uint64_t id,
-                                                bool traverse_combinational = true) const;
-    std::vector<uint64_t> register_successors(uint64_t id,
-                                              bool traverse_combinational = true) const;
+    // data_only: follow Data edges only, not Control (an if/case condition)
+    // - a register gated by a value is no stage of a chain carrying it.
+    std::vector<uint64_t> register_predecessors(uint64_t id, bool traverse_combinational = true,
+                                                bool data_only = false) const;
+    std::vector<uint64_t> register_successors(uint64_t id, bool traverse_combinational = true,
+                                              bool data_only = false) const;
+
+    // Role of the edge from -> to (Data when unknown).
+    EdgeRole edge_role(uint64_t from_id, uint64_t to_id) const;
 
     struct RegPath {
         uint64_t src_reg_id;
@@ -175,6 +183,7 @@ class Graph {
     struct PathTraversalResult {
         std::vector<RegPath> paths;
         bool truncated = false;
+        bool truncated_by_depth = false;  // a path longer than MAX_PATH_DEPTH
         size_t max_paths = 0;
         size_t visited_nodes = 0;
         size_t visited_edges = 0;
@@ -230,6 +239,8 @@ class Graph {
     std::unordered_map<uint64_t, std::vector<uint64_t>> adj_;
     std::unordered_map<uint64_t, std::vector<uint64_t>> radj_;
     std::unordered_set<uint64_t> edge_set_;
+    // Roles other than Data, by packed edge key (most edges are Data).
+    std::unordered_map<uint64_t, EdgeRole> edge_roles_;
     uint64_t next_id_ = 1;
     uint64_t generation_ = 0;
     bool truncated_ = false;

@@ -26,6 +26,8 @@ struct FrontendOptions {
     std::vector<std::string> include_dirs;
     std::vector<std::string> defines;
     bool allow_user_annotation = true;
+    // Config::muxed_clock_domain.
+    bool muxed_clock_domain = false;
     // YAML cell map path for the netlist frontend (ignored by RTL).
     std::string cell_map_path;
     // Liberty (.lib) file path for the netlist frontend: cell definitions

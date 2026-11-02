@@ -450,7 +450,7 @@
   "corpus_fifo_gray": {
    "file": "benchmarks/corpus/fifo/async_fifo_gray.sv",
    "top": "async_fifo_gray",
-   "description": "Correct async FIFO (gray pointers, 2FF pointer sync); flags CDC001 error on wide pointer chains - documents the width==1 sync limitation",
+   "description": "Correct async FIFO (gray pointers, 2FF pointer sync): the wide gray pointer chains are verified synchronizers (CDC001 info)",
    "expected": {
     "positive_controls": [],
     "negative_controls": [],
@@ -474,18 +474,18 @@
       "rule": "CDC001",
       "source": "async_fifo_gray.wr_ptr_gray",
       "dest": "async_fifo_gray.wr_ptr_gray_sync1",
-      "expected": "fires-today",
-      "note": "CORRECT design flagged: 5-bit pointer sync chains are never classified (width==1 required), so no verified_safe downgrade"
+      "expected": "info",
+      "note": "Gray-coded 5-bit pointer through a destination-wide 2FF chain: verified_safe (a gray source may use stages as wide as the destination)"
      },
      {
       "rule": "CDC001",
       "source": "async_fifo_gray.rd_ptr_gray",
       "dest": "async_fifo_gray.rd_ptr_gray_sync1",
-      "expected": "fires-today",
-      "note": "Same wide-chain limitation on the read-pointer leg"
+      "expected": "info",
+      "note": "Same on the read-pointer leg"
      }
     ],
-    "known_behavior": "No CDC002 (gray recognized for the multi-bit rule). CDC013 warnings on the synced pointers are also emitted; not asserted."
+    "known_behavior": "No CDC002 (gray recognized for the multi-bit rule); both pointer crossings CDC001 info / verified_safe."
    }
   },
   "corpus_fifo_binary": {
@@ -528,10 +528,9 @@
      "CDC008",
      "CDC009",
      "CDC011",
-     "CDC012",
-     "CDC013"
+     "CDC012"
     ],
-    "known_behavior": "Pointer registers deliberately avoid wr_ptr/rd_ptr/wptr/rptr naming so only the structural (non-)gray property is tested."
+    "known_behavior": "Pointer registers deliberately avoid wr_ptr/rd_ptr/wptr/rptr naming so only the structural (non-)gray property is tested. CDC013 on mem: the writes are gated by full, derived from the unsynchronized read pointer (an if-condition dependency); not asserted."
    }
   },
   "corpus_hs_4phase": {
@@ -759,7 +758,7 @@
   "corpus_hier_soc": {
    "file": "benchmarks/corpus/hierarchical/hierarchical_soc.sv",
    "top": "hierarchical_soc",
-   "description": "3-level hierarchy: traced top-reg path (clean) + untraced instance-to-instance violation (known gap)",
+   "description": "3-level hierarchy: traced top-reg path (clean) + instance-to-instance violation through a parent wire",
    "expected": {
     "positive_controls": [
      {
@@ -767,15 +766,12 @@
       "source": "hierarchical_soc.topo_src_clean",
       "dest": "hierarchical_soc.u_island.meta_ff",
       "note": "Parent-reg to child-instance input traces; hierarchical names intact"
-     }
-    ],
-    "ambiguous_controls": [
+     },
      {
       "rule": "CDC001",
-      "source": "hierarchical_soc.sender_status",
-      "dest": "hierarchical_soc.q_raw_ff",
-      "expected": "no_finding",
-      "note": "REAL unsync crossing, INVISIBLE: instance-output -> wire -> instance-input boundaries are not traced (false negative)"
+      "source": "hierarchical_soc.u_sender.status_ff",
+      "dest": "hierarchical_soc.u_consumer.q_raw_ff",
+      "note": "Instance output -> parent wire -> instance input is traced: the unsynchronized clk_a -> clk_b status crossing between two child instances"
      }
     ],
     "absent_rules": [
@@ -924,8 +920,8 @@
   },
   {
    "rule": "CDC001",
-   "gap": "Only single-bit (width == 1) synchronizer chains are classified; wide (multi-bit) 2FF chains - e.g. gray-coded async-FIFO pointer syncs - never downgrade to verified_safe, so correct FIFOs report CDC001 error",
-   "severity": "medium",
+   "gap": "Wide (multi-bit) synchronizer chains are classified only for gray-coded sources reaching the chain through nets and ports; a wide chain of any other source still reports CDC001 error (per-bit synchronization of a binary bus is unsafe, so this is by design)",
+   "severity": "low",
    "evidence": "benchmarks/corpus/fifo/async_fifo_gray.sv ambiguous controls"
   },
   {
@@ -933,12 +929,6 @@
    "gap": "Verified handshakes cover only the valid/ready (req/ack) control pair; the payload data the handshake guards is still reported CDC001+CDC002 even for protocol-correct 4-phase and 2-phase designs",
    "severity": "medium",
    "evidence": "benchmarks/corpus/handshake/handshake_4phase_valid_ready.sv, handshake_2phase_req_ack.sv ambiguous controls"
-  },
-  {
-   "rule": "CDC001",
-   "gap": "Instance-output -> wire -> instance-input paths are not traced: a source register inside a child module feeding another child module's input is invisible (false negatives on hierarchical designs)",
-   "severity": "high",
-   "evidence": "benchmarks/corpus/hierarchical/hierarchical_soc.sv ambiguous control"
   },
   {
    "rule": "CDC006",

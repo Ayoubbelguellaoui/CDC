@@ -2,8 +2,11 @@
 
 #include <string>
 
+#include "cdc/cdc006.h"
 #include "cdc/crossing.h"
+#include "cdc/pattern.h"
 #include "cdc/reconvergence.h"
+#include "cdc/reset_domain.h"
 #include "cdc/waiver.h"
 #include "clock/domain.h"
 #include "frontend/slang_adapter.h"
@@ -982,4 +985,397 @@ TEST(FrontendTest, GenerateLoopIterationsAreSeparateCopies) {
             found = found || (f.rule_id == "CDC001" && f.dest_reg_name == dest);
         EXPECT_TRUE(found) << dest;
     }
+}
+
+TEST(FrontendTest, UnpackedArrayPortsHaveWidth) {
+    // getBitWidth() is zero for unpacked types: ports, nets and registers of
+    // unpacked arrays got width 0 and failed graph validation.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_port");
+    ASSERT_TRUE(fe.ok) << (fe.errors.empty() ? "" : fe.errors.front());
+    for (const auto& n : fe.graph.nodes())
+        EXPECT_GT(n.width, 0u) << n.hier_name;
+    const auto* din = fe.graph.find_node_by_name("uarr_port.u_child.din");
+    ASSERT_NE(din, nullptr);
+    EXPECT_EQ(din->width, 16u);
+    const auto* mem = fe.graph.find_node_by_name("uarr_port.mem");
+    ASSERT_NE(mem, nullptr);
+    EXPECT_EQ(mem->kind, NodeKind::Register);
+    EXPECT_EQ(mem->width, 16u);
+}
+
+TEST(FrontendTest, UnpackedArraySynchronizerIsAChain) {
+    // Every access to s is a static index: s[0] and s[1] are registers of
+    // their own and the 2FF chain is recognized (CDC001 info, not error).
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_sync");
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(fe.graph.find_node_by_name("uarr_sync.s"), nullptr);
+    for (const char* name : {"uarr_sync.s[0]", "uarr_sync.s[1]"}) {
+        const auto* n = fe.graph.find_node_by_name(name);
+        ASSERT_NE(n, nullptr) << name;
+        EXPECT_EQ(n->kind, NodeKind::Register);
+        EXPECT_EQ(n->width, 1u);
+    }
+
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::CrossingAnalyzer ca;
+    auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+    const cdc_ns::Finding* cross = nullptr;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.dest_reg_name == "uarr_sync.s[0]")
+            cross = &f;
+    }
+    ASSERT_NE(cross, nullptr);
+    EXPECT_EQ(cross->severity, "info");
+    EXPECT_EQ(cross->detected_sync, cdc_ns::SyncPattern::TwoFF);
+}
+
+TEST(FrontendTest, UnpackedArrayWithVariableIndexStaysOneNode) {
+    // rf[sel] reads an element only known at run time: splitting rf would
+    // disconnect that read, so rf stays one node and the crossing is kept.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_mixed");
+    ASSERT_TRUE(fe.ok);
+    const auto* rf = fe.graph.find_node_by_name("uarr_mixed.rf");
+    ASSERT_NE(rf, nullptr);
+    EXPECT_EQ(rf->kind, NodeKind::Register);
+    EXPECT_EQ(fe.graph.find_node_by_name("uarr_mixed.rf[0]"), nullptr);
+
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::CrossingAnalyzer ca;
+    auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+    bool error = false;
+    for (const auto& f : findings)
+        error = error || (f.rule_id == "CDC001" && f.dest_reg_name == "uarr_mixed.b_r" &&
+                          f.severity == "error");
+    EXPECT_TRUE(error);
+}
+
+TEST(FrontendTest, ParameterIsNoSignal) {
+    // `d & MASK`: MASK is a constant of the elaboration, not a net.
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("unpacked_array.sv")}, "uarr_param");
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(fe.graph.find_node_by_name("uarr_param.MASK"), nullptr);
+    EXPECT_NE(fe.graph.find_node_by_name("uarr_param.q"), nullptr);
+}
+
+namespace {
+// Elaborates and analyzes like the CLI: patterns annotated, recognizer set.
+std::vector<cdc_ns::Finding> analyze_fixture(
+    const std::string& file, const std::string& top, opencdc::frontend::FrontendResult& fe,
+    const opencdc::frontend::FrontendOptions& options = {}) {
+    opencdc::frontend::SlangAdapter adapter;
+    fe = adapter.elaborate({fixture_path(file)}, top, options);
+    if (!fe.ok)
+        return {};
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::PatternRecognizer recognizer;
+    recognizer.analyze_and_annotate(fe.graph);
+    cdc_ns::CrossingAnalyzer ca;
+    ca.set_pattern_recognizer(&recognizer);
+    return ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+}
+}  // namespace
+
+TEST(FrontendTest, OutputPortReachesParent) {
+    // A child register drives a parent register of another clock through
+    // an output port: the output connection must reach the parent net.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("output_port.sv", "op_cross", fe);
+    ASSERT_TRUE(fe.ok);
+    bool found = false;
+    for (const auto& f : findings)
+        found = found || (f.rule_id == "CDC001" && f.source_reg_name == "op_cross.u_a.q" &&
+                          f.dest_reg_name == "op_cross.q" && f.severity == "error");
+    EXPECT_TRUE(found);
+}
+
+TEST(FrontendTest, ClockGateInstanceKeepsRootClock) {
+    // clk_o of a clock gate instance is clk_i gated: one domain, no
+    // crossing (the output port was taken for a root clock of its own).
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("output_port.sv", "op_cgate", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("op_cgate.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "clk_i");
+    EXPECT_TRUE(q->clock_is_gated);
+    cdc_clock::DomainExtractor de;
+    EXPECT_EQ(de.extract(fe.graph).domains.size(), 1u);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC001") << f.reason;
+}
+
+TEST(FrontendTest, PathSearchIsLinearInDiamonds) {
+    // 7 four-way diamonds give 4^7 simple paths to one register, above the
+    // 10000-path limit: the search keeps one path per destination and is
+    // not truncated.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("output_port.sv", "op_diamonds", fe);
+    ASSERT_TRUE(fe.ok);
+    bool crossing = false;
+    for (const auto& f : findings) {
+        EXPECT_NE(f.rule_id, "CDC010") << f.reason;
+        crossing = crossing || (f.rule_id == "CDC001" && f.dest_reg_name == "op_diamonds.q");
+    }
+    EXPECT_TRUE(crossing);
+}
+
+namespace {
+// Severity of the CDC001 (or CDC002) finding into `dest`; empty when none.
+std::string severity_into(const std::vector<cdc_ns::Finding>& findings, const std::string& rule,
+                          const std::string& dest) {
+    for (const auto& f : findings) {
+        if (f.rule_id == rule && f.dest_reg_name == dest)
+            return f.severity;
+    }
+    return "";
+}
+}  // namespace
+
+TEST(FrontendTest, LoopShiftedArraySynchronizerIsAChain) {
+    // `for (int i = 1; i < STAGES; i++) s[i] <= s[i-1];` is unrolled: the
+    // elements are the stages of a 2FF chain.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_loop_sync", fe);
+    ASSERT_TRUE(fe.ok);
+    ASSERT_NE(fe.graph.find_node_by_name("fs_loop_sync.u_sync.s[1]"), nullptr);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_loop_sync.u_sync.s[0]"), "info");
+}
+
+TEST(FrontendTest, BitwiseGrayPointerSynchronizedByWideChain) {
+    // A gray pointer built bit by bit in a function, assigned continuously
+    // and registered, through a 5-bit 2FF chain: a verified synchronizer.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_gray_ptr", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* g = fe.graph.find_node_by_name("fs_gray_ptr.cnt_g_r");
+    ASSERT_NE(g, nullptr);
+    EXPECT_TRUE(g->is_gray_coded);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_gray_ptr.u_sync.s[0]"), "info");
+    EXPECT_EQ(severity_into(findings, "CDC002", "fs_gray_ptr.u_sync.s[0]"), "");
+}
+
+TEST(FrontendTest, GrayDecodedBeforeCrossingIsMultiBit) {
+    // A gray register decoded to binary before it crosses: the crossing
+    // carries binary, so CDC001 and CDC002 stay errors.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_gray_decoded", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_gray_decoded.u_sync.s[0]"), "error");
+    EXPECT_EQ(severity_into(findings, "CDC002", "fs_gray_decoded.u_sync.s[0]"), "error");
+}
+
+TEST(FrontendTest, BinaryPointerThroughWideChainIsUnsafe) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_bin_ptr", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_bin_ptr.u_sync.s[0]"), "error");
+    EXPECT_EQ(severity_into(findings, "CDC002", "fs_bin_ptr.u_sync.s[0]"), "error");
+}
+
+TEST(FrontendTest, BlackBoxPllOutputsAreClockSources) {
+    // Undriven outputs of a black-box PLL, through a buffer instance and
+    // into a submodule port: one domain per PLL output, named by its path.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("fifo_sync.sv", "fs_pll", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* a = fe.graph.find_node_by_name("fs_pll.a_r");
+    const auto* s1 = fe.graph.find_node_by_name("fs_pll.u_sync.s[1]");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(s1, nullptr);
+    EXPECT_EQ(a->root_clock, "fs_pll.u_pll.clk0");
+    EXPECT_EQ(s1->root_clock, "fs_pll.u_pll.clk1");
+    cdc_clock::DomainExtractor de;
+    EXPECT_EQ(de.extract(fe.graph).domains.size(), 2u);
+    EXPECT_EQ(severity_into(findings, "CDC001", "fs_pll.u_sync.s[0]"), "info");
+}
+
+namespace {
+// CDC009 findings of `top` in reset_hier.sv, same-clock crossings checked.
+std::vector<cdc_ns::Finding> reset_crossings(const std::string& top,
+                                             opencdc::frontend::FrontendResult& fe) {
+    opencdc::frontend::SlangAdapter adapter;
+    fe = adapter.elaborate({fixture_path("reset_hier.sv")}, top);
+    if (!fe.ok)
+        return {};
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::ResetDomainAnalyzer ra;
+    auto rd = ra.extract_reset_domains(fe.graph);
+    opencdc::config::ResetPolicyConfig policy;
+    policy.check_same_clock_reset_crossings = true;
+    return ra.check_reset_crossings(fe.graph, rd.domains, dr.domains, dr.register_to_domain,
+                                    &policy);
+}
+}  // namespace
+
+TEST(FrontendTest, ResetRenamedByPortIsOneResetDomain) {
+    // One reset net, i_reset_n in one child and rst_n in the other: the
+    // reset is named after its source, so no reset crossing.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_crossings("rh_rename", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* a = fe.graph.find_node_by_name("rh_rename.u_a.q");
+    const auto* b = fe.graph.find_node_by_name("rh_rename.u_b.q");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(a->reset_signal, "rst_n");
+    EXPECT_EQ(b->reset_signal, "rst_n");
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC009") << f.reason;
+}
+
+TEST(FrontendTest, TwoResetsBehindOnePortNameCross) {
+    // The top reset and its synchronized copy both enter a child as rst_n:
+    // two reset domains, and u_a.q -> u_b.q crosses them.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = reset_crossings("rh_two", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* b = fe.graph.find_node_by_name("rh_two.u_b.q");
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(b->reset_signal, "rh_two.rst_sync");
+    bool crossing = false;
+    for (const auto& f : findings)
+        crossing = crossing || (f.rule_id == "CDC009" && f.source_reg_name == "rh_two.u_a.q" &&
+                                f.dest_reg_name == "rh_two.u_b.q");
+    EXPECT_TRUE(crossing);
+}
+
+TEST(FrontendTest, CrossingThroughAnEnable) {
+    // `if (a_r) q <= 1'b1;`: a_r reaches q only through the condition.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_enable", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* a = fe.graph.find_node_by_name("cd_enable.a_r");
+    const auto* q = fe.graph.find_node_by_name("cd_enable.q");
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(fe.graph.edge_role(a->id, q->id), opencdc::ir::EdgeRole::Control);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_enable.q"), "error");
+}
+
+TEST(FrontendTest, EnabledSynchronizerIsStillAChain) {
+    // A same-clock enable on both stages is a Control edge: no stage
+    // predecessor, the 2FF chain stays verified.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_sync_enable", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_sync_enable.s0"), "info");
+}
+
+TEST(FrontendTest, ConditionGatedConsumerIsNoStage) {
+    // ack depends on s1 only through `if (s1 != ack)`: not a third stage,
+    // so no CDC006 and the chain stays a verified 2FF.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_gated_consumer", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_gated_consumer.s0"), "info");
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    cdc_ns::Cdc006Analyzer cdc006;
+    EXPECT_TRUE(cdc006.analyze(fe.graph, dr.domains, dr.register_to_domain).empty());
+}
+
+TEST(FrontendTest, FirstStageReadThroughLogicIsFlagged) {
+    // The still-metastable first stage feeds logic into another register.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_tap_logic", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_tap_logic.s0"), "warning");
+}
+
+TEST(FrontendTest, FirstStageReadByOutputPortIsFlagged) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_tap_port", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_tap_port.s0"), "warning");
+}
+
+TEST(FrontendTest, SecondStageUsedAsConditionIsNoFanout) {
+    // ack copies s1 (so it looks like a third stage) and s1 enables a
+    // capture: a condition use of the synchronized output, no warning.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("control_dep.sv", "cd_stage2_condition", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cd_stage2_condition.s0"), "info");
+}
+
+TEST(FrontendTest, DividedClockFoldsIntoItsRoot) {
+    // q is clocked by a register dividing clk_a: root clk_a, one domain.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("derived_clock.sv", "dc_div", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("dc_div.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "clk_a");
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule_id, "CDC001") << f.reason;
+}
+
+TEST(FrontendTest, ClockMuxIsRepresentedByAnInputByDefault) {
+    // Default policy: the mux takes the root of one input (no new domain).
+    opencdc::frontend::FrontendResult fe;
+    analyze_fixture("derived_clock.sv", "dc_mux", fe);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("dc_mux.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_NE(q->root_clock, "dc_mux.mclk");
+}
+
+TEST(FrontendTest, ClockMuxOfTwoClocksIsItsOwnDomain) {
+    // muxed_clock_domain: q's clock is clk_a or clk_b - a domain of its own,
+    // so a_r -> q crosses.
+    opencdc::frontend::FrontendResult fe;
+    opencdc::frontend::FrontendOptions options;
+    options.muxed_clock_domain = true;
+    auto findings = analyze_fixture("derived_clock.sv", "dc_mux", fe, options);
+    ASSERT_TRUE(fe.ok);
+    const auto* q = fe.graph.find_node_by_name("dc_mux.q");
+    ASSERT_NE(q, nullptr);
+    EXPECT_EQ(q->root_clock, "dc_mux.mclk");
+    EXPECT_TRUE(q->clock_is_muxed);
+    EXPECT_EQ(severity_into(findings, "CDC001", "dc_mux.q"), "error");
+}
+
+TEST(FrontendTest, ConcatenationShiftIsASynchronizer) {
+    // `{s1, s0} <= {s0, a_r}`: the elements are registers, s0 -> s1 a chain.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("concat_lhs.sv", "cl_sync", fe);
+    ASSERT_TRUE(fe.ok);
+    for (const char* name : {"cl_sync.s0", "cl_sync.s1"}) {
+        const auto* n = fe.graph.find_node_by_name(name);
+        ASSERT_NE(n, nullptr) << name;
+        EXPECT_EQ(n->kind, NodeKind::Register) << name;
+    }
+    EXPECT_EQ(severity_into(findings, "CDC001", "cl_sync.s0"), "info");
+}
+
+TEST(FrontendTest, ConcatenationLoadedRegistersCross) {
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("concat_lhs.sv", "cl_unsync", fe);
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(severity_into(findings, "CDC001", "cl_unsync.q0"), "error");
+    EXPECT_EQ(severity_into(findings, "CDC001", "cl_unsync.q1"), "error");
+}
+
+TEST(FrontendTest, ContinuousConcatenationAssignFeedsTheCrossing) {
+    // `assign {c, s} = a_r + b_r`: s and c depend on both registers.
+    opencdc::frontend::FrontendResult fe;
+    auto findings = analyze_fixture("concat_lhs.sv", "cl_assign", fe);
+    ASSERT_TRUE(fe.ok);
+    bool a = false, b = false;
+    for (const auto& f : findings) {
+        if (f.rule_id == "CDC001" && f.dest_reg_name == "cl_assign.q") {
+            a = a || f.source_reg_name == "cl_assign.a_r";
+            b = b || f.source_reg_name == "cl_assign.b_r";
+        }
+    }
+    EXPECT_TRUE(a);
+    EXPECT_TRUE(b);
 }

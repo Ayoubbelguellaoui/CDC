@@ -138,7 +138,8 @@ class CrossingAnalyzer {
 
     std::string build_reason(const Finding& f) const;
 
-    bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
+    bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+                                    bool wire_path = true) const;
 
     bool is_path_through_safe_blackbox(const ir::Graph& graph,
                                        const std::vector<uint64_t>& path_node_ids) const;

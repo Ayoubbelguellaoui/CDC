@@ -69,6 +69,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     fe_opts.include_dirs = request.include_dirs;
     fe_opts.defines = request.defines;
     fe_opts.allow_user_annotation = cfg.allow_user_annotation;
+    fe_opts.muxed_clock_domain = cfg.muxed_clock_domain;
     fe_opts.cell_map_path =
         !request.cell_map_path.empty() ? request.cell_map_path : cfg.cell_map_path;
     fe_opts.liberty_path = !request.liberty_path.empty() ? request.liberty_path : cfg.liberty_path;
@@ -276,6 +277,7 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
 
     // Clock resolve for relationship classification.
     clock::ClockResolver resolver;
+    resolver.set_muxed_clock_domain(cfg.muxed_clock_domain);
     clock::ResolveResult resolve_result = resolver.resolve(result.graph);
 
     cdc::CrossingAnalyzer crossing_analyzer;

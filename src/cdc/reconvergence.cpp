@@ -1,5 +1,6 @@
 #include "cdc/reconvergence.h"
 
+#include <algorithm>
 #include <queue>
 #include <unordered_set>
 
@@ -77,42 +78,18 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
             if (a->dest_reg_id == b->dest_reg_id)
                 continue;
 
-            // A synchronizer chain on the destination only makes the crossing
-            // safe for single-bit sources. A multi-bit bus split across
-            // independent synchronizers still reconverges with bit skew, so
-            // the hazard must be reported regardless of sync chains.
-            // Both sides must be synced to suppress — one synced + one unsynced
-            // reconverging is still hazardous.
-            if (src->width <= 1 && has_sync_chain(a->dest_reg_id) && has_sync_chain(b->dest_reg_id))
+            // Two synchronized single-bit paths of one source are taken as
+            // safe unless report_double_sync_: independent synchronizers may
+            // resolve the same transition in different cycles, so the copies
+            // disagree for a cycle where they meet (the safe form,
+            // synchronize once and fan out, is one crossing). A bus split
+            // across synchronizers reconverges with bit skew either way.
+            if (!report_double_sync_ && src->width <= 1 && has_sync_chain(a->dest_reg_id) &&
+                has_sync_chain(b->dest_reg_id))
                 continue;
 
-            // Bounded BFS: collect up to 16 register descendants per path.
-            auto collect_descendants = [&](uint64_t start_id) -> std::vector<uint64_t> {
-                std::vector<uint64_t> result;
-                std::queue<std::pair<uint64_t, int>> bfs;
-                std::unordered_set<uint64_t> visited;
-                bfs.push({start_id, 0});
-                visited.insert(start_id);
-                while (!bfs.empty() && result.size() < 16) {
-                    auto [cur, depth] = bfs.front();
-                    bfs.pop();
-                    const ir::Node* n = graph.find_node(cur);
-                    if (depth > 0 && n && n->kind == ir::NodeKind::Register) {
-                        result.push_back(cur);
-                    }
-                    if (depth >= max_hops_)
-                        continue;
-                    for (uint64_t s : graph.register_successors(cur)) {
-                        if (visited.insert(s).second) {
-                            bfs.push({s, depth + 1});
-                        }
-                    }
-                }
-                return result;
-            };
-
-            auto da_desc = collect_descendants(a->dest_reg_id);
-            auto db_desc = collect_descendants(b->dest_reg_id);
+            auto da_desc = meeting_points(graph, a->dest_reg_id);
+            auto db_desc = meeting_points(graph, b->dest_reg_id);
 
             std::unordered_set<uint64_t> da_set(da_desc.begin(), da_desc.end());
             for (uint64_t db_d : db_desc) {
@@ -139,6 +116,14 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
                                                       ") fans out through independent synchronizer "
                                                       "paths that reconverge at '" +
                                                       consumer_name + "'.";
+                    } else if (has_sync_chain(a->dest_reg_id) && has_sync_chain(b->dest_reg_id)) {
+                        const ir::Node* da = graph.find_node(a->dest_reg_id);
+                        const ir::Node* dbn = graph.find_node(b->dest_reg_id);
+                        f.reconvergence.explanation =
+                            "Single-bit source '" + src->hier_name + "' is synchronized twice ('" +
+                            (da ? da->hier_name : "?") + "', '" + (dbn ? dbn->hier_name : "?") +
+                            "'); the copies can resolve in different cycles and reconverge at '" +
+                            consumer_name + "'. Synchronize once and fan out.";
                     } else {
                         f.reconvergence.explanation =
                             "Single-bit source '" + src->hier_name +
@@ -157,6 +142,138 @@ std::vector<Finding> ReconvergenceAnalyzer::check_pairs(
     return findings;
 }
 
+std::vector<uint64_t> ReconvergenceAnalyzer::meeting_points(const ir::Graph& graph,
+                                                            uint64_t start_id) const {
+    std::vector<uint64_t> result;
+    std::queue<std::pair<uint64_t, int>> bfs;
+    std::unordered_set<uint64_t> visited{start_id};
+    std::unordered_set<uint64_t> ports;
+    bfs.push({start_id, 0});
+    while (!bfs.empty() && result.size() < 32) {
+        auto [cur, depth] = bfs.front();
+        bfs.pop();
+        if (depth > 0)
+            result.push_back(cur);
+        // Top-level outputs this register drives through nets and logic.
+        std::vector<uint64_t> walk = graph.successors(cur);
+        std::unordered_set<uint64_t> seen{cur};
+        while (!walk.empty()) {
+            uint64_t w = walk.back();
+            walk.pop_back();
+            if (!seen.insert(w).second)
+                continue;
+            const ir::Node* n = graph.find_node(w);
+            if (!n || n->kind == ir::NodeKind::Register)
+                continue;
+            if (n->kind == ir::NodeKind::Port &&
+                std::count(n->hier_name.begin(), n->hier_name.end(), '.') == 1) {
+                if (ports.insert(w).second)
+                    result.push_back(w);
+                continue;
+            }
+            for (uint64_t x : graph.successors(w))
+                walk.push_back(x);
+        }
+        if (depth >= max_hops_)
+            continue;
+        for (uint64_t s : graph.register_successors(cur)) {
+            if (visited.insert(s).second)
+                bfs.push({s, depth + 1});
+        }
+    }
+    return result;
+}
+
+bool ReconvergenceAnalyzer::derives_from(const ir::Graph& graph, uint64_t to, uint64_t from) const {
+    const ir::Node* t = graph.find_node(to);
+    if (!t)
+        return false;
+    std::vector<std::pair<uint64_t, int>> stack{{to, 0}};
+    std::unordered_set<uint64_t> visited{to};
+    while (!stack.empty()) {
+        auto [cur, depth] = stack.back();
+        stack.pop_back();
+        if (depth >= max_hops_)
+            continue;
+        for (uint64_t p : graph.register_predecessors(cur, true, true)) {
+            if (p == from)
+                return true;
+            const ir::Node* pn = graph.find_node(p);
+            if (pn && pn->clock_domain == t->clock_domain && visited.insert(p).second)
+                stack.push_back({p, depth + 1});
+        }
+    }
+    return false;
+}
+
+std::vector<Finding> ReconvergenceAnalyzer::check_correlated(
+    const ir::Graph& graph, const std::vector<Finding>& crossings) const {
+    std::vector<Finding> findings;
+    std::vector<const Finding*> cdc;
+    for (const auto& f : crossings) {
+        if (f.rule_id == "CDC001")
+            cdc.push_back(&f);
+    }
+    static constexpr size_t kMaxPairs = 100000;
+    size_t pairs = 0;
+    std::unordered_set<uint64_t> reported;  // packed source pair
+    for (size_t i = 0; i < cdc.size(); ++i) {
+        for (size_t j = i + 1; j < cdc.size(); ++j) {
+            if (++pairs > kMaxPairs)
+                return findings;
+            const Finding* a = cdc[i];
+            const Finding* b = cdc[j];
+            if (a->source_reg_id == b->source_reg_id || a->dest_reg_id == b->dest_reg_id ||
+                a->source_domain != b->source_domain || a->dest_domain != b->dest_domain)
+                continue;
+            uint64_t lo = std::min(a->source_reg_id, b->source_reg_id);
+            uint64_t hi = std::max(a->source_reg_id, b->source_reg_id);
+            uint64_t key = (lo << 32) | hi;
+            if (reported.count(key))
+                continue;
+            const Finding* early = a;
+            const Finding* late = b;
+            if (!derives_from(graph, late->source_reg_id, early->source_reg_id)) {
+                std::swap(early, late);
+                if (!derives_from(graph, late->source_reg_id, early->source_reg_id))
+                    continue;
+            }
+            auto pa = meeting_points(graph, early->dest_reg_id);
+            std::unordered_set<uint64_t> pa_set(pa.begin(), pa.end());
+            for (uint64_t m : meeting_points(graph, late->dest_reg_id)) {
+                if (!pa_set.count(m))
+                    continue;
+                const ir::Node* meet = graph.find_node(m);
+                Finding f;
+                f.rule_id = "CDC003";
+                f.rule_name = "reconvergence_hazard";
+                f.severity = "warning";
+                f.source_reg_id = early->source_reg_id;
+                f.source_reg_name = early->source_reg_name;
+                f.source_domain = early->source_domain;
+                f.dest_domain = early->dest_domain;
+                f.source_loc = early->source_loc;
+                f.reconvergence.is_reconvergent = true;
+                f.reconvergence.common_source_id = early->source_reg_id;
+                f.reconvergence.common_source_name = early->source_reg_name;
+                f.reconvergence.explanation =
+                    "Correlated sources '" + early->source_reg_name + "' and '" +
+                    late->source_reg_name + "' ('" + late->source_reg_name + "' derives from '" +
+                    early->source_reg_name + "' in '" + early->source_domain +
+                    "') are synchronized separately ('" + early->dest_reg_name + "', '" +
+                    late->dest_reg_name + "') and reconverge at '" +
+                    (meet ? meet->hier_name : "<unknown>") +
+                    "': their relation is lost across the crossing.";
+                f.reason = f.reconvergence.explanation;
+                findings.push_back(std::move(f));
+                reported.insert(key);
+                break;
+            }
+        }
+    }
+    return findings;
+}
+
 std::vector<Finding> ReconvergenceAnalyzer::analyze(const ir::Graph& graph,
                                                     const std::vector<clock::ClockDomain>& domains,
                                                     const std::vector<Finding>& crossings) {
@@ -169,6 +286,8 @@ std::vector<Finding> ReconvergenceAnalyzer::analyze(const ir::Graph& graph,
             findings.push_back(std::move(f));
         }
     }
+    for (auto& f : check_correlated(graph, crossings))
+        findings.push_back(std::move(f));
 
     return findings;
 }

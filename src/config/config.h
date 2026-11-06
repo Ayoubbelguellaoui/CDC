@@ -76,6 +76,15 @@ struct Config {
     int min_sync_stages = 2;
     bool require_structural_proof = false;
     bool allow_user_annotation = true;
+    // Conservative sign-off policies (the strict and asic_signoff profiles
+    // set both). muxed_clock_domain: a mux of two clocks is a clock domain
+    // of its own, so its registers cross from either clock; off, the mux is
+    // represented by its default-path input. report_double_synchronization:
+    // one source synchronized by two chains that reconverge is CDC003 (the
+    // chains may resolve a transition in different cycles); off, two
+    // synchronized single-bit paths are taken as safe.
+    bool muxed_clock_domain = false;
+    bool report_double_synchronization = false;
     // Input frontend selection: "auto" (default), "rtl", or "netlist".
     // CLI --input-type overrides this.
     std::string input_type = "auto";

@@ -39,7 +39,7 @@ bool CrossingAnalyzer::is_path_through_safe_blackbox(
 }
 
 bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id,
-                                                  const ir::Graph& graph) const {
+                                                  const ir::Graph& graph, bool wire_path) const {
     const ir::Node* src = graph.find_node(src_id);
     const ir::Node* dst = graph.find_node(dst_id);
 
@@ -50,7 +50,7 @@ bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_
         return true;
 
     if (pattern_recognizer_) {
-        if (pattern_recognizer_->is_verified_safe_crossing(src_id, dst_id, graph))
+        if (pattern_recognizer_->is_verified_safe_crossing(src_id, dst_id, graph, wire_path))
             return true;
     }
 
@@ -113,8 +113,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             trunc.source_loc = src->loc;
             trunc.bus_width = src->width;
             trunc.source_module_path = src->module_path;
-            trunc.reason = "Path traversal truncated at " + std::to_string(path_result.max_paths) +
-                           " paths from register '" + src->hier_name + "'.";
+            trunc.reason =
+                (path_result.truncated_by_depth
+                     ? "Path traversal truncated at depth " + std::to_string(ir::MAX_PATH_DEPTH)
+                     : "Path traversal truncated at " + std::to_string(path_result.max_paths) +
+                           " paths") +
+                " from register '" + src->hier_name + "'.";
             trunc.safety_status = SafetyStatus::Ambiguous;
             trunc.safety_provenance = "Path traversal truncated — some crossings may be missed";
             local_findings.push_back(std::move(trunc));
@@ -225,7 +229,24 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             f.dest_domain = dst_dom->name;
             f.path.node_ids = reg_path.node_ids;
             f.source_loc = src->loc;
-            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph, true);
+            // A gray-coded source changes one bit per cycle, so a chain of
+            // destination-wide stages synchronizes it (async-FIFO pointers) -
+            // if the code arrives unchanged: only nets and ports between the
+            // registers. Logic on the path (a gray-to-binary decoder) makes
+            // the crossing a plain multi-bit one.
+            bool wire_path = true;
+            for (size_t i = 1; i + 1 < reg_path.node_ids.size(); ++i) {
+                const ir::Node* n = graph.find_node(reg_path.node_ids[i]);
+                if (!n || (n->kind != ir::NodeKind::Net && n->kind != ir::NodeKind::Port)) {
+                    wire_path = false;
+                    break;
+                }
+            }
+            const bool gray_source =
+                wire_path &&
+                (src->is_gray_coded ||
+                 (pattern_recognizer_ && pattern_recognizer_->is_gray_coded(src_id, graph)));
+            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph, true, gray_source);
             f.bus_width = src->width;
             f.source_module_path = src->module_path;
             f.dest_module_path = dst->module_path;
@@ -244,9 +265,8 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             SyncPattern crossing_sync = f.detected_sync;
 
             f.is_gray_coded =
-                (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                                         pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                src->is_gray_coded || dst->is_gray_coded;
+                gray_source || dst->is_gray_coded ||
+                (pattern_recognizer_ && pattern_recognizer_->is_gray_coded(dst_id, graph));
 
             f.has_handshake = (pattern_recognizer_ &&
                                (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
@@ -254,13 +274,13 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                               src->is_handshake_signal || dst->is_handshake_signal;
 
             if (crossing_sync != SyncPattern::None &&
-                sync_matcher_.below_min_stages(dst_id, graph, min_sync_stages_)) {
+                sync_matcher_.below_min_stages(dst_id, graph, min_sync_stages_, gray_source)) {
                 f.severity = "error";
                 f.safety_status = SafetyStatus::VerifiedUnsafe;
                 f.safety_provenance = "synchronizer chain shorter than min_sync_stages=" +
                                       std::to_string(min_sync_stages_);
             } else if (crossing_sync != SyncPattern::None &&
-                       sync_matcher_.has_chain_warnings(graph, dst_id, true)) {
+                       sync_matcher_.has_chain_warnings(graph, dst_id, true, gray_source)) {
                 f.severity = "warning";
                 f.safety_status = SafetyStatus::Ambiguous;
                 f.safety_provenance =
@@ -329,7 +349,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             // can still be a multi-bit hazard (per-bit skew), and gated /
             // muxed / reset properties apply regardless of sync chains.
 
-            bool safe_crossing = is_safe_multi_bit_crossing(src_id, dst_id, graph);
+            bool safe_crossing = is_safe_multi_bit_crossing(src_id, dst_id, graph, wire_path);
 
             if (src->width > 1 && !safe_crossing) {
                 Finding mb;
@@ -346,10 +366,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 mb.source_loc = src->loc;
                 mb.detected_sync = f.detected_sync;
                 mb.bus_width = src->width;
-                mb.is_gray_coded =
-                    (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                                             pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                    src->is_gray_coded || dst->is_gray_coded;
+                mb.is_gray_coded = f.is_gray_coded;
                 mb.has_handshake = (pattern_recognizer_ &&
                                     (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
                                      pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
@@ -700,7 +717,8 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
         uf.severity = "warning";
         uf.source_reg_id = node.id;
         uf.source_reg_name = node.hier_name;
-        uf.source_domain = node.clock_domain;
+        // The domain as the other findings name it (the resolved root).
+        uf.source_domain = node.root_clock.empty() ? node.clock_domain : node.root_clock;
         uf.path.node_ids.push_back(node.id);
         uf.source_loc = node.loc;
         uf.bus_width = node.width;

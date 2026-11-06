@@ -1,0 +1,5 @@
+# The conservative sign-off policies (set by the strict and asic_signoff
+# profiles): a mux of two clocks is a clock domain of its own; a source
+# synchronized by two chains that reconverge is CDC003.
+muxed_clock_domain: true
+report_double_synchronization: true

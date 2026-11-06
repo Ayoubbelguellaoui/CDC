@@ -47,7 +47,7 @@ std::vector<Finding> Cdc006Analyzer::analyze(
             // Find cross-domain source driving the chain entry.
             uint64_t entry_id = chain.stage_ids[0];
             bool reported = false;
-            for (uint64_t pred_id : graph.register_predecessors(entry_id)) {
+            for (uint64_t pred_id : graph.register_predecessors(entry_id, true, true)) {
                 const ir::Node* pred = graph.find_node(pred_id);
                 if (!pred || pred->kind != ir::NodeKind::Register)
                     continue;

@@ -175,6 +175,9 @@ min_sync_stages: 2           # 2-5
 require_structural_proof: false
 allow_user_annotation: true
 suppress_reset_crossings: false  # top-level spelling also accepted
+# Conservative sign-off policies (the strict and asic_signoff profiles set both):
+muxed_clock_domain: false             # a mux of two clocks is a clock domain of its own
+report_double_synchronization: false  # a source synchronized twice that reconverges is CDC003
 
 reset_policy:
   require_cdc_register_reset: false

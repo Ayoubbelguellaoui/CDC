@@ -356,6 +356,24 @@ TEST(NetlistFrontendTest, MuxedClockResolvesToDefaultPathRoot) {
     EXPECT_EQ(f->dest_domain, "clk_b");
 }
 
+TEST(NetlistFrontendTest, MuxedClockIsItsOwnDomainUnderSignoffPolicy) {
+    // With muxed_clock_domain the mux of clk_a and clk_b is a clock domain of
+    // its own, named by its output: a register on it crosses from either.
+    AnalysisRequest req;
+    req.input_files = {fx("mux_clock.v")};
+    req.top_module = "mux_clock";
+    req.input_type = InputType::Netlist;
+    req.config_path = std::string(FIXTURES_DIR) + "/config/signoff_policies.yaml";
+    Analyzer analyzer;
+    auto result = analyzer.run(req);
+    ASSERT_TRUE(result.ok) << (result.errors.empty() ? "" : result.errors.front());
+
+    const cdc::Finding* f = find_rule(result.findings, "CDC001");
+    ASSERT_NE(f, nullptr);
+    EXPECT_EQ(f->source_domain, "clk_a");
+    EXPECT_EQ(f->dest_domain, "selected_clk");
+}
+
 TEST(NetlistFrontendTest, UnknownCellTreatedAsOpaqueNotSafe) {
     // A cell type absent from the library must be classified Unknown (opaque
     // combinational) and produce a warning — never silently assumed safe.

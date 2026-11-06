@@ -772,6 +772,7 @@ FrontendResult NetlistAdapter::elaborate(const std::vector<std::string>& files,
     // so CDC004 (gated-clock crossing) and clock-domain grouping work exactly as
     // they do for RTL. Same pass the slang adapter runs.
     clock::ClockResolver clock_resolver;
+    clock_resolver.set_muxed_clock_domain(options.muxed_clock_domain);
     auto clock_result = clock_resolver.resolve(result.graph);
     for (auto& node : result.graph.nodes_mutable()) {
         if (node.kind != ir::NodeKind::Register)

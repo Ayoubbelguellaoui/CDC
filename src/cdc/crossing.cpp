@@ -39,7 +39,7 @@ bool CrossingAnalyzer::is_path_through_safe_blackbox(
 }
 
 bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id,
-                                                  const ir::Graph& graph) const {
+                                                  const ir::Graph& graph, bool wire_path) const {
     const ir::Node* src = graph.find_node(src_id);
     const ir::Node* dst = graph.find_node(dst_id);
 
@@ -50,7 +50,7 @@ bool CrossingAnalyzer::is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_
         return true;
 
     if (pattern_recognizer_) {
-        if (pattern_recognizer_->is_verified_safe_crossing(src_id, dst_id, graph))
+        if (pattern_recognizer_->is_verified_safe_crossing(src_id, dst_id, graph, wire_path))
             return true;
     }
 
@@ -77,6 +77,106 @@ std::string CrossingAnalyzer::build_reason(const Finding& f) const {
         r += " No 2FF/3FF synchronizer chain detected on destination side.";
     }
     return r;
+}
+
+// The if/case arms that load a node: its own, and, for a register capturing
+// a next-state net (`q <= q_d`), those of the nets in front of it.
+static std::vector<std::string> load_branches_of(const ir::Graph& graph, uint64_t id) {
+    std::vector<std::string> out;
+    const ir::Node* n = graph.find_node(id);
+    for (int hop = 0; n && hop < 8; ++hop) {
+        out.insert(out.end(), n->load_branches.begin(), n->load_branches.end());
+        if (hop > 0 && !n->load_branches.empty())
+            break;
+        const ir::Node* next = nullptr;
+        for (uint64_t p : graph.predecessors(n->id)) {
+            if (p == n->id || graph.edge_role(p, n->id) != ir::EdgeRole::Data)
+                continue;
+            const ir::Node* pn = graph.find_node(p);
+            if (!pn || (pn->kind != ir::NodeKind::Net && pn->kind != ir::NodeKind::Port))
+                continue;
+            if (next)
+                return out;  // more than one data input: no next-state net
+            next = pn;
+        }
+        n = next;
+    }
+    return out;
+}
+
+const ir::Node* CrossingAnalyzer::handshake_qualifier(
+    uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+    const std::unordered_map<uint64_t, size_t>& register_to_domain,
+    const ir::Node*& request) const {
+    auto src_branches = load_branches_of(graph, src_id);
+    if (src_branches.empty())
+        return nullptr;
+    auto domain_of = [&](uint64_t id) -> long {
+        auto it = register_to_domain.find(id);
+        return it == register_to_domain.end() ? -1 : static_cast<long>(it->second);
+    };
+    long src_dom = domain_of(src_id);
+    long dst_dom = domain_of(dst_id);
+
+    // Registers of dst's clock that gate dst through a condition: backwards
+    // from dst over nets, ports and logic, with a Control edge on the way.
+    std::vector<uint64_t> gates;
+    std::unordered_set<uint64_t> seen;
+    std::vector<std::pair<uint64_t, bool>> stack;
+    for (uint64_t p : graph.predecessors(dst_id))
+        stack.push_back({p, graph.edge_role(p, dst_id) == ir::EdgeRole::Control});
+    while (!stack.empty() && seen.size() < 4096) {
+        auto [id, control] = stack.back();
+        stack.pop_back();
+        if (!seen.insert(id * 2 + (control ? 1 : 0)).second)
+            continue;
+        const ir::Node* n = graph.find_node(id);
+        if (!n || id == dst_id)
+            continue;
+        if (n->kind == ir::NodeKind::Register) {
+            if (control && domain_of(id) == dst_dom)
+                gates.push_back(id);
+            continue;
+        }
+        for (uint64_t p : graph.predecessors(id))
+            stack.push_back({p, control || graph.edge_role(p, id) == ir::EdgeRole::Control});
+    }
+
+    // A gate that is a synchronizer stage past the first, whose chain is fed
+    // by a register of src's clock loaded in one of src's arms: the request.
+    for (uint64_t q : gates) {
+        std::vector<std::pair<uint64_t, int>> back{{q, 0}};
+        std::unordered_set<uint64_t> visited{q};
+        while (!back.empty()) {
+            auto [e, depth] = back.back();
+            back.pop_back();
+            const ir::Node* en = graph.find_node(e);
+            if (!en)
+                continue;
+            bool past_first = depth > 0 || en->packed_shift_depth >= 2;
+            if (past_first &&
+                sync_matcher_.find_pattern_for_dest(e, graph, false) != SyncPattern::None) {
+                for (uint64_t r : graph.register_predecessors(e, false, true)) {
+                    if (r == src_id || domain_of(r) != src_dom)
+                        continue;
+                    for (const auto& b : load_branches_of(graph, r)) {
+                        if (std::find(src_branches.begin(), src_branches.end(), b) !=
+                            src_branches.end()) {
+                            request = graph.find_node(r);
+                            return graph.find_node(q);
+                        }
+                    }
+                }
+            }
+            if (depth >= 4)
+                continue;
+            for (uint64_t p : graph.register_predecessors(e, false, true)) {
+                if (domain_of(p) == dst_dom && visited.insert(p).second)
+                    back.push_back({p, depth + 1});
+            }
+        }
+    }
+    return nullptr;
 }
 
 std::vector<Finding> CrossingAnalyzer::analyze(
@@ -113,8 +213,12 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             trunc.source_loc = src->loc;
             trunc.bus_width = src->width;
             trunc.source_module_path = src->module_path;
-            trunc.reason = "Path traversal truncated at " + std::to_string(path_result.max_paths) +
-                           " paths from register '" + src->hier_name + "'.";
+            trunc.reason =
+                (path_result.truncated_by_depth
+                     ? "Path traversal truncated at depth " + std::to_string(ir::MAX_PATH_DEPTH)
+                     : "Path traversal truncated at " + std::to_string(path_result.max_paths) +
+                           " paths") +
+                " from register '" + src->hier_name + "'.";
             trunc.safety_status = SafetyStatus::Ambiguous;
             trunc.safety_provenance = "Path traversal truncated — some crossings may be missed";
             local_findings.push_back(std::move(trunc));
@@ -225,7 +329,24 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             f.dest_domain = dst_dom->name;
             f.path.node_ids = reg_path.node_ids;
             f.source_loc = src->loc;
-            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph, true);
+            // A gray-coded source changes one bit per cycle, so a chain of
+            // destination-wide stages synchronizes it (async-FIFO pointers) -
+            // if the code arrives unchanged: only nets and ports between the
+            // registers. Logic on the path (a gray-to-binary decoder) makes
+            // the crossing a plain multi-bit one.
+            bool wire_path = true;
+            for (size_t i = 1; i + 1 < reg_path.node_ids.size(); ++i) {
+                const ir::Node* n = graph.find_node(reg_path.node_ids[i]);
+                if (!n || (n->kind != ir::NodeKind::Net && n->kind != ir::NodeKind::Port)) {
+                    wire_path = false;
+                    break;
+                }
+            }
+            const bool gray_source =
+                wire_path &&
+                (src->is_gray_coded ||
+                 (pattern_recognizer_ && pattern_recognizer_->is_gray_coded(src_id, graph)));
+            f.detected_sync = sync_matcher_.find_pattern_for_dest(dst_id, graph, true, gray_source);
             f.bus_width = src->width;
             f.source_module_path = src->module_path;
             f.dest_module_path = dst->module_path;
@@ -244,23 +365,29 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             SyncPattern crossing_sync = f.detected_sync;
 
             f.is_gray_coded =
-                (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                                         pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                src->is_gray_coded || dst->is_gray_coded;
+                gray_source || dst->is_gray_coded ||
+                (pattern_recognizer_ && pattern_recognizer_->is_gray_coded(dst_id, graph));
 
             f.has_handshake = (pattern_recognizer_ &&
                                (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
                                 pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
                               src->is_handshake_signal || dst->is_handshake_signal;
 
+            const ir::Node* handshake_request = nullptr;
+            const ir::Node* handshake_gate =
+                crossing_sync == SyncPattern::None
+                    ? handshake_qualifier(src_id, dst_id, graph, register_to_domain,
+                                          handshake_request)
+                    : nullptr;
+
             if (crossing_sync != SyncPattern::None &&
-                sync_matcher_.below_min_stages(dst_id, graph, min_sync_stages_)) {
+                sync_matcher_.below_min_stages(dst_id, graph, min_sync_stages_, gray_source)) {
                 f.severity = "error";
                 f.safety_status = SafetyStatus::VerifiedUnsafe;
                 f.safety_provenance = "synchronizer chain shorter than min_sync_stages=" +
                                       std::to_string(min_sync_stages_);
             } else if (crossing_sync != SyncPattern::None &&
-                       sync_matcher_.has_chain_warnings(graph, dst_id, true)) {
+                       sync_matcher_.has_chain_warnings(graph, dst_id, true, gray_source)) {
                 f.severity = "warning";
                 f.safety_status = SafetyStatus::Ambiguous;
                 f.safety_provenance =
@@ -270,6 +397,13 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 f.severity = "info";
                 f.safety_status = SafetyStatus::VerifiedSafe;
                 f.safety_provenance = "synchronizer chain detected at destination";
+            } else if (handshake_gate) {
+                f.handshake_payload = true;
+                f.severity = "info";
+                f.safety_status = SafetyStatus::VerifiedSafe;
+                f.safety_provenance =
+                    "handshake payload: loaded with request '" + handshake_request->hier_name +
+                    "', used under its synchronized copy '" + handshake_gate->hier_name + "'";
             } else {
                 f.safety_status = SafetyStatus::VerifiedUnsafe;
                 f.safety_provenance = "No synchronizer chain detected on destination side";
@@ -329,7 +463,9 @@ std::vector<Finding> CrossingAnalyzer::analyze(
             // can still be a multi-bit hazard (per-bit skew), and gated /
             // muxed / reset properties apply regardless of sync chains.
 
-            bool safe_crossing = is_safe_multi_bit_crossing(src_id, dst_id, graph);
+            // A handshake payload is held while it crosses: no bit skew.
+            bool safe_crossing =
+                handshake_gate || is_safe_multi_bit_crossing(src_id, dst_id, graph, wire_path);
 
             if (src->width > 1 && !safe_crossing) {
                 Finding mb;
@@ -346,10 +482,7 @@ std::vector<Finding> CrossingAnalyzer::analyze(
                 mb.source_loc = src->loc;
                 mb.detected_sync = f.detected_sync;
                 mb.bus_width = src->width;
-                mb.is_gray_coded =
-                    (pattern_recognizer_ && (pattern_recognizer_->is_gray_coded(src_id, graph) ||
-                                             pattern_recognizer_->is_gray_coded(dst_id, graph))) ||
-                    src->is_gray_coded || dst->is_gray_coded;
+                mb.is_gray_coded = f.is_gray_coded;
                 mb.has_handshake = (pattern_recognizer_ &&
                                     (pattern_recognizer_->is_handshake_signal(src_id, graph) ||
                                      pattern_recognizer_->is_handshake_signal(dst_id, graph))) ||
@@ -652,8 +785,11 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
         if (node.value_uncertain)
             work.push_back(node.id);
     }
+    // Uncertainty spreads at most this many hops (its own horizon, not the
+    // path search's depth limit).
+    static constexpr size_t kUncertaintyHops = 50;
     size_t hops = 0;
-    while (!work.empty() && hops < ir::MAX_PATH_DEPTH) {
+    while (!work.empty() && hops < kUncertaintyHops) {
         ++hops;
         std::vector<uint64_t> next;
         for (uint64_t id : work) {
@@ -700,7 +836,8 @@ void CrossingAnalyzer::propagate_uncertainty(ir::Graph& graph,
         uf.severity = "warning";
         uf.source_reg_id = node.id;
         uf.source_reg_name = node.hier_name;
-        uf.source_domain = node.clock_domain;
+        // The domain as the other findings name it (the resolved root).
+        uf.source_domain = node.root_clock.empty() ? node.clock_domain : node.root_clock;
         uf.path.node_ids.push_back(node.id);
         uf.source_loc = node.loc;
         uf.bus_width = node.width;

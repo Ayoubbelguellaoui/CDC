@@ -1,0 +1,4 @@
+# Conformance: the conservative sign-off policies (as the strict and
+# asic_signoff profiles set them).
+muxed_clock_domain: true
+report_double_synchronization: true

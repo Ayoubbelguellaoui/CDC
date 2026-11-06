@@ -1,0 +1,3 @@
+# RDC conformance: reset crossings are checked within one clock too.
+reset_policy:
+  check_same_clock_reset_crossings: true

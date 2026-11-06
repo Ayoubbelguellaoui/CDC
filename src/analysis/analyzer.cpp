@@ -1,6 +1,7 @@
 #include "analysis/analyzer.h"
 
 #include <memory>
+#include <unordered_set>
 
 #include "cdc/blackbox.h"
 #include "cdc/cdc006.h"
@@ -69,6 +70,7 @@ AnalysisResult Analyzer::run(const AnalysisRequest& request) {
     fe_opts.include_dirs = request.include_dirs;
     fe_opts.defines = request.defines;
     fe_opts.allow_user_annotation = cfg.allow_user_annotation;
+    fe_opts.muxed_clock_domain = cfg.muxed_clock_domain;
     fe_opts.cell_map_path =
         !request.cell_map_path.empty() ? request.cell_map_path : cfg.cell_map_path;
     fe_opts.liberty_path = !request.liberty_path.empty() ? request.liberty_path : cfg.liberty_path;
@@ -276,6 +278,7 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
 
     // Clock resolve for relationship classification.
     clock::ClockResolver resolver;
+    resolver.set_muxed_clock_domain(cfg.muxed_clock_domain);
     clock::ResolveResult resolve_result = resolver.resolve(result.graph);
 
     cdc::CrossingAnalyzer crossing_analyzer;
@@ -299,6 +302,7 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
     // 9. Reconvergence.
     cdc::ReconvergenceAnalyzer reconvergence_analyzer;
     reconvergence_analyzer.set_max_hops(cfg.reconvergence_depth);
+    reconvergence_analyzer.set_report_double_synchronization(cfg.report_double_synchronization);
     auto reconv_findings =
         reconvergence_analyzer.analyze(result.graph, result.domains.domains, findings);
     for (auto& f : reconv_findings) {
@@ -318,10 +322,29 @@ AnalysisResult Analyzer::run_on_graph(ir::Graph graph, const AnalysisRequest& re
     auto reset_findings = reset_domain_analyzer.check_reset_crossings(
         result.graph, {}, result.domains.domains, result.domains.register_to_domain,
         &cfg.reset_policy);
+    // synchronized_crossings_safe: no CDC009 on a pair whose crossing is
+    // verified (a synchronizer or a handshake payload): the source's reset is
+    // one more asynchronous change, resolved as the crossing's data is.
+    std::unordered_set<uint64_t> verified_pairs;
+    if (cfg.reset_policy.synchronized_crossings_safe) {
+        for (const auto& f : findings) {
+            if (f.rule_id == "CDC001" && f.safety_status == cdc::SafetyStatus::VerifiedSafe &&
+                f.source_reg_id <= UINT32_MAX && f.dest_reg_id <= UINT32_MAX)
+                verified_pairs.insert((f.source_reg_id << 32) | f.dest_reg_id);
+        }
+    }
     for (auto& f : reset_findings) {
         if (cfg.suppress_reset_crossings && f.rule_id == "CDC009")
             continue;
+        if (f.rule_id == "CDC009" && verified_pairs.count((f.source_reg_id << 32) | f.dest_reg_id))
+            continue;
         findings.push_back(std::move(f));
+    }
+    if (cfg.reset_policy.check_reset_release) {
+        for (auto& f : reset_domain_analyzer.check_reset_release(
+                 result.graph, result.domains.domains, result.domains.register_to_domain,
+                 &constraints.case_analysis))
+            findings.push_back(std::move(f));
     }
 
     // 11b. Low-power isolation cells: CDC001 whose path crosses a node

@@ -6,6 +6,7 @@
 #include <iostream>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -22,6 +23,7 @@
 #include "lsp/server.h"
 #include "opencdc/opencdc.h"
 #include "opencdc/version.h"
+#include "report/domain_report.h"
 #include "report/html_reporter.h"
 #include "report/report.h"
 #include "report/sarif_reporter.h"
@@ -42,6 +44,8 @@ static void print_usage(const char* prog) {
         << "  --format <fmt>       Output format: json, text, html, sarif (default: json)\n"
         << "  --out <file>         Write report to file (default: stdout)\n"
         << "  --html-dir <dir>     HTML report output directory (default: opencdc_report)\n"
+        << "  --clock-report <f>   Write the registers of each clock domain to file\n"
+        << "  --reset-report <f>   Write the registers of each reset signal to file\n"
         << "  --disable-rule <id>  Disable a rule (e.g., CDC001). Repeatable.\n"
         << "  --severity <id>=<sev> Override rule severity (e.g., CDC003=error). Repeatable.\n"
         << "  --false-path <s:d>   False path (e.g., top.src:top.dst). Repeatable.\n"
@@ -190,6 +194,10 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
             opts.defines.push_back(arg.substr(8));
         } else if (arg == "--save-baseline" && i + 1 < argc) {
             opts.save_baseline = argv[++i];
+        } else if (arg == "--clock-report" && i + 1 < argc) {
+            opts.clock_report = argv[++i];
+        } else if (arg == "--reset-report" && i + 1 < argc) {
+            opts.reset_report = argv[++i];
         } else if (arg == "--compare-baseline" && i + 1 < argc) {
             opts.compare_baseline = argv[++i];
         } else if (arg == "--false-path" && i + 1 < argc) {
@@ -247,7 +255,7 @@ static int parse_args(int argc, const char* argv[], CheckOptions& opts) {
                    arg == "--define" || arg == "+define" || arg == "--save-baseline" ||
                    arg == "--compare-baseline" || arg == "--false-path" || arg == "--input-type" ||
                    arg == "--cell-map" || arg == "--max-nodes" || arg == "--max-edges" ||
-                   arg == "--color") {
+                   arg == "--color" || arg == "--clock-report" || arg == "--reset-report") {
             std::cerr << "Error: option '" << arg << "' requires a value\n";
             return -1;
         } else {
@@ -461,6 +469,24 @@ int run(int argc, const char* argv[]) {
         std::cerr << "Domains: " << analysis.domains.domains.size() << "\n";
         for (const auto& dom : analysis.domains.domains) {
             std::cerr << "  " << dom.name << ": " << dom.register_ids.size() << " register(s)\n";
+        }
+    }
+
+    // Register inventories, written in every mode (baseline comparison too).
+    report::DomainReporter domain_reporter;
+    for (const auto& [path, clocks] :
+         {std::pair{opts.clock_report, true}, std::pair{opts.reset_report, false}}) {
+        if (path.empty())
+            continue;
+        std::ofstream rpt(path, std::ios::binary | std::ios::trunc);
+        if (clocks)
+            domain_reporter.report_clocks(analysis.graph, analysis.domains, opts.top_module, rpt);
+        else
+            domain_reporter.report_resets(analysis.graph, analysis.domains, opts.top_module, rpt);
+        rpt.close();
+        if (!rpt) {
+            std::cerr << "Error: could not write report file: " << path << "\n";
+            return static_cast<int>(ExitCode::INPUT_ERROR);
         }
     }
 

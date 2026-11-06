@@ -10,7 +10,10 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "util/temp_file.h"
@@ -148,4 +151,46 @@ TEST(CliTest, FalsePathWithExtraColonsAccepted) {
                       null_redirect();
     int rc = run_command(cmd.c_str());
     EXPECT_EQ(exit_status(rc), 1);
+}
+
+static std::string read_file(const std::string& path) {
+    std::ifstream in(path);
+    std::stringstream ss;
+    ss << in.rdbuf();
+    return ss.str();
+}
+
+TEST(CliTest, ClockAndResetReportsListRegisters) {
+    std::string clocks = opencdc::util::unique_temp_path("opencdc_clocks", ".rpt");
+    std::string resets = opencdc::util::unique_temp_path("opencdc_resets", ".rpt");
+    std::string json = opencdc::util::unique_temp_path("opencdc_report", ".json");
+    std::string cmd = bin_path() + " check \"" + std::string(FIXTURES_DIR) +
+                      "/sv/cdc_crossing.sv\" --top simple_cdc_crossing --out \"" + json +
+                      "\" --clock-report \"" + clocks + "\" --reset-report \"" + resets + "\"";
+    int rc = run_command(cmd.c_str());
+    EXPECT_EQ(exit_status(rc), 1);  // the unsynchronized crossing
+
+    std::string c = read_file(clocks);
+    EXPECT_NE(c.find("2 domain(s), 2 register(s), 2 flip-flop(s)"), std::string::npos) << c;
+    auto a = c.find("clock clk_a: 1 register(s), 1 flip-flop(s)");
+    auto b = c.find("clock clk_b: 1 register(s), 1 flip-flop(s)");
+    ASSERT_NE(a, std::string::npos) << c;
+    ASSERT_NE(b, std::string::npos) << c;
+    auto src = c.find("simple_cdc_crossing.src_ff");
+    auto dst = c.find("simple_cdc_crossing.dst_ff");
+    EXPECT_TRUE(a < src && src < b) << c;
+    EXPECT_TRUE(b < dst) << c;
+    EXPECT_NE(c.find("reset rst_n (async active-low)"), std::string::npos) << c;
+
+    // One reset into two clock domains: listed with both.
+    std::string r = read_file(resets);
+    EXPECT_NE(r.find("reset rst_n: 2 register(s), 2 flip-flop(s), 2 clock domain(s): clk_a clk_b"),
+              std::string::npos)
+        << r;
+    EXPECT_NE(r.find("clock clk_b (async active-low)"), std::string::npos) << r;
+    EXPECT_EQ(r.find("no reset"), std::string::npos) << r;
+
+    std::remove(clocks.c_str());
+    std::remove(resets.c_str());
+    std::remove(json.c_str());
 }

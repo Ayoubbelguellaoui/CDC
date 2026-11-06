@@ -33,6 +33,15 @@ class ResetDomainAnalyzer {
         const std::unordered_map<uint64_t, size_t>& register_to_clock_domain,
         const config::ResetPolicyConfig* policy = nullptr);
 
+    // CDC014 (reset_policy.check_reset_release): an asynchronous reset from
+    // a port or logic released into a clock domain without a reset
+    // synchronizer there - one finding per reset and clock domain. constants:
+    // set_case_analysis of the SDC (a mux with a constant select is followed).
+    std::vector<Finding> check_reset_release(
+        const ir::Graph& graph, const std::vector<clock::ClockDomain>& clock_domains,
+        const std::unordered_map<uint64_t, size_t>& register_to_clock_domain,
+        const std::unordered_map<std::string, int>* constants = nullptr) const;
+
    private:
     const ResetDomain* find_domain_for_register(
         uint64_t register_id, const std::vector<ResetDomain>& domains,

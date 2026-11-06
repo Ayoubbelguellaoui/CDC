@@ -4,16 +4,13 @@
 // Write and read pointers are binary counters converted to gray code;
 // only the gray pointers cross domains, each through a 2FF synchronizer.
 // Full/empty are derived from synchronized gray pointers.
-// [CORPUS NOTE — verified 2026-09-26] This is a CORRECT async FIFO, yet
-// the gray pointer crossings wr_ptr_gray -> wr_ptr_gray_sync1 and
-// rd_ptr_gray -> rd_ptr_gray_sync1 are reported as CDC001 error (no
-// CDC002 — gray IS recognized for the multi-bit rule). Root cause: the
-// synchronizer matcher only classifies single-bit (width == 1) chains
-// (SynchronizerMatcher::find_pattern_for_dest + chain extension), so the
-// 5-bit-wide pointer sync chains are never verified_safe. A documented
-// false-positive class for wide gray-coded sync chains. CDC013 warnings
-// on the synced pointers are also emitted (unknown-propagation). Compare
-// with async_fifo_binary_broken.sv, where CDC002 correctly fires.
+// [CORPUS NOTE] This is a CORRECT async FIFO: the gray pointer crossings
+// wr_ptr_gray -> wr_ptr_gray_sync1 and rd_ptr_gray -> rd_ptr_gray_sync1 are
+// verified synchronizers (CDC001 info / verified_safe, no CDC002): a
+// gray-coded source may use chain stages as wide as the destination.
+// Formerly only single-bit chains were classified and both reported CDC001
+// error. Compare with async_fifo_binary_broken.sv, where CDC002 correctly
+// fires.
 
 module async_fifo_gray (
     input  wire       wr_clk,

@@ -73,6 +73,9 @@ struct Finding {
     uint32_t bus_width = 1;
     bool is_gray_coded = false;
     bool has_handshake = false;
+    // A handshake payload (CrossingAnalyzer::handshake_qualifier): held
+    // while it is sampled, so copies of it cannot disagree.
+    bool handshake_payload = false;
     bool has_multicycle_exception = false;
     int multicycle_cycles = 0;
     std::string constraint_source;
@@ -138,10 +141,21 @@ class CrossingAnalyzer {
 
     std::string build_reason(const Finding& f) const;
 
-    bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph) const;
+    bool is_safe_multi_bit_crossing(uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+                                    bool wire_path = true) const;
 
     bool is_path_through_safe_blackbox(const ir::Graph& graph,
                                        const std::vector<uint64_t>& path_node_ids) const;
+
+    // The payload of a handshake: src is loaded in the same if/case arm as a
+    // request register whose synchronizer chain, in dst's clock, gates dst
+    // through a condition (data held with the request, used once the request
+    // is synchronized - PULP cdc_2phase / cdc_4phase). Returns the gating
+    // synchronizer stage, else null. `request` is set to the request.
+    const ir::Node* handshake_qualifier(
+        uint64_t src_id, uint64_t dst_id, const ir::Graph& graph,
+        const std::unordered_map<uint64_t, size_t>& register_to_domain,
+        const ir::Node*& request) const;
 
     SynchronizerMatcher sync_matcher_;
     PatternRecognizer* pattern_recognizer_ = nullptr;

@@ -825,7 +825,7 @@ void PatternRecognizer::ensure_patterns_locked(const ir::Graph& graph) const {
 // B1: Requires structural verification of the specific crossing — a bare
 // is_gray_coded flag or unrelated same-type nodes are NOT sufficient.
 bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_id,
-                                                  const ir::Graph& graph) const {
+                                                  const ir::Graph& graph, bool wire_path) const {
     const ir::Node* src = graph.find_node(src_id);
     const ir::Node* dst = graph.find_node(dst_id);
     if (!src || !dst)
@@ -864,7 +864,11 @@ bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_
     // destination; a single-ended gray source (no decoder node in the IR —
     // decode happens downstream in the destination domain) is safe from the
     // encoder side when the encoder has structural proof.
+    // Logic between the registers (a gray-to-binary decoder in the source
+    // domain) makes the crossing a plain multi-bit one.
     for (const auto& gp : gray_cache_) {
+        if (!wire_path)
+            break;
         if (gp.encoder_id != src_id)
             continue;
         if (!gp.verified)
@@ -876,6 +880,8 @@ bool PatternRecognizer::is_verified_safe_crossing(uint64_t src_id, uint64_t dst_
     // registered before the crossing).  The encoder must be structurally
     // verified (XOR-of-delayed-register pattern or is_gray_coded flag).
     for (const auto& gp : gray_cache_) {
+        if (!wire_path)
+            break;
         if (!gp.verified)
             continue;
         if (gp.decoder_id != 0)

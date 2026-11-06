@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <string_view>
 #include <system_error>
@@ -26,13 +27,16 @@
 #include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
 #include "slang/ast/symbols/PortSymbols.h"
 #include "slang/ast/symbols/SubroutineSymbols.h"
+#include "slang/ast/symbols/ValueSymbol.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/AllTypes.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
 #include "slang/parsing/Preprocessor.h"
+#include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/Bag.h"
@@ -54,6 +58,11 @@ struct AssignInfo {
     // Stages of a packed shift chain (`s <= {s[W-1:0], tail}`), 0 when the
     // assignment is not such a chain; applied to the destination node.
     uint32_t packed_depth = 0;
+    // rhs is a signal of an enclosing if/case condition: a Control edge.
+    bool is_control = false;
+    // The if/case arm the assignment is in (empty outside any): see
+    // ir::Node::load_branches.
+    std::string branch;
 };
 
 struct MultiAssignInfo {
@@ -64,6 +73,19 @@ struct MultiAssignInfo {
 
 static std::string sv_to_string(std::string_view sv) {
     return std::string(sv);
+}
+
+// Width of a signal of type `t` in bits. getBitWidth() is zero for every
+// non-numeric type - unpacked arrays, unpacked structs and unions - so
+// those take their $bits; a type with no static size (dynamic array, queue,
+// string) counts as one bit. A graph node never gets width zero.
+static uint32_t type_width(const Type& t) {
+    uint64_t width = t.getBitWidth();
+    if (width == 0)
+        width = t.getBitstreamWidth();
+    if (width == 0)
+        return 1;
+    return static_cast<uint32_t>(std::min<uint64_t>(width, UINT32_MAX));
 }
 
 // SlangAdapter::scope_paths_ while elaborate() walks the design, for the
@@ -145,12 +167,259 @@ static void apply_pattern_name_tags(ir::Node& node) {
     }
 }
 
+// Value of the variable of each procedural for loop being unrolled
+// (collect_assigns, ArrayAccessScan): an index of the body is static.
+static thread_local std::unordered_map<const Symbol*, int64_t> g_loop_values;
+
+// Index of an element select known at elaboration: a literal, a parameter
+// (a genvar is a parameter in each generate-loop entry), or + - * of those.
+static std::optional<int64_t> static_index(const Expression& expr) {
+    const Expression* e = &expr;
+    while (e->kind == ExpressionKind::Conversion)
+        e = &static_cast<const ConversionExpression&>(*e).operand();
+    if (e->kind == ExpressionKind::IntegerLiteral) {
+        SVInt v = static_cast<const IntegerLiteral&>(*e).getValue();
+        if (v.hasUnknown())
+            return std::nullopt;
+        return v.as<int64_t>();
+    }
+    if (e->kind == ExpressionKind::NamedValue) {
+        auto& sym = static_cast<const NamedValueExpression&>(*e).symbol;
+        if (auto it = g_loop_values.find(&sym); it != g_loop_values.end())
+            return it->second;
+        if (sym.kind != SymbolKind::Parameter)
+            return std::nullopt;
+        const ConstantValue* cv = &static_cast<const ParameterSymbol&>(sym).getValue();
+        if (!cv->isInteger() || cv->integer().hasUnknown())
+            return std::nullopt;
+        return cv->integer().as<int64_t>();
+    }
+    if (e->kind == ExpressionKind::BinaryOp) {
+        auto& bin = static_cast<const BinaryExpression&>(*e);
+        auto l = static_index(bin.left());
+        auto r = static_index(bin.right());
+        if (!l || !r)
+            return std::nullopt;
+        switch (bin.op) {
+            case BinaryOperator::Add:
+                return *l + *r;
+            case BinaryOperator::Subtract:
+                return *l - *r;
+            case BinaryOperator::Multiply:
+                return *l * *r;
+            default:
+                return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+// Iteration values of a procedural loop `for (int i = A; i < B; i++)`:
+// one variable, static A and B, a < <= > >= != stop, ++ -- += -= of a
+// static step; at most 1024 iterations. nullopt for any other loop.
+struct LoopUnroll {
+    const Symbol* var = nullptr;
+    std::vector<int64_t> values;
+};
+
+static std::optional<LoopUnroll> unroll_for(const ForLoopStatement& fl) {
+    const Symbol* var = nullptr;
+    std::optional<int64_t> init;
+    if (fl.loopVars.size() == 1 && fl.loopVars[0]->getInitializer()) {
+        var = fl.loopVars[0];
+        init = static_index(*fl.loopVars[0]->getInitializer());
+    } else if (fl.loopVars.empty() && fl.initializers.size() == 1 &&
+               fl.initializers[0]->kind == ExpressionKind::Assignment) {
+        auto& a = static_cast<const AssignmentExpression&>(*fl.initializers[0]);
+        if (!a.isCompound() && a.left().kind == ExpressionKind::NamedValue) {
+            var = &static_cast<const NamedValueExpression&>(a.left()).symbol;
+            init = static_index(a.right());
+        }
+    }
+    if (!var || !init || !fl.stopExpr || fl.steps.size() != 1 ||
+        fl.stopExpr->kind != ExpressionKind::BinaryOp)
+        return std::nullopt;
+    auto is_var = [&](const Expression& e) {
+        const Expression* x = &e;
+        while (x->kind == ExpressionKind::Conversion)
+            x = &static_cast<const ConversionExpression&>(*x).operand();
+        return x->kind == ExpressionKind::NamedValue &&
+               &static_cast<const NamedValueExpression&>(*x).symbol == var;
+    };
+    auto& stop = static_cast<const BinaryExpression&>(*fl.stopExpr);
+    if (!is_var(stop.left()))
+        return std::nullopt;
+    auto bound = static_index(stop.right());
+    if (!bound)
+        return std::nullopt;
+
+    int64_t step = 0;
+    const Expression& st = *fl.steps[0];
+    if (st.kind == ExpressionKind::UnaryOp) {
+        auto& u = static_cast<const UnaryExpression&>(st);
+        if (!is_var(u.operand()))
+            return std::nullopt;
+        if (u.op == UnaryOperator::Preincrement || u.op == UnaryOperator::Postincrement)
+            step = 1;
+        else if (u.op == UnaryOperator::Predecrement || u.op == UnaryOperator::Postdecrement)
+            step = -1;
+    } else if (st.kind == ExpressionKind::Assignment) {
+        auto& a = static_cast<const AssignmentExpression&>(st);
+        if (a.isCompound()) {
+            auto k = static_index(a.right());
+            if (is_var(a.left()) && k) {
+                if (*a.op == BinaryOperator::Add)
+                    step = *k;
+                else if (*a.op == BinaryOperator::Subtract)
+                    step = -*k;
+            }
+        } else if (is_var(a.left()) && a.right().kind == ExpressionKind::BinaryOp) {
+            // `i = i + k` / `i = i - k` / `i = k + i` (Verilog-2001 loops).
+            auto& b = static_cast<const BinaryExpression&>(a.right());
+            if (is_var(b.left())) {
+                auto k = static_index(b.right());
+                if (k && b.op == BinaryOperator::Add)
+                    step = *k;
+                else if (k && b.op == BinaryOperator::Subtract)
+                    step = -*k;
+            } else if (is_var(b.right()) && b.op == BinaryOperator::Add) {
+                if (auto k = static_index(b.left()))
+                    step = *k;
+            }
+        }
+    }
+    if (step == 0)
+        return std::nullopt;
+
+    LoopUnroll out;
+    out.var = var;
+    for (int64_t v = *init; out.values.size() <= 1024; v += step) {
+        bool go = false;
+        switch (stop.op) {
+            case BinaryOperator::LessThan:
+                go = v < *bound;
+                break;
+            case BinaryOperator::LessThanEqual:
+                go = v <= *bound;
+                break;
+            case BinaryOperator::GreaterThan:
+                go = v > *bound;
+                break;
+            case BinaryOperator::GreaterThanEqual:
+                go = v >= *bound;
+                break;
+            case BinaryOperator::Inequality:
+                go = v != *bound;
+                break;
+            default:
+                return std::nullopt;
+        }
+        if (!go)
+            return out;
+        out.values.push_back(v);
+    }
+    return std::nullopt;  // more than 1024 iterations
+}
+
+// The fixed-size unpacked array variable or net a named value refers to.
+static const Symbol* unpacked_array_symbol(const Expression& expr) {
+    if (expr.kind != ExpressionKind::NamedValue)
+        return nullptr;
+    auto& sym = static_cast<const NamedValueExpression&>(expr).symbol;
+    if (sym.kind != SymbolKind::Variable && sym.kind != SymbolKind::Net)
+        return nullptr;
+    const Type& t = static_cast<const ValueSymbol&>(sym).getType();
+    return t.isUnpackedArray() && t.isFixedSize() ? &sym : nullptr;
+}
+
+// Unpacked arrays whose every access is an element select with a static
+// index (SlangAdapter::split_arrays_ while elaborate() walks the design):
+// each element is a node of its own, `s[0]`, `s[1]`, so a synchronizer
+// written as an array is a chain. Any other array is one node.
+static thread_local const std::unordered_set<const Symbol*>* g_split_arrays = nullptr;
+
+// The lowest bit of each signal read anywhere (a whole read is bit 0), but
+// for the reads of an assignment's own target (a shift reading itself): a
+// packed synchronizer read in its first stage is tapped early
+// (ir::Node::packed_early_tap).
+static thread_local std::unordered_map<std::string, int64_t> g_lowest_bit_read;
+static thread_local const std::string* g_reading_for_lhs = nullptr;
+static thread_local int64_t g_select_lo = 0;
+
+static void record_read(const std::string& name) {
+    if (g_reading_for_lhs && name == *g_reading_for_lhs)
+        return;
+    auto [it, fresh] = g_lowest_bit_read.emplace(name, g_select_lo);
+    if (!fresh && g_select_lo < it->second)
+        it->second = g_select_lo;
+}
+
+// Node name of the element select `value[selector]` when value is a split
+// array, else nullopt.
+static std::optional<std::string> split_element_name(const ElementSelectExpression& es,
+                                                     const std::string& prefix) {
+    const Symbol* sym = unpacked_array_symbol(es.value());
+    if (!sym || !g_split_arrays || !g_split_arrays->count(sym))
+        return std::nullopt;
+    auto index = static_index(es.selector());
+    if (!index)
+        return std::nullopt;
+    return symbol_path(*sym, prefix) + "[" + std::to_string(*index) + "]";
+}
+
+// Finds the unpacked arrays to split: those accessed only through element
+// selects with a static index. A bare reference (whole-array assignment,
+// port connection, variable index) keeps the array one node.
+struct ArrayAccessScan : public ASTVisitor<ArrayAccessScan, true, true> {
+    std::unordered_set<const Symbol*> indexed;
+    std::unordered_set<const Symbol*> whole;
+
+    void handle(const ElementSelectExpression& es) {
+        if (unpacked_array_symbol(es.value()) && static_index(es.selector())) {
+            indexed.insert(unpacked_array_symbol(es.value()));
+            es.selector().visit(*this);
+            return;
+        }
+        visitDefault(es);
+    }
+    void handle(const NamedValueExpression& nv) {
+        if (const Symbol* sym = unpacked_array_symbol(nv))
+            whole.insert(sym);
+    }
+    void handle(const ForLoopStatement& fl) {
+        // An index by the variable of an unrollable loop is static.
+        auto unroll = unroll_for(fl);
+        if (!unroll || unroll->values.empty()) {
+            visitDefault(fl);
+            return;
+        }
+        g_loop_values[unroll->var] = unroll->values.front();
+        visitDefault(fl);
+        g_loop_values.erase(unroll->var);
+    }
+    void handle(const InstanceSymbol& inst) {
+        for (const auto* connection : inst.getPortConnections()) {
+            if (connection && connection->getExpression())
+                connection->getExpression()->visit(*this);
+        }
+        visitDefault(inst);
+    }
+
+    std::unordered_set<const Symbol*> split() const {
+        std::unordered_set<const Symbol*> out;
+        for (const Symbol* sym : indexed) {
+            if (!whole.count(sym))
+                out.insert(sym);
+        }
+        return out;
+    }
+};
+
 static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expression& expr,
                                                                       const std::string& prefix) {
     if (expr.kind == ExpressionKind::NamedValue) {
         auto& nv = static_cast<const NamedValueExpression&>(expr);
-        return std::make_pair(symbol_path(nv.symbol, prefix),
-                              static_cast<uint32_t>(expr.type->getBitWidth()));
+        return std::make_pair(symbol_path(nv.symbol, prefix), type_width(*expr.type));
     }
     if (expr.kind == ExpressionKind::MemberAccess) {
         auto& member = static_cast<const MemberAccessExpression&>(expr);
@@ -158,15 +427,17 @@ static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expr
         if (!base)
             return std::nullopt;
         base->first += "." + sv_to_string(member.member.name);
-        base->second = static_cast<uint32_t>(expr.type->getBitWidth());
+        base->second = type_width(*expr.type);
         return base;
     }
     if (expr.kind == ExpressionKind::ElementSelect) {
         auto& select = static_cast<const ElementSelectExpression&>(expr);
+        if (auto element = split_element_name(select, prefix))
+            return std::make_pair(*element, type_width(*expr.type));
         auto base = extract_lvalue(select.value(), prefix);
         if (!base)
             return std::nullopt;
-        base->second = static_cast<uint32_t>(expr.type->getBitWidth());
+        base->second = type_width(*expr.type);
         return base;
     }
     if (expr.kind == ExpressionKind::RangeSelect) {
@@ -174,7 +445,7 @@ static std::optional<std::pair<std::string, uint32_t>> extract_lvalue(const Expr
         auto base = extract_lvalue(select.value(), prefix);
         if (!base)
             return std::nullopt;
-        base->second = static_cast<uint32_t>(expr.type->getBitWidth());
+        base->second = type_width(*expr.type);
         return base;
     }
     return std::nullopt;
@@ -211,6 +482,10 @@ static void collect_named_values(const Expression& expr, const std::string& pref
                                  const FormalMap& formal_map) {
     if (expr.kind == ExpressionKind::NamedValue) {
         auto& nv = static_cast<const NamedValueExpression&>(expr);
+        // Parameters (genvars included) and enum values are constants of
+        // the elaboration, not signals: no node, no edge.
+        if (nv.symbol.kind == SymbolKind::Parameter || nv.symbol.kind == SymbolKind::EnumValue)
+            return;
         std::string raw_name = sv_to_string(nv.symbol.name);
         auto fm_it = formal_map.find(raw_name);
         std::string name;
@@ -222,9 +497,10 @@ static void collect_named_values(const Expression& expr, const std::string& pref
             name = symbol_path(nv.symbol, prefix);
             if (nv.symbol.kind == SymbolKind::Variable) {
                 auto& var = static_cast<const VariableSymbol&>(nv.symbol);
-                width = var.getType().getBitWidth();
+                width = type_width(var.getType());
             }
         }
+        record_read(name);
         out.push_back({name, width});
     } else if (expr.kind == ExpressionKind::BinaryOp) {
         auto& binary = static_cast<const BinaryExpression&>(expr);
@@ -244,11 +520,24 @@ static void collect_named_values(const Expression& expr, const std::string& pref
         collect_named_values(ma.value(), prefix, out, formal_map);
     } else if (expr.kind == ExpressionKind::ElementSelect) {
         auto& es = static_cast<const ElementSelectExpression&>(expr);
+        if (auto element = split_element_name(es, prefix)) {
+            out.push_back({*element, type_width(*expr.type)});
+            return;
+        }
+        int64_t saved = g_select_lo;
+        auto index = static_index(es.selector());
+        g_select_lo = index && *index >= 0 ? *index : 0;
         collect_named_values(es.value(), prefix, out, formal_map);
+        g_select_lo = saved;
         collect_named_values(es.selector(), prefix, out, formal_map);
     } else if (expr.kind == ExpressionKind::RangeSelect) {
         auto& rs = static_cast<const RangeSelectExpression&>(expr);
+        int64_t saved = g_select_lo;
+        auto lo = rs.getSelectionKind() == RangeSelectionKind::Simple ? static_index(rs.right())
+                                                                      : static_index(rs.left());
+        g_select_lo = lo && *lo >= 0 ? *lo : 0;
         collect_named_values(rs.value(), prefix, out, formal_map);
+        g_select_lo = saved;
     } else if (expr.kind == ExpressionKind::Concatenation) {
         auto& cat = static_cast<const ConcatenationExpression&>(expr);
         for (auto& op : cat.operands())
@@ -288,6 +577,120 @@ static const Symbol* gray_xor_shared_symbol(const Expression& expr) {
 // nested calls (`outer(x)` calling `inner(x)`), up to a small depth.
 // `subst` maps enclosing-scope formal names to concrete signal names so
 // inner actuals that reference outer formals resolve transitively.
+static void collect_bitwise_gray(const Statement& stmt, const Symbol& var, const Symbol*& formal,
+                                 std::vector<bool>& ok, size_t depth);
+
+// The formal a function's local `var` is the gray code of, when the body
+// builds it bit by bit: `g[k] = b[k+1] ^ b[k]` for every k < W-1 and
+// `g[W-1] = b[W-1]` (loops unrolled), over one formal b. Else null.
+static const Symbol* bitwise_gray_formal(const SubroutineSymbol& sub, const Symbol& var) {
+    if (var.kind != SymbolKind::Variable)
+        return nullptr;
+    uint32_t width = static_cast<const VariableSymbol&>(var).getType().getBitWidth();
+    if (width < 2 || width > 1024)
+        return nullptr;
+    const Symbol* formal = nullptr;
+    std::vector<bool> ok(width, false);
+    collect_bitwise_gray(sub.getBody(), var, formal, ok, 0);
+    if (!formal)
+        return nullptr;
+    for (bool b : ok) {
+        if (!b)
+            return nullptr;
+    }
+    for (const auto* f : sub.getArguments()) {
+        if (f == formal)
+            return formal;
+    }
+    return nullptr;
+}
+
+// Records into `ok` the bits of `var` the statement assigns as gray bits.
+static void collect_bitwise_gray(const Statement& stmt, const Symbol& var, const Symbol*& formal,
+                                 std::vector<bool>& ok, size_t depth) {
+    if (depth > 16)
+        return;
+    switch (stmt.kind) {
+        case StatementKind::Block:
+            collect_bitwise_gray(static_cast<const BlockStatement&>(stmt).body, var, formal, ok,
+                                 depth + 1);
+            return;
+        case StatementKind::List:
+            for (auto* st : static_cast<const StatementList&>(stmt).list)
+                collect_bitwise_gray(*st, var, formal, ok, depth + 1);
+            return;
+        case StatementKind::ForLoop: {
+            auto& fl = static_cast<const ForLoopStatement&>(stmt);
+            auto unroll = unroll_for(fl);
+            if (!unroll)
+                return;
+            for (int64_t v : unroll->values) {
+                g_loop_values[unroll->var] = v;
+                collect_bitwise_gray(fl.body, var, formal, ok, depth + 1);
+            }
+            g_loop_values.erase(unroll->var);
+            return;
+        }
+        case StatementKind::ExpressionStatement:
+            break;
+        default:
+            return;
+    }
+    auto& es = static_cast<const ExpressionStatement&>(stmt);
+    if (es.expr.kind != ExpressionKind::Assignment)
+        return;
+    auto& asgn = static_cast<const AssignmentExpression&>(es.expr);
+    if (asgn.isCompound() || asgn.left().kind != ExpressionKind::ElementSelect)
+        return;
+    auto& lhs = static_cast<const ElementSelectExpression&>(asgn.left());
+    if (lhs.value().kind != ExpressionKind::NamedValue ||
+        &static_cast<const NamedValueExpression&>(lhs.value()).symbol != &var)
+        return;
+    auto k = static_index(lhs.selector());
+    if (!k || *k < 0 || *k >= static_cast<int64_t>(ok.size()))
+        return;
+    // The bit b[i] of a formal: its symbol and index.
+    auto formal_bit = [](const Expression& e) -> std::optional<std::pair<const Symbol*, int64_t>> {
+        const Expression* x = &e;
+        while (x->kind == ExpressionKind::Conversion)
+            x = &static_cast<const ConversionExpression&>(*x).operand();
+        if (x->kind != ExpressionKind::ElementSelect)
+            return std::nullopt;
+        auto& sel = static_cast<const ElementSelectExpression&>(*x);
+        if (sel.value().kind != ExpressionKind::NamedValue)
+            return std::nullopt;
+        auto i = static_index(sel.selector());
+        if (!i)
+            return std::nullopt;
+        return std::make_pair(&static_cast<const NamedValueExpression&>(sel.value()).symbol, *i);
+    };
+    auto use = [&](const Symbol* f) {
+        if (!formal)
+            formal = f;
+        return formal == f;
+    };
+    const Expression& rhs = asgn.right();
+    if (*k == static_cast<int64_t>(ok.size()) - 1) {
+        auto bit = formal_bit(rhs);
+        if (bit && bit->second == *k && use(bit->first))
+            ok[*k] = true;
+        return;
+    }
+    if (rhs.kind != ExpressionKind::BinaryOp)
+        return;
+    auto& bin = static_cast<const BinaryExpression&>(rhs);
+    if (bin.op != BinaryOperator::BinaryXor)
+        return;
+    auto l = formal_bit(bin.left());
+    auto r = formal_bit(bin.right());
+    if (!l || !r || l->first != r->first)
+        return;
+    bool adjacent =
+        (l->second == *k && r->second == *k + 1) || (l->second == *k + 1 && r->second == *k);
+    if (adjacent && use(l->first))
+        ok[*k] = true;
+}
+
 static bool call_computes_gray_of_named(const CallExpression& call, const std::string& prefix,
                                         const FormalMap& subst, size_t depth) {
     if (call.isSystemCall() || depth > 4)
@@ -373,6 +776,12 @@ static bool call_computes_gray_of_named(const CallExpression& call, const std::s
         if (const Symbol* shared = gray_xor_shared_symbol(*cand)) {
             if (is_formal(shared) && local.find(sv_to_string(shared->name)) != local.end())
                 return true;
+        } else if (cand->kind == ExpressionKind::NamedValue) {
+            // `return g;` of a local built bit by bit (bitwise_gray_formal).
+            auto& sym = static_cast<const NamedValueExpression&>(*cand).symbol;
+            const Symbol* shared = bitwise_gray_formal(*sub, sym);
+            if (shared && local.find(sv_to_string(shared->name)) != local.end())
+                return true;
         } else if (cand->kind == ExpressionKind::Call) {
             auto& inner = static_cast<const CallExpression&>(*cand);
             if (call_computes_gray_of_named(inner, prefix, local, depth + 1))
@@ -390,31 +799,17 @@ static bool function_computes_gray(const CallExpression& call, const std::string
     return call_computes_gray_of_named(call, prefix, {}, 0);
 }
 
-// Constant integer value of a select bound. Only literal (possibly
-// conversion-wrapped) expressions are accepted; anything else — parameter
-// references, arithmetic — yields nullopt so callers stay conservative.
-static std::optional<uint64_t> const_int_value(const Expression& expr) {
-    const Expression* e = &expr;
-    while (e->kind == ExpressionKind::Conversion)
-        e = &static_cast<const ConversionExpression&>(*e).operand();
-    if (e->kind != ExpressionKind::IntegerLiteral)
-        return std::nullopt;
-    auto& lit = static_cast<const IntegerLiteral&>(*e);
-    if (lit.getValue().hasUnknown())
-        return std::nullopt;
-    return lit.getValue().as<uint64_t>();
-}
-
 // The constant [hi:lo] range an operand selects from lhs, or false when the
-// operand is not an element/range select of lhs with literal bounds (any
+// operand is not an element/range select of lhs with static bounds -
+// literals, parameters, `STAGES-2` (any
 // other shape is treated conservatively as "not a verified shift step").
 static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
                              const std::string& prefix, uint32_t& hi, uint32_t& lo) {
     const Expression* base = nullptr;
     if (op.kind == ExpressionKind::ElementSelect) {
         auto& es = static_cast<const ElementSelectExpression&>(op);
-        auto idx = const_int_value(es.selector());
-        if (!idx || *idx > 0xFFFFFFFFull)
+        auto idx = static_index(es.selector());
+        if (!idx || *idx < 0 || *idx > 0xFFFFFFFFll)
             return false;
         hi = lo = static_cast<uint32_t>(*idx);
         base = &es.value();
@@ -422,9 +817,9 @@ static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
         auto& rs = static_cast<const RangeSelectExpression&>(op);
         if (rs.getSelectionKind() != RangeSelectionKind::Simple)
             return false;
-        auto left = const_int_value(rs.left());
-        auto right = const_int_value(rs.right());
-        if (!left || !right || *left > 0xFFFFFFFFull || *right > 0xFFFFFFFFull || *left < *right)
+        auto left = static_index(rs.left());
+        auto right = static_index(rs.right());
+        if (!left || !right || *right < 0 || *left > 0xFFFFFFFFll || *left < *right)
             return false;
         hi = static_cast<uint32_t>(*left);
         lo = static_cast<uint32_t>(*right);
@@ -443,9 +838,9 @@ static bool lhs_select_range(const Expression& op, const std::string& lhs_name,
 // cross-domain source of a vector-packed synchronizer — and every other
 // operand must be the lhs range below its own target position shifted up by
 // the tail width, so values flow strictly upward through the vector with no
-// shortcuts. `sync <= {sync[0], src}` is the canonical two-stage form.
-// Concatenation operands are ordered MSB-first. Returns floor(lhs_width /
-// tail_width) when that is >= 2 stages, otherwise 0 (not a chain).
+// shortcuts. `sync <= {sync[0], src}` is the canonical two-stage form; the
+// tail must be a signal, not logic. Concatenation operands are ordered MSB-first. Returns
+// floor(lhs_width / tail_width) when that is >= 2 stages, otherwise 0 (not a chain).
 static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::string& lhs_name,
                                           const std::string& prefix, uint32_t lhs_width) {
     if (rhs.kind != ExpressionKind::Concatenation || lhs_width < 2)
@@ -457,6 +852,18 @@ static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::stri
 
     uint32_t tail_width = ops.back()->type ? (uint32_t)ops.back()->type->getBitWidth() : 0;
     if (tail_width == 0 || tail_width >= lhs_width)
+        return 0;
+    // The ingress is a signal (or a select of one), as the first stage of a
+    // scalar chain reads one: logic in front of the synchronizer (`{s[0],
+    // a & b}`) can glitch into it, so that is no synchronizer chain.
+    const Expression* tail = ops.back();
+    while (tail->kind == ExpressionKind::Conversion)
+        tail = &static_cast<const ConversionExpression&>(*tail).operand();
+    while (tail->kind == ExpressionKind::ElementSelect || tail->kind == ExpressionKind::RangeSelect)
+        tail = tail->kind == ExpressionKind::ElementSelect
+                   ? &static_cast<const ElementSelectExpression&>(*tail).value()
+                   : &static_cast<const RangeSelectExpression&>(*tail).value();
+    if (tail->kind != ExpressionKind::NamedValue)
         return 0;
 
     // Each upper operand must select from lhs at exactly its target range
@@ -487,6 +894,78 @@ static uint32_t packed_shift_chain_stages(const Expression& rhs, const std::stri
     return stages >= 2 ? stages : 0;
 }
 
+// The targets of an assignment to a concatenation `{a, b[3:0], c} = rhs`
+// (nested concatenations flattened), each with the right-hand side that
+// drives it: the element of a right-hand side concatenation of the same
+// shape (`{s1, s0} <= {s0, d}` is a shift), else the whole right-hand side.
+// Empty when an element is no lvalue extract_lvalue can name.
+struct ConcatTarget {
+    std::pair<std::string, uint32_t> lvalue;
+    const Expression* rhs;
+};
+
+static void flatten_concat(const Expression& e, std::vector<const Expression*>& out) {
+    if (e.kind == ExpressionKind::Concatenation) {
+        for (const auto* op : static_cast<const ConcatenationExpression&>(e).operands())
+            flatten_concat(*op, out);
+    } else {
+        out.push_back(&e);
+    }
+}
+
+static std::vector<ConcatTarget> split_concat_assignment(const Expression& lhs,
+                                                         const Expression& rhs,
+                                                         const std::string& prefix) {
+    std::vector<const Expression*> lhs_ops, rhs_ops;
+    flatten_concat(lhs, lhs_ops);
+    if (rhs.kind == ExpressionKind::Concatenation)
+        flatten_concat(rhs, rhs_ops);
+    bool paired = rhs_ops.size() == lhs_ops.size();
+    for (size_t i = 0; paired && i < lhs_ops.size(); ++i)
+        paired = type_width(*lhs_ops[i]->type) == type_width(*rhs_ops[i]->type);
+    std::vector<ConcatTarget> out;
+    for (size_t i = 0; i < lhs_ops.size(); ++i) {
+        auto lv = extract_lvalue(*lhs_ops[i], prefix);
+        if (!lv)
+            return {};
+        out.push_back({*lv, paired ? rhs_ops[i] : &rhs});
+    }
+    return out;
+}
+
+// Signals of the if/case conditions enclosing the statement collect_assigns
+// is in: every assignment depends on them as much as on its operands (an
+// asynchronous flag used as an enable is a crossing). The block's own
+// asynchronous reset is left out - that is the reset-domain check.
+static thread_local std::vector<std::pair<std::string, uint32_t>> g_control_operands;
+// The if/case arms enclosing the statement collect_assigns is in, each named
+// by its statement and arm ("if@<stmt>:T", "case@<stmt>#2").
+static thread_local std::vector<std::string> g_branch_path;
+
+static std::string branch_id(const void* stmt, const std::string& arm) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%p", stmt);
+    return std::string(buf) + arm;
+}
+static thread_local const Symbol* g_async_reset_symbol = nullptr;
+
+// Pushes the signals of `cond` onto g_control_operands; returns how many.
+static size_t push_control_operands(const Expression& cond, const std::string& prefix,
+                                    const FormalMap& formal_map) {
+    std::vector<std::pair<std::string, uint32_t>> vals;
+    collect_named_values(cond, prefix, vals, formal_map);
+    std::string reset =
+        g_async_reset_symbol ? symbol_path(*g_async_reset_symbol, prefix) : std::string();
+    size_t n = 0;
+    for (auto& v : vals) {
+        if (v.first == reset)
+            continue;
+        g_control_operands.push_back(std::move(v));
+        ++n;
+    }
+    return n;
+}
+
 static void collect_assigns(const Statement& stmt, const std::string& prefix,
                             std::vector<AssignInfo>& out, const FormalMap& formal_map = {},
                             size_t depth = 0) {
@@ -509,7 +988,41 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::ExpressionStatement: {
             auto& es = static_cast<const ExpressionStatement&>(stmt);
-            if (es.expr.kind == ExpressionKind::Assignment) {
+            // Every assignment this statement adds is in the current arm.
+            struct BranchTag {
+                std::vector<AssignInfo>& out;
+                size_t first;
+                ~BranchTag() {
+                    if (g_branch_path.empty())
+                        return;
+                    std::string path;
+                    for (const auto& b : g_branch_path)
+                        path += b + "/";
+                    for (size_t i = first; i < out.size(); ++i)
+                        out[i].branch = path;
+                }
+            } branch_tag{out, out.size()};
+            if (es.expr.kind == ExpressionKind::Assignment &&
+                static_cast<const AssignmentExpression&>(es.expr).left().kind ==
+                    ExpressionKind::Concatenation) {
+                // `{a, b} <= ...`: one assignment per element, each a direct
+                // dependency (no logic node) on its own right-hand side.
+                auto& assign = static_cast<const AssignmentExpression&>(es.expr);
+                for (const auto& t :
+                     split_concat_assignment(assign.left(), assign.right(), prefix)) {
+                    std::vector<std::pair<std::string, uint32_t>> ops;
+                    collect_named_values(*t.rhs, prefix, ops, formal_map);
+                    if (ops.empty())
+                        out.push_back({t.lvalue.first, std::string(), t.lvalue.second, 0, false,
+                                       ir::LogicType::Unknown, false, 0});
+                    for (const auto& [r, r_width] : ops)
+                        out.push_back({t.lvalue.first, r, t.lvalue.second, r_width, false,
+                                       ir::LogicType::Unknown, false, 0});
+                    for (const auto& [c, c_width] : g_control_operands)
+                        out.push_back({t.lvalue.first, c, t.lvalue.second, c_width, false,
+                                       ir::LogicType::Unknown, false, 0, true});
+                }
+            } else if (es.expr.kind == ExpressionKind::Assignment) {
                 auto& assign = static_cast<const AssignmentExpression&>(es.expr);
                 auto lhs = extract_lvalue(assign.left(), prefix);
                 if (lhs) {
@@ -525,7 +1038,9 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                         }
                     }
                     std::vector<std::pair<std::string, uint32_t>> rhs_ops;
+                    g_reading_for_lhs = &resolved_lhs;
                     collect_named_values(assign.right(), prefix, rhs_ops, formal_map);
+                    g_reading_for_lhs = nullptr;
                     bool is_gray_transform = false;
                     ir::LogicType logic_type = ir::LogicType::Unknown;
                     bool is_multi_operand = false;
@@ -591,6 +1106,17 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
                                            logic_type, true, packed_depth});
                         }
                     }
+                    // Control dependencies: a direct edge each, beside the
+                    // data path (merged into it, an enable would hide a
+                    // synchronizer chain behind logic).
+                    for (const auto& [c, c_width] : g_control_operands) {
+                        bool data = false;
+                        for (const auto& op : rhs_ops)
+                            data = data || op.first == c;
+                        if (!data && c != resolved_lhs)
+                            out.push_back({resolved_lhs, c, l_width, c_width, false,
+                                           ir::LogicType::Unknown, false, 0, true});
+                    }
                 }
             } else if (es.expr.kind == ExpressionKind::Call) {
                 auto& call = static_cast<const CallExpression&>(es.expr);
@@ -625,14 +1151,38 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::Conditional: {
             auto& ifst = static_cast<const ConditionalStatement&>(stmt);
+            size_t pushed = 0;
+            for (const auto& cond : ifst.conditions)
+                pushed += push_control_operands(*cond.expr, prefix, formal_map);
+            // An if testing nothing but the block's asynchronous reset (or a
+            // constant) opens no arm: its else holds every register of the
+            // block, which loading together does not relate.
+            if (pushed)
+                g_branch_path.push_back(branch_id(&stmt, ":T"));
             collect_assigns(ifst.ifTrue, prefix, out, formal_map, depth);
+            if (pushed)
+                g_branch_path.back() = branch_id(&stmt, ":F");
             if (ifst.ifFalse)
                 collect_assigns(*ifst.ifFalse, prefix, out, formal_map, depth);
+            if (pushed)
+                g_branch_path.pop_back();
+            g_control_operands.resize(g_control_operands.size() - pushed);
             break;
         }
         case StatementKind::ForLoop: {
+            // Unrolled when the bounds are static: each iteration's
+            // shift_reg[i] <= shift_reg[i-1] names its elements.
             auto& fl = static_cast<const ForLoopStatement&>(stmt);
-            collect_assigns(fl.body, prefix, out, formal_map, depth);
+            auto unroll = unroll_for(fl);
+            if (!unroll) {
+                collect_assigns(fl.body, prefix, out, formal_map, depth);
+                break;
+            }
+            for (int64_t v : unroll->values) {
+                g_loop_values[unroll->var] = v;
+                collect_assigns(fl.body, prefix, out, formal_map, depth);
+            }
+            g_loop_values.erase(unroll->var);
             break;
         }
         case StatementKind::WhileLoop: {
@@ -662,10 +1212,18 @@ static void collect_assigns(const Statement& stmt, const std::string& prefix,
         }
         case StatementKind::Case: {
             auto& cs = static_cast<const CaseStatement&>(stmt);
-            for (auto& item : cs.items)
+            size_t pushed = push_control_operands(cs.expr, prefix, formal_map);
+            g_branch_path.push_back(std::string());
+            size_t arm = 0;
+            for (auto& item : cs.items) {
+                g_branch_path.back() = branch_id(&stmt, "#" + std::to_string(arm++));
                 collect_assigns(*item.stmt, prefix, out, formal_map, depth);
+            }
+            g_branch_path.back() = branch_id(&stmt, "#default");
             if (cs.defaultCase)
                 collect_assigns(*cs.defaultCase, prefix, out, formal_map, depth);
+            g_branch_path.pop_back();
+            g_control_operands.resize(g_control_operands.size() - pushed);
             break;
         }
         case StatementKind::PatternCase: {
@@ -730,6 +1288,29 @@ static bool is_reset_name(const std::string& name) {
     // set_valid, set_data, set_enable etc. "preset" is already caught above.
 }
 
+// `always @*` / `always @(a or b)`: no edge in the event control, so the
+// block is combinational logic, like always_comb (it had no clock and was
+// skipped, dropping the logic).
+static bool is_level_sensitive(const ProceduralBlockSymbol& proc) {
+    const Statement& body = proc.getBody();
+    if (body.kind != StatementKind::Timed)
+        return false;
+    const TimingControl& t = static_cast<const TimedStatement&>(body).timing;
+    if (t.kind == TimingControlKind::ImplicitEvent)
+        return true;
+    if (t.kind == TimingControlKind::SignalEvent)
+        return static_cast<const SignalEventControl&>(t).edge == EdgeKind::None;
+    if (t.kind == TimingControlKind::EventList) {
+        for (const auto* ev : static_cast<const EventListControl&>(t).events) {
+            if (!ev || ev->kind != TimingControlKind::SignalEvent ||
+                static_cast<const SignalEventControl&>(*ev).edge != EdgeKind::None)
+                return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 // The declaration of a signal event that is a plain named value, else null.
 static const Symbol* event_symbol(const TimingControl& event) {
     if (event.kind != TimingControlKind::SignalEvent)
@@ -784,6 +1365,61 @@ std::string SlangAdapter::event_signal_name(const TimingControl& event) const {
     return compact;
 }
 
+// The signals the leading `if` of a clocked block's body tests: in
+// `@(posedge clk or negedge rst_n) if (!rst_n) ...` the asynchronous control
+// is the event signal tested there (synthesis semantics), the clock the one
+// that is not.
+static void collect_symbols(const Expression& e, std::unordered_set<const Symbol*>& out) {
+    switch (e.kind) {
+        case ExpressionKind::NamedValue:
+            out.insert(&static_cast<const NamedValueExpression&>(e).symbol);
+            break;
+        case ExpressionKind::Conversion:
+            collect_symbols(static_cast<const ConversionExpression&>(e).operand(), out);
+            break;
+        case ExpressionKind::UnaryOp:
+            collect_symbols(static_cast<const UnaryExpression&>(e).operand(), out);
+            break;
+        case ExpressionKind::BinaryOp: {
+            auto& b = static_cast<const BinaryExpression&>(e);
+            collect_symbols(b.left(), out);
+            collect_symbols(b.right(), out);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+static std::unordered_set<const Symbol*> leading_if_symbols(const Statement& stmt) {
+    std::unordered_set<const Symbol*> out;
+    const Statement* s = &stmt;
+    for (int depth = 0; depth < 8; ++depth) {
+        if (s->kind == StatementKind::Block) {
+            s = &static_cast<const BlockStatement&>(*s).body;
+        } else if (s->kind == StatementKind::List) {
+            // The first statement after block-local declarations.
+            const Statement* first = nullptr;
+            for (const auto* st : static_cast<const StatementList&>(*s).list) {
+                if (st->kind != StatementKind::VariableDeclaration) {
+                    first = st;
+                    break;
+                }
+            }
+            if (!first)
+                return out;
+            s = first;
+        } else {
+            break;
+        }
+    }
+    if (s->kind != StatementKind::Conditional)
+        return out;
+    for (const auto& cond : static_cast<const ConditionalStatement&>(*s).conditions)
+        collect_symbols(*cond.expr, out);
+    return out;
+}
+
 ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& proc) const {
     ClockResetInfo info;
     info.clock = "unknown";
@@ -803,6 +1439,46 @@ ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& pr
         }
     } else if (timing.kind == TimingControlKind::EventList) {
         auto& el = static_cast<const EventListControl&>(timing);
+        // By structure: the edge events the leading if tests are the
+        // asynchronous controls; exactly one untested edge event is the
+        // clock. Names decide only when the structure does not (a reset
+        // named `trst_ni` or `IwAsyncRstIn_an` was taken for the clock).
+        {
+            auto tested = leading_if_symbols(timed.stmt);
+            const TimingControl* clock_ev = nullptr;
+            const SignalEventControl* reset_ev = nullptr;
+            size_t untested = 0;
+            for (auto& ev : el.events) {
+                if (!ev || ev->kind != TimingControlKind::SignalEvent)
+                    continue;
+                auto& se = static_cast<const SignalEventControl&>(*ev);
+                if (se.edge != EdgeKind::NegEdge && se.edge != EdgeKind::PosEdge)
+                    continue;
+                const Symbol* sym = event_symbol(*ev);
+                if (sym && tested.count(sym)) {
+                    if (!reset_ev)
+                        reset_ev = &se;
+                } else {
+                    clock_ev = ev;
+                    ++untested;
+                }
+            }
+            if (reset_ev && untested == 1) {
+                std::string clock = event_signal_name(*clock_ev);
+                std::string reset = event_signal_name(*reset_ev);
+                if (!clock.empty() && !reset.empty()) {
+                    info.clock = clock;
+                    info.clock_symbol = event_symbol(*clock_ev);
+                    info.reset = reset;
+                    info.reset_symbol = event_symbol(*reset_ev);
+                    info.reset_pol = (reset_ev->edge == EdgeKind::NegEdge)
+                                         ? ir::ResetPolarity::ActiveLow
+                                         : ir::ResetPolarity::ActiveHigh;
+                    info.is_async_reset = true;
+                    return info;
+                }
+            }
+        }
         // Classify each event by role (reset vs clock) instead of position.
         // The clock is the last non-reset edge event, matching the Verilog
         // convention `@(posedge reset or posedge clk)`.
@@ -821,6 +1497,7 @@ ClockResetInfo SlangAdapter::extract_clock_reset(const ProceduralBlockSymbol& pr
 
             if (is_reset_name(name)) {
                 info.reset = name;
+                info.reset_symbol = event_symbol(*ev);
                 info.reset_pol = (se.edge == EdgeKind::NegEdge) ? ir::ResetPolarity::ActiveLow
                                                                 : ir::ResetPolarity::ActiveHigh;
                 info.is_async_reset = true;
@@ -886,8 +1563,8 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
                                        const FrontendOptions& options) {
     FrontendResult result;
     result.input_type = "rtl";
-    Compilation compilation;
     allow_user_annotation_ = options.allow_user_annotation;
+    muxed_clock_domain_ = options.muxed_clock_domain;
     frontend_warnings_.clear();
     scope_depth_ = 0;
 
@@ -936,6 +1613,8 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     slang::Bag bag;
     bag.set(pp);
 
+    std::vector<std::shared_ptr<SyntaxTree>> trees;
+    bool top_declared = false;
     for (const auto& file : files) {
         auto treeOrErr = SyntaxTree::fromFile(file, *source_manager_, bag);
         if (!treeOrErr) {
@@ -943,8 +1622,32 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
             result.ok = false;
             return result;
         }
-        compilation.addSyntaxTree(*treeOrErr);
+        const auto& unit = (*treeOrErr)->root();
+        if (unit.kind == SyntaxKind::CompilationUnit) {
+            for (const auto* member : unit.as<CompilationUnitSyntax>().members) {
+                if (member->kind == SyntaxKind::ModuleDeclaration &&
+                    member->as<ModuleDeclarationSyntax>().header->name.valueText() == top_module)
+                    top_declared = true;
+            }
+        }
+        trees.push_back(*treeOrErr);
     }
+    // Elaborate the requested top only: left to choose, slang takes every
+    // uninstantiated module for a top and elaborates library modules with
+    // their default parameters - for type-parameterized IP (PULP AXI) that
+    // is a compile error in a correct design. An unknown top keeps slang's
+    // choice, so the "not found" hint below lists the modules.
+    CompilationOptions copts;
+    if (top_declared)
+        copts.topModules.emplace(top_module);
+    // A signal used above its declaration: illegal in strict LRM terms, but
+    // accepted by the simulators and synthesis tools designs are built
+    // with (Verilator, VCS, Xcelium); the meaning is the same either way.
+    copts.flags |= CompilationFlags::AllowUseBeforeDeclare;
+    bag.set(copts);
+    Compilation compilation(bag);
+    for (const auto& tree : trees)
+        compilation.addSyntaxTree(tree);
 
     const RootSymbol& root = compilation.getRoot();
 
@@ -1000,10 +1703,29 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
         return result;
     }
 
+    ArrayAccessScan scan;
+    top_inst->visit(scan);
+    split_arrays_ = scan.split();
+    g_split_arrays = &split_arrays_;
     scope_paths_.clear();
+    reset_paths_.clear();
+    g_lowest_bit_read.clear();
     g_scope_paths = &scope_paths_;
     walk_instance(*top_inst, result.graph, "");
     g_scope_paths = nullptr;
+    g_split_arrays = nullptr;
+    propagate_gray_captures(result.graph);
+    // A packed synchronizer read within its first stage (its lowest
+    // tail-width bits) other than by its own shift is tapped early.
+    for (auto& node : result.graph.nodes_mutable()) {
+        if (node.kind != ir::NodeKind::Register || node.packed_shift_depth < 2)
+            continue;
+        auto it = g_lowest_bit_read.find(node.hier_name);
+        if (it != g_lowest_bit_read.end() &&
+            it->second < static_cast<int64_t>(node.width / node.packed_shift_depth))
+            node.packed_early_tap = true;
+    }
+    resolve_resets(result.graph);
     if (result.graph.truncated()) {
         result.errors.push_back("IR graph exceeded node or edge safety limit; analysis incomplete");
         return result;
@@ -1017,6 +1739,71 @@ FrontendResult SlangAdapter::elaborate(const std::vector<std::string>& files,
     result.warnings = std::move(frontend_warnings_);
     result.ok = true;
     return result;
+}
+
+// A net, port or register whose one data input is gray-coded carries the
+// same gray code: `assign w = g;`, a port connection, `g_r <= g;`. Run after
+// the walk - continuous assigns are visited after the procedural blocks.
+void SlangAdapter::propagate_gray_captures(ir::Graph& graph) {
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto& node : graph.nodes_mutable()) {
+            if (node.is_gray_coded ||
+                (node.kind != ir::NodeKind::Net && node.kind != ir::NodeKind::Port &&
+                 node.kind != ir::NodeKind::Register))
+                continue;
+            const ir::Node* input = nullptr;
+            bool one_input = true;
+            for (uint64_t pred_id : graph.predecessors(node.id)) {
+                // A register holding its value; an enable (Control edge)
+                // decides when, not what, is captured.
+                if (pred_id == node.id || graph.edge_role(pred_id, node.id) != ir::EdgeRole::Data)
+                    continue;
+                if (input && input->id != pred_id) {
+                    one_input = false;
+                    break;
+                }
+                input = graph.find_node(pred_id);
+            }
+            if (!one_input || !input)
+                continue;
+            if (input->is_gray_coded || input->logic_type == ir::LogicType::GrayEncoder) {
+                node.is_gray_coded = true;
+                changed = true;
+            }
+        }
+    }
+}
+
+// The source of each register's reset: back from the reset as its module
+// sees it through nets and ports with one driver each, to a top-level port
+// (named by its port name, as before), a register (a reset synchronizer),
+// logic (a combined reset) or an undriven port, named by their path.
+void SlangAdapter::resolve_resets(ir::Graph& graph) {
+    for (const auto& [reg_id, path] : reset_paths_) {
+        const ir::Node* n = graph.find_node_by_name(path);
+        if (!n)
+            continue;
+        for (int hop = 0; hop < 64; ++hop) {
+            if (n->kind != ir::NodeKind::Net && n->kind != ir::NodeKind::Port)
+                break;
+            if (n->kind == ir::NodeKind::Port &&
+                std::count(n->hier_name.begin(), n->hier_name.end(), '.') == 1)
+                break;
+            auto preds = graph.predecessors(n->id);
+            if (preds.size() != 1)
+                break;
+            const ir::Node* pred = graph.find_node(preds.front());
+            if (!pred)
+                break;
+            n = pred;
+        }
+        std::string source = n->hier_name;
+        if (n->kind == ir::NodeKind::Port && std::count(source.begin(), source.end(), '.') == 1)
+            source = source.substr(source.rfind('.') + 1);
+        if (auto* reg = graph.find_node_mutable(reg_id))
+            reg->reset_signal = source;
+    }
 }
 
 void SlangAdapter::walk_instance(const InstanceSymbol& inst, ir::Graph& graph,
@@ -1044,13 +1831,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 if (!graph.find_node_by_name(port_name)) {
                     auto opt_loc = to_source_loc(port.location);
                     ir::SourceLoc ir_loc = opt_loc.value_or(ir::SourceLoc{});
-                    uint32_t port_width = 1;
-                    const auto& port_type = port.getType();
-                    if (port_type.isIntegral()) {
-                        port_width = static_cast<uint32_t>(port_type.getBitWidth());
-                        if (port_width == 0)
-                            port_width = 1;
-                    }
+                    uint32_t port_width = type_width(port.getType());
                     graph.add_port(port_name, port_width, ir_loc, p, module_type);
                 }
                 break;
@@ -1070,8 +1851,12 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                     if (!expression)
                         continue;
 
+                    // An output connection arrives as the Assignment
+                    // `parent = <port>`: its lvalue is the parent signal
+                    // (operand collection of an Assignment finds nothing,
+                    // which cut every signal leaving an instance).
                     std::vector<std::pair<std::string, uint32_t>> parent_values;
-                    collect_named_values(*expression, p, parent_values);
+                    collect_actual_values(*expression, p, parent_values);
                     if (parent_values.empty())
                         continue;
 
@@ -1125,13 +1910,17 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
             }
             case SymbolKind::ProceduralBlock: {
                 auto& proc = static_cast<const ProceduralBlockSymbol&>(member);
+                // A concurrent assertion: no logic, nothing to model.
+                if (proc.isFromAssertion)
+                    break;
                 if (proc.procedureKind == ProceduralBlockKind::AlwaysFF ||
                     proc.procedureKind == ProceduralBlockKind::Always ||
                     proc.procedureKind == ProceduralBlockKind::AlwaysLatch ||
                     proc.procedureKind == ProceduralBlockKind::AlwaysComb) {
                     ClockResetInfo cr;
                     if (proc.procedureKind == ProceduralBlockKind::AlwaysFF ||
-                        proc.procedureKind == ProceduralBlockKind::Always ||
+                        (proc.procedureKind == ProceduralBlockKind::Always &&
+                         !is_level_sensitive(proc)) ||
                         proc.procedureKind == ProceduralBlockKind::AlwaysLatch) {
                         cr = extract_clock_reset(proc);
                         // Skip blocks with no recoverable clock so "unknown" never
@@ -1161,7 +1950,9 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                     ir::SourceLoc ir_loc = opt_loc.value_or(ir::SourceLoc{});
 
                     std::vector<AssignInfo> assigns;
+                    g_async_reset_symbol = cr.is_async_reset ? cr.reset_symbol : nullptr;
                     collect_assigns(proc.getBody(), p, assigns);
+                    g_async_reset_symbol = nullptr;
 
                     std::unordered_map<std::string, uint64_t> comb_nodes;
                     for (auto& a : assigns) {
@@ -1172,6 +1963,13 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                        ? graph.add_net(a.lhs, a.lhs_width, ir_loc, p, module_type)
                                        : graph.add_register(a.lhs, cr.clock, a.lhs_width, ir_loc, p,
                                                             module_type));
+                        if (!a.branch.empty() && !a.is_control) {
+                            if (auto* n = graph.find_node_mutable(dst_id)) {
+                                if (std::find(n->load_branches.begin(), n->load_branches.end(),
+                                              a.branch) == n->load_branches.end())
+                                    n->load_branches.push_back(a.branch);
+                            }
+                        }
                         if (dst && cr.clock != "comb" && dst->kind != ir::NodeKind::Register) {
                             auto* mutable_dst = graph.find_node_mutable(dst_id);
                             if (mutable_dst) {
@@ -1187,6 +1985,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 mutable_dst->reset_signal = cr.reset;
                                 mutable_dst->reset_pol = cr.reset_pol;
                                 mutable_dst->is_async_reset = cr.is_async_reset;
+                                if (cr.reset_symbol)
+                                    reset_paths_[dst_id] = symbol_path(*cr.reset_symbol, p);
                                 mutable_dst->is_gray_coded =
                                     mutable_dst->is_gray_coded || a.is_gray_transform;
                                 if (mutable_dst->module_type.empty())
@@ -1201,6 +2001,8 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 mutable_dst->reset_signal = cr.reset;
                                 mutable_dst->reset_pol = cr.reset_pol;
                                 mutable_dst->is_async_reset = cr.is_async_reset;
+                                if (cr.reset_symbol)
+                                    reset_paths_[dst_id] = symbol_path(*cr.reset_symbol, p);
                                 mutable_dst->is_gray_coded = a.is_gray_transform;
                                 if (mutable_dst->module_type.empty())
                                     mutable_dst->module_type = module_type;
@@ -1253,7 +2055,9 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                                 src ? src->id
                                     : graph.add_net(a.rhs, a.rhs_width, {}, p, module_type);
                             if (src_id && dst_id)
-                                graph.add_edge(src_id, dst_id);
+                                graph.add_edge(
+                                    src_id, dst_id,
+                                    a.is_control ? ir::EdgeRole::Control : ir::EdgeRole::Data);
                         }
                     }
                 }
@@ -1272,6 +2076,25 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
         if (assign_expr.kind != ExpressionKind::Assignment)
             continue;
         auto& asgn = static_cast<const AssignmentExpression&>(assign_expr);
+        if (asgn.left().kind == ExpressionKind::Concatenation) {
+            // `assign {c, s} = ...`: each element depends on its own
+            // right-hand side (see split_concat_assignment).
+            for (const auto& t : split_concat_assignment(asgn.left(), asgn.right(), p)) {
+                const ir::Node* existing = graph.find_node_by_name(t.lvalue.first);
+                uint64_t lhs_id =
+                    existing ? existing->id
+                             : graph.add_net(t.lvalue.first, t.lvalue.second, {}, p, module_type);
+                std::vector<std::pair<std::string, uint32_t>> ops;
+                collect_named_values(*t.rhs, p, ops);
+                for (const auto& [r, r_width] : ops) {
+                    const ir::Node* src = graph.find_node_by_name(r);
+                    uint64_t src_id = src ? src->id : graph.add_net(r, r_width, {}, p, module_type);
+                    if (src_id && lhs_id)
+                        graph.add_edge(src_id, lhs_id);
+                }
+            }
+            continue;
+        }
         auto lhs = extract_lvalue(asgn.left(), p);
         if (!lhs)
             continue;
@@ -1279,9 +2102,28 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
 
         std::vector<std::pair<std::string, uint32_t>> rhs_ops;
         collect_named_values(asgn.right(), p, rhs_ops);
+        // A mux: its select operands come first (collect_named_values visits
+        // the conditions before the two values) - the clock resolver needs
+        // the values of a clock mux, not its select.
+        uint32_t mux_selects = 0;
+        if (asgn.right().kind == ExpressionKind::ConditionalOp) {
+            std::vector<std::pair<std::string, uint32_t>> sel;
+            for (const auto& cond :
+                 static_cast<const ConditionalExpression&>(asgn.right()).conditions)
+                collect_named_values(*cond.expr, p, sel);
+            mux_selects = static_cast<uint32_t>(sel.size());
+        }
 
+        // `assign g = b ^ (b >> 1)` or `assign g = b2g(b)` encodes gray, as
+        // the same right-hand side does in a procedural block.
+        bool is_gray =
+            is_gray_xor_structure(asgn.right()) ||
+            (asgn.right().kind == ExpressionKind::Call &&
+             function_computes_gray(static_cast<const CallExpression&>(asgn.right()), p));
         ir::LogicType logic_type = ir::LogicType::Unknown;
-        if (asgn.right().kind == ExpressionKind::BinaryOp) {
+        if (is_gray) {
+            logic_type = ir::LogicType::GrayEncoder;
+        } else if (asgn.right().kind == ExpressionKind::BinaryOp) {
             auto& bin = static_cast<const BinaryExpression&>(asgn.right());
             if (bin.op == BinaryOperator::BinaryAnd)
                 logic_type = ir::LogicType::And;
@@ -1309,6 +2151,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                     mutable_lhs->logic_type = logic_type;
                 }
             }
+            if (is_gray) {
+                if (auto* mutable_lhs = graph.find_node_mutable(lhs_id))
+                    mutable_lhs->is_gray_coded = true;
+            }
 
             if (logic_type != ir::LogicType::Unknown && logic_type != ir::LogicType::None) {
                 std::vector<uint64_t> input_ids;
@@ -1321,6 +2167,10 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
                 std::string comb_name = lhs_name + "$comb";
                 uint64_t comb_id = graph.add_combinational(comb_name, logic_type, input_ids,
                                                            lhs_width, {}, p, module_type);
+                if (logic_type == ir::LogicType::Mux) {
+                    if (auto* comb = graph.find_node_mutable(comb_id))
+                        comb->mux_select_inputs = mux_selects;
+                }
                 if (comb_id)
                     graph.add_edge(comb_id, lhs_id);
             } else {
@@ -1363,6 +2213,7 @@ void SlangAdapter::walk_scope(const slang::ast::Scope& scope, ir::Graph& graph,
 
 void SlangAdapter::resolve_clocks(ir::Graph& graph) {
     clock::ClockResolver resolver;
+    resolver.set_muxed_clock_domain(muxed_clock_domain_);
     auto result = resolver.resolve(graph);
 
     // Pre-build top-level port sets with a single O(N) pass.
@@ -1400,7 +2251,16 @@ void SlangAdapter::resolve_clocks(ir::Graph& graph) {
             }
         }
 
-        if (node.root_clock.empty() || !is_top(node.root_clock)) {
+        // A black-box clock output (an instance port nothing drives) the
+        // resolver found is a root of its own, like a top-level port.
+        const ir::Node* root_node =
+            node.root_clock.empty() ? nullptr : graph.find_node_by_name(node.root_clock);
+        bool black_box_root = root_node && root_node->kind == ir::NodeKind::Port &&
+                              graph.predecessors(root_node->id).empty();
+        // So is a mux of two clocks (ClockResolver::trace_clock_mux).
+        bool mux_root = root_node && it != result.clock_map.end() && it->second.is_muxed &&
+                        root_node->hier_name == node.root_clock;
+        if (!black_box_root && !mux_root && (node.root_clock.empty() || !is_top(node.root_clock))) {
             std::string source = trace_to_top_level_source(node.clock_domain, graph);
             if (!source.empty() && source != node.clock_domain) {
                 node.root_clock = source;
@@ -1415,7 +2275,7 @@ bool SlangAdapter::is_top_level_input(const std::string& hier_name, const ir::Gr
 }
 
 std::string SlangAdapter::trace_to_top_level_source(const std::string& clock_name,
-                                                    const ir::Graph& graph) {
+                                                    const ir::Graph& graph, int depth) {
     // Build top-level port index once per graph (Port nodes with exactly 1 dot).
     // Keyed by graph identity AND generation: two Graph instances can share a
     // generation number, and mutating a graph bumps its generation.
@@ -1491,7 +2351,14 @@ std::string SlangAdapter::trace_to_top_level_source(const std::string& clock_nam
         }
 
         if (cn->kind == ir::NodeKind::Register) {
-            return cn->root_clock.empty() ? cn->clock_domain : cn->root_clock;
+            // A divided clock: the source of the dividing register's clock
+            // (its root may not be resolved yet, and its raw clock name is
+            // no root - it split one clock into two domains).
+            if (!cn->root_clock.empty())
+                return cn->root_clock;
+            if (depth < 8 && !cn->clock_domain.empty() && cn->clock_domain != clock_name)
+                return trace_to_top_level_source(cn->clock_domain, graph, depth + 1);
+            return cn->clock_domain;
         }
 
         bool found_next = false;

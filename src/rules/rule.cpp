@@ -41,6 +41,9 @@ RuleEngine::RuleEngine() {
     register_rule({"CDC013", "unknown_propagation",
                    "Value uncertainty propagated through unsynchronized crossing path", "warning",
                    true, "crossing", "1.0.0"});
+    register_rule({"CDC014", "unsynchronized_reset_release",
+                   "Asynchronous reset released into a clock domain without a reset synchronizer",
+                   "error", true, "reset", "1.0.0"});
 }
 
 void RuleEngine::register_rule(const Rule& r) {

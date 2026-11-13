@@ -983,3 +983,51 @@ TEST(FrontendTest, GenerateLoopIterationsAreSeparateCopies) {
         EXPECT_TRUE(found) << dest;
     }
 }
+
+TEST(FrontendTest, NestedGenerateLoopsAreSeparateCopies) {
+    // Two loops deep: every (i, j) iteration is its own scope g_o[i].g_i[j],
+    // o_r read in the inner loop is the copy of the outer iteration, and
+    // clk_a reaches the instance clock (no domain of the instance port).
+    opencdc::frontend::SlangAdapter adapter;
+    auto fe = adapter.elaborate({fixture_path("generate_nested.sv")}, "generate_nested");
+    ASSERT_TRUE(fe.ok);
+    EXPECT_EQ(fe.graph.register_count(), 14u);  // 2 o_r + 6 b_q + 6 u_ff.q
+
+    for (int i = 0; i < 2; ++i) {
+        std::string o = "generate_nested.g_o[" + std::to_string(i) + "]";
+        const auto* o_r = fe.graph.find_node_by_name(o + ".o_r");
+        ASSERT_NE(o_r, nullptr) << o;
+        EXPECT_EQ(o_r->kind, NodeKind::Register);
+        EXPECT_EQ(o_r->clock_domain, "generate_nested.clk_a");
+        for (int j = 0; j < 3; ++j) {
+            std::string g = o + ".g_i[" + std::to_string(j) + "]";
+            const auto* b_q = fe.graph.find_node_by_name(g + ".b_q");
+            ASSERT_NE(b_q, nullptr) << g;
+            EXPECT_EQ(b_q->kind, NodeKind::Register);
+            EXPECT_EQ(b_q->clock_domain, "generate_nested.clk_b");
+            const auto* a_q = fe.graph.find_node_by_name(g + ".u_ff.q");
+            ASSERT_NE(a_q, nullptr) << g;
+            EXPECT_EQ(a_q->kind, NodeKind::Register);
+            EXPECT_EQ(fe.graph.find_node_by_name(g + ".o_r"), nullptr) << g;
+        }
+    }
+
+    cdc_clock::DomainExtractor de;
+    auto dr = de.extract(fe.graph);
+    EXPECT_EQ(dr.domains.size(), 2u);
+
+    cdc_ns::CrossingAnalyzer ca;
+    auto findings = ca.analyze(fe.graph, dr.domains, dr.register_to_domain);
+    for (int i = 0; i < 2; ++i) {
+        std::string src = "generate_nested.g_o[" + std::to_string(i) + "].o_r";
+        for (int j = 0; j < 3; ++j) {
+            std::string dest =
+                "generate_nested.g_o[" + std::to_string(i) + "].g_i[" + std::to_string(j) + "].b_q";
+            bool found = false;
+            for (const auto& f : findings)
+                found = found || (f.rule_id == "CDC001" && f.source_reg_name == src &&
+                                  f.dest_reg_name == dest);
+            EXPECT_TRUE(found) << src << " -> " << dest;
+        }
+    }
+}
